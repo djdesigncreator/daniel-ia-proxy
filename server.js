@@ -10,12 +10,24 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.18.0';
+const VERSION = '1.19.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
 function semProtocolo(valor) {
   return clean(valor).replace(/^https?:\/\//i, '');
+}
+
+// Escapa texto antes de o colocarmos dentro de HTML montado à mão no
+// servidor (como a página /loja-obrigado) - evita que um nome de loja com
+// caracteres especiais (<, >, ", etc.) parta a página.
+function escaparHtml(texto) {
+  return String(texto == null ? '' : texto)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ---- Bubble ----
@@ -825,6 +837,177 @@ app.post('/loja-estado', async (req, res) => {
     console.error('Erro em /loja-estado:', erro);
     return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
   }
+});
+
+// Página de "obrigado" para onde o cliente volta depois de pagar com
+// cartão (é o "return_url" que damos à MozPayment em /loja-pagar). Não
+// precisa de nenhuma página no Bubble - o próprio container devolve o
+// HTML directamente. Vai consultando /loja-estado sozinha, até o webhook
+// confirmar o pagamento, e depois volta para a loja.
+app.get('/loja-obrigado', async (req, res) => {
+  const encomendaId = String(req.query.encomenda_id || '');
+  let nomeLoja = 'a loja';
+  let cdnUrl = '';
+
+  if (encomendaId) {
+    try {
+      const encomenda = await bubbleGet('encomenda', encomendaId);
+      if (encomenda && encomenda['Site']) {
+        const site = await bubbleGet('site', encomenda['Site']);
+        if (site) {
+          nomeLoja = site['Nome'] || nomeLoja;
+          cdnUrl = site['CDN URL'] || '';
+        }
+      }
+    } catch (erro) {
+      console.error('Erro ao carregar dados para /loja-obrigado:', erro);
+    }
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obrigado</title>
+<style>
+  :root{
+    --bg:#0A0A12;
+    --card:#14141F;
+    --border:#24243A;
+    --text:#F5F5F7;
+    --text-dim:#9699B0;
+    --accent-1:#A855F7;
+    --accent-2:#6366F1;
+    --success:#22C55E;
+    --error:#FF5C7A;
+    --warning:#F5A623;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    padding:24px;
+  }
+  .caixa{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:40px 32px;
+    max-width:380px;
+    width:100%;
+    text-align:center;
+  }
+  .icone{
+    width:56px;height:56px;
+    border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    margin:0 auto 20px auto;
+  }
+  .icone.a-confirmar{background:rgba(245,166,35,0.14);}
+  .icone.pago{background:rgba(34,197,94,0.14);}
+  .icone.erro{background:rgba(255,92,122,0.14);}
+  .spinner{
+    width:24px;height:24px;
+    border-radius:50%;
+    border:3px solid var(--border);
+    border-top-color:var(--warning);
+    animation:girar .8s linear infinite;
+  }
+  @keyframes girar{to{transform:rotate(360deg);}}
+  h1{font-size:18px;margin:0 0 8px 0;}
+  p{font-size:13px;color:var(--text-dim);margin:0 0 24px 0;line-height:1.5;}
+  .btn{
+    display:inline-block;
+    background:linear-gradient(135deg,var(--accent-1),var(--accent-2));
+    color:#fff;
+    border:none;
+    border-radius:10px;
+    padding:11px 22px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    text-decoration:none;
+  }
+</style>
+</head>
+<body>
+  <div class="caixa">
+    <div class="icone a-confirmar" id="icone">
+      <div class="spinner"></div>
+    </div>
+    <h1 id="titulo">A confirmar o teu pagamento...</h1>
+    <p id="texto">Isto demora só alguns segundos. Não feches esta página.</p>
+    <a class="btn" id="btn-voltar" href="${escaparHtml(cdnUrl || '#')}" style="display:none;">Voltar a ${escaparHtml(nomeLoja)}</a>
+  </div>
+
+<script>
+var ENCOMENDA_ID = ${JSON.stringify(encomendaId)};
+var CDN_URL = ${JSON.stringify(cdnUrl)};
+var tentativas = 0;
+var MAX_TENTATIVAS = 15;
+
+function mostrarEstado(tipo, titulo, texto){
+  var icone = document.getElementById('icone');
+  icone.className = 'icone ' + tipo;
+  if (tipo !== 'a-confirmar') {
+    icone.innerHTML = '';
+  }
+  document.getElementById('titulo').textContent = titulo;
+  document.getElementById('texto').textContent = texto;
+  if (tipo === 'pago') {
+    document.getElementById('btn-voltar').style.display = 'inline-block';
+  }
+}
+
+function verificar(){
+  if (!ENCOMENDA_ID) {
+    mostrarEstado('erro', 'Não encontrámos a tua encomenda', 'Volta à loja e tenta novamente.');
+    return;
+  }
+  fetch('/loja-estado', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encomenda_id: ENCOMENDA_ID })
+  }).then(function(r){ return r.json(); })
+    .then(function(r){
+      if (r.status === 'success' && r.response.estado === 'Pago') {
+        mostrarEstado('pago', 'Pagamento confirmado!', 'Obrigado pela tua compra.');
+        if (CDN_URL) {
+          setTimeout(function(){ window.location.href = CDN_URL; }, 4000);
+        }
+        return;
+      }
+      tentativas++;
+      if (tentativas >= MAX_TENTATIVAS) {
+        mostrarEstado('erro', 'Ainda a processar', 'O pagamento pode ainda estar a ser confirmado. Verifica mais tarde ou contacta a loja.');
+        return;
+      }
+      setTimeout(verificar, 3000);
+    })
+    .catch(function(){
+      tentativas++;
+      if (tentativas >= MAX_TENTATIVAS) {
+        mostrarEstado('erro', 'Não foi possível confirmar', 'Verifica a tua ligação e tenta novamente mais tarde.');
+        return;
+      }
+      setTimeout(verificar, 3000);
+    });
+}
+
+verificar();
+</script>
+</body>
+</html>`;
+
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  return res.send(html);
 });
 
 // ---- Webhook da MozPayment (loja/checkout da Daniel.ia) ----
