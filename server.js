@@ -10,7 +10,13 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
+
+// Remove um "http://" ou "https://" que já esteja no valor, para nunca
+// ficarmos com "https://https://..." ao montarmos o URL
+function semProtocolo(valor) {
+  return clean(valor).replace(/^https?:\/\//i, '');
+}
 
 // ---- Bubble ----
 const BUBBLE_BASE = clean(process.env.BUBBLE_BASE);
@@ -19,8 +25,8 @@ const BUBBLE_TOKEN = clean(process.env.BUBBLE_TOKEN);
 // ---- Bunny Storage / CDN ----
 const STORAGE_ZONE = clean(process.env.STORAGE_ZONE);
 const STORAGE_PASSWORD = clean(process.env.STORAGE_PASSWORD);
-const STORAGE_HOST = clean(process.env.STORAGE_HOST) || 'storage.bunnycdn.com';
-const CDN_HOST = clean(process.env.CDN_HOST);
+const STORAGE_HOST = semProtocolo(process.env.STORAGE_HOST) || 'storage.bunnycdn.com';
+const CDN_HOST = semProtocolo(process.env.CDN_HOST);
 
 // ---- OpenAI ----
 const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
