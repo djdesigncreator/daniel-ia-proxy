@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.10.1';
+const VERSION = '1.11.1';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -462,26 +462,57 @@ app.post('/meus-sites', async (req, res) => {
   }
 });
 
-// ---- Rota temporária de diagnóstico ----
-// Já confirmámos a forma da resposta de login. Agora só confirma que o
-// mozpaymentToken() (com cache) funciona - mostra só os primeiros
-// caracteres do token, nunca o token completo. Apagamos esta rota depois
-// de confirmarmos.
-app.post('/moz-login-test', async (req, res) => {
+// ======================================================
+// Rotas - Loja (E-commerce / Checkout)
+// ======================================================
+
+// Lista os produtos activos de uma loja. Pública (sem owner) porque é
+// chamada pela própria página do site gerado, onde quem visita não está
+// necessariamente autenticado - qualquer pessoa pode ver os produtos à
+// venda, é esse o objectivo de uma loja.
+app.post('/loja-produtos', async (req, res) => {
   try {
-    const token = await mozpaymentToken();
-    return res.json({
-      status: 'success',
-      response: {
-        token_inicio: token.slice(0, 12) + '...',
-        tamanho_total: token.length,
-        expira_em: new Date(mozTokenCache.expiraEm).toISOString()
-      }
-    });
+    const { site_id } = req.body;
+    if (!site_id) {
+      return res.json({ status: 'error', message: 'Falta o site_id.' });
+    }
+
+    const produtos = await bubbleList(
+      'produto',
+      [
+        { key: 'Site', constraint_type: 'equals', value: site_id },
+        { key: 'Is Active', constraint_type: 'equals', value: true }
+      ],
+      'Created Date',
+      false
+    );
+
+    const lista = produtos.map(p => ({
+      id: p._id,
+      nome: p['Nome'],
+      preco: p['Preco MZN'],
+      descricao: p['Descricao'] || '',
+      imagem: p['Imagem URL'] || ''
+    }));
+
+    return res.json({ status: 'success', response: { produtos: lista } });
   } catch (erro) {
-    console.error('Erro em /moz-login-test:', erro);
-    return res.json({ status: 'error', message: erro.message });
+    console.error('Erro em /loja-produtos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os produtos.' });
   }
+});
+
+// ---- Webhook da MozPayment (loja/checkout da Daniel.ia) ----
+// Endereço secreto (em vez de assinatura, que a MozPayment não confirmou
+// se envia) - só quem souber este URL exacto pode chamá-lo. É este URL
+// que deves entregar à MozPayment para a carteira 1791654840450x516696877833912300.
+// Por agora só regista o que chega, para confirmarmos a forma real do
+// payload antes de ligarmos a lógica que marca a encomenda como paga.
+app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
+  console.log('Webhook da MozPayment (loja) recebido:', JSON.stringify(req.body));
+  // Responder sempre 200 rapidamente - é o que a generalidade dos serviços
+  // de pagamento espera, mesmo que ainda não façamos nada com os dados.
+  return res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
