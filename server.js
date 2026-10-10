@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -31,8 +31,8 @@ const CDN_HOST = semProtocolo(process.env.CDN_HOST);
 // ---- OpenAI ----
 const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
 const OPENAI_MODEL = clean(process.env.OPENAI_MODEL) || 'gpt-5.6-sol';
-const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'medium';
-const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 8000;
+const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'low';
+const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 16000;
 
 const app = express();
 
@@ -178,12 +178,19 @@ Descrição pedida pela pessoa: ${prompt}`;
     throw new Error('OpenAI falhou: ' + JSON.stringify(json));
   }
 
-  let html = json.choices[0].message.content.trim();
+  let html = (json.choices[0].message.content || '').trim();
 
   // Defesa: se a IA mesmo assim devolver com blocos markdown, limpamos
   html = html.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 
   const tokens = (json.usage && json.usage.total_tokens) || 0;
+
+  // Defesa: se por algum motivo (ex: o raciocínio gastou todo o orçamento
+  // de tokens) não sobrar HTML nenhum, falha de forma clara em vez de
+  // guardar um ficheiro vazio.
+  if (!html || html.length < 100) {
+    throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
+  }
 
   return { html, tokens };
 }
