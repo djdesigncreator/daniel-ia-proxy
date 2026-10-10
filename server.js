@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 // ---- Bubble ----
 const BUBBLE_BASE = clean(process.env.BUBBLE_BASE);
@@ -29,6 +29,21 @@ const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'm
 const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 8000;
 
 const app = express();
+
+// ---- CORS ----
+// Sem isto, o browser bloqueia qualquer fetch() feito a partir das páginas
+// do Bubble (daniel-ia.bubbleapps.io ou, mais tarde, bag-security.com) para
+// este container, que vive noutro domínio (bunny.run).
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json({ limit: '15mb' })); // 15mb para caber um logótipo em base64
 
 // ======================================================
