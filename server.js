@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.19.0';
+const VERSION = '1.20.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -222,24 +222,33 @@ async function mozpaymentToken() {
 // ======================================================
 
 const GUIA_TIPO = {
-  'E-commerce': 'Cria uma loja online com uma grelha de produtos de exemplo coerentes com o prompt (nome, preço em MZN, imagem via placeholder de cor), botões "Adicionar ao carrinho" (só visuais, sem funcionar de verdade por agora), e rodapé com contactos.',
-  'Checkout': 'Cria uma página de checkout para um único produto ou serviço descrito no prompt: resumo da compra, campos de nome/telefone/email, e botões de pagamento (M-Pesa, e-Mola, Cartão) só visuais por agora, sem processar pagamento real.',
+  'E-commerce': 'Desenha a aparência de uma loja online: cabeçalho com o nome do negócio, uma secção de apresentação curta, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
+  'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno: cabeçalho com o nome do negócio, uma frase curta de apresentação, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
   'Landing Page': 'Cria uma landing page de uma página: secção hero com título forte, benefícios/funcionalidades, depoimentos fictícios coerentes, chamada para acção clara, e rodapé com contactos.',
   'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", grelha de projectos/trabalhos de exemplo coerentes com o prompt, e secção de contacto.',
   'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.'
 };
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId }) {
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
+  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const instrucaoLogo = logoUrl
     ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
     : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
+
+  // Para E-commerce/Checkout, a IA nunca escreve a lógica de produtos,
+  // carrinho ou pagamento - isso é sempre o mesmo módulo testado por nós
+  // (LOJA_CART_JS), injectado depois. A única coisa que a IA tem de
+  // garantir é deixar esta div vazia algures na página.
+  const instrucaoLoja = ehLoja
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-produtos"></div> - é ali que os produtos a sério, o carrinho de compras e o pagamento vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum produto, preço, botão "comprar" ou "adicionar ao carrinho" - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos produtos" ou "A nossa loja").`
+    : '';
 
   const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
-${guia}`;
+${guia}${instrucaoLoja}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -282,8 +291,445 @@ Descrição pedida pela pessoa: ${prompt}`;
     throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
   }
 
+  // Para E-commerce/Checkout: garante a div dos produtos (defesa, caso a IA
+  // se tenha esquecido) e injecta sempre o módulo fixo da loja antes de
+  // </body>. Isto acontece sempre, nunca depende do que a IA escreveu.
+  if (ehLoja) {
+    if (!/id=["']daniel-ia-produtos["']/.test(html)) {
+      html = html.replace(
+        /<\/body>/i,
+        '<div id="daniel-ia-produtos" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
+      );
+    }
+    const scriptLoja = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/loja-cart.js"></script>\n`;
+    if (/<\/body>/i.test(html)) {
+      html = html.replace(/<\/body>/i, scriptLoja + '</body>');
+    } else {
+      html += scriptLoja;
+    }
+  }
+
   return { html, tokens };
 }
+
+// ======================================================
+// Script fixo da loja (carrinho + checkout), servido directamente
+// ======================================================
+// Guardado aqui como texto para ser servido por /loja-cart.js. É este
+// ficheiro que todos os sites de E-commerce/Checkout gerados carregam -
+// nunca é a IA a escrever esta lógica.
+const LOJA_CART_JS = `/*
+  Daniel.ia - módulo fixo de loja (produtos, carrinho e checkout real)
+  ---------------------------------------------------------------------
+  Este ficheiro é servido pelo próprio container em /loja-cart.js e é
+  carregado por TODOS os sites de E-commerce/Checkout gerados pela IA.
+  A IA nunca escreve esta lógica - só desenha a aparência do site e deixa
+  uma div com id="daniel-ia-produtos" onde este módulo mostra os produtos
+  a sério, o carrinho, e o checkout ligado à MozPayment.
+
+  Cada página gerada define, antes de carregar este ficheiro:
+    window.DANIEL_IA_SITE_ID = 'xxxxx';
+*/
+(function(){
+  'use strict';
+
+  var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
+  var SITE_ID = window.DANIEL_IA_SITE_ID || '';
+
+  if (!SITE_ID) {
+    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o módulo da loja não pode arrancar.');
+    return;
+  }
+
+  var CART_KEY = 'daniel_ia_carrinho_' + SITE_ID;
+  var produtosCache = [];
+  var carrinho = lerCarrinho();
+
+  // ======================================================
+  // Carrinho (guardado no browser de quem está a comprar)
+  // ======================================================
+  function lerCarrinho(){
+    try {
+      var dados = localStorage.getItem(CART_KEY);
+      return dados ? JSON.parse(dados) : {};
+    } catch (e) { return {}; }
+  }
+  function guardarCarrinho(){
+    try { localStorage.setItem(CART_KEY, JSON.stringify(carrinho)); } catch (e) {}
+  }
+  function limparCarrinho(){
+    carrinho = {};
+    guardarCarrinho();
+  }
+
+  // ======================================================
+  // Texto seguro para dentro de HTML
+  // ======================================================
+  function escaparHtml(t){
+    var d = document.createElement('div');
+    d.textContent = (t == null ? '' : String(t));
+    return d.innerHTML;
+  }
+  function escaparAtributo(t){
+    return escaparHtml(t).replace(/"/g, '&quot;');
+  }
+
+  // ======================================================
+  // Estilos (isolados com o prefixo "dia-" para não colidir com o CSS
+  // que a IA desenhou para o resto do site)
+  // ======================================================
+  function injectarEstilos(){
+    var css = ''
+      + '.dia-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:18px;margin:0;padding:0;}'
+      + '.dia-produto-card{background:#fff;border:1px solid #e4e4e8;border-radius:14px;padding:14px;display:flex;flex-direction:column;font-family:inherit;}'
+      + '.dia-produto-img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px;margin-bottom:10px;background:#f1f1f4;}'
+      + '.dia-produto-img-vazia{display:flex;align-items:center;justify-content:center;}'
+      + '.dia-produto-nome{font-weight:700;font-size:14px;margin-bottom:4px;color:#111;}'
+      + '.dia-produto-preco{font-weight:700;font-size:14px;margin-bottom:10px;color:#111;}'
+      + '.dia-btn-add{margin-top:auto;background:#111;color:#fff;border:none;border-radius:8px;padding:10px 12px;font-size:13px;font-weight:600;cursor:pointer;}'
+      + '.dia-btn-add:hover{opacity:.88;}'
+      + '.dia-vazio{color:#777;font-size:13px;}'
+      + '.dia-carrinho-botao{position:fixed;right:20px;bottom:20px;z-index:99998;background:#111;color:#fff;border-radius:999px;padding:14px 18px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.25);font-family:inherit;}'
+      + '.dia-painel-carrinho{position:fixed;top:0;right:-380px;width:360px;max-width:92vw;height:100%;background:#fff;box-shadow:-8px 0 24px rgba(0,0,0,.18);z-index:99999;transition:right .25s;display:flex;flex-direction:column;font-family:inherit;color:#111;}'
+      + '.dia-painel-carrinho.aberto{right:0;}'
+      + '.dia-painel-cabeca{display:flex;align-items:center;justify-content:space-between;padding:18px;border-bottom:1px solid #eee;}'
+      + '.dia-painel-cabeca button{background:none;border:none;font-size:22px;cursor:pointer;line-height:1;color:#111;}'
+      + '#dia-itens-carrinho{flex:1;overflow-y:auto;padding:14px 18px;}'
+      + '.dia-item-carrinho{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-bottom:1px solid #f0f0f0;font-size:13px;}'
+      + '.dia-remover{background:none;border:none;color:#c0392b;font-size:12px;cursor:pointer;text-decoration:underline;}'
+      + '.dia-total{padding:14px 18px;font-weight:700;font-size:15px;border-top:1px solid #eee;}'
+      + '.dia-btn-principal{margin:0 18px 18px 18px;background:#111;color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;}'
+      + '.dia-btn-principal:disabled{opacity:.4;cursor:default;}'
+      + '.dia-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit;}'
+      + '.dia-modal{background:#fff;border-radius:16px;padding:26px;max-width:380px;width:100%;color:#111;max-height:90vh;overflow-y:auto;}'
+      + '.dia-modal h3{margin:0 0 16px 0;font-size:17px;}'
+      + '.dia-campo{margin-bottom:12px;}'
+      + '.dia-campo label{display:block;font-size:12px;color:#666;margin-bottom:5px;font-weight:600;}'
+      + '.dia-campo input{width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;}'
+      + '.dia-metodos{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}'
+      + '.dia-metodo{border:1px solid #ddd;border-radius:10px;padding:12px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;}'
+      + '.dia-metodo.seleccionado{border-color:#111;background:#f7f7f7;}'
+      + '.dia-msg-erro{color:#c0392b;font-size:12px;margin-top:8px;}'
+      + '.dia-estado-pagamento{text-align:center;padding:10px 0;}'
+      + '.dia-spinner{width:28px;height:28px;border-radius:50%;border:3px solid #e4e4e8;border-top-color:#111;animation:dia-girar .8s linear infinite;margin:0 auto 14px auto;}'
+      + '@keyframes dia-girar{to{transform:rotate(360deg);}}'
+      + '.dia-fechar-modal{background:none;border:none;color:#777;font-size:12px;cursor:pointer;text-decoration:underline;margin-top:10px;}';
+    var style = document.createElement('style');
+    style.setAttribute('data-daniel-ia', 'loja');
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  // ======================================================
+  // Montagem da UI (grelha + botão flutuante + painel do carrinho)
+  // ======================================================
+  function montarUI(){
+    var alvo = document.getElementById('daniel-ia-produtos');
+    if (!alvo) {
+      console.error('Daniel.ia: falta uma div com id="daniel-ia-produtos" nesta página - os produtos não têm onde aparecer.');
+      return;
+    }
+    alvo.innerHTML = '<div id="dia-grelha" class="dia-grelha"><p class="dia-vazio">A carregar produtos...</p></div>';
+
+    var botaoCarrinho = document.createElement('div');
+    botaoCarrinho.id = 'dia-carrinho-botao';
+    botaoCarrinho.className = 'dia-carrinho-botao';
+    botaoCarrinho.innerHTML = 'Carrinho (<span id="dia-carrinho-contagem">0</span>)';
+    document.body.appendChild(botaoCarrinho);
+
+    var painel = document.createElement('div');
+    painel.id = 'dia-painel-carrinho';
+    painel.className = 'dia-painel-carrinho';
+    painel.innerHTML = ''
+      + '<div class="dia-painel-cabeca"><strong>O teu carrinho</strong><button id="dia-fechar-painel">&times;</button></div>'
+      + '<div id="dia-itens-carrinho"></div>'
+      + '<div id="dia-total-carrinho" class="dia-total"></div>'
+      + '<button id="dia-btn-finalizar" class="dia-btn-principal" disabled>Finalizar compra</button>';
+    document.body.appendChild(painel);
+
+    botaoCarrinho.addEventListener('click', function(){
+      painel.classList.add('aberto');
+    });
+    document.getElementById('dia-fechar-painel').addEventListener('click', function(){
+      painel.classList.remove('aberto');
+    });
+    document.getElementById('dia-btn-finalizar').addEventListener('click', abrirCheckout);
+  }
+
+  function renderGrelha(){
+    var grelha = document.getElementById('dia-grelha');
+    if (!grelha) return;
+    if (produtosCache.length === 0) {
+      grelha.innerHTML = '<p class="dia-vazio">Ainda não há produtos à venda aqui.</p>';
+      return;
+    }
+    grelha.innerHTML = produtosCache.map(function(p){
+      return ''
+        + '<div class="dia-produto-card">'
+        + (p.imagem ? '<img src="' + escaparAtributo(p.imagem) + '" class="dia-produto-img" alt="' + escaparAtributo(p.nome) + '">' : '<div class="dia-produto-img dia-produto-img-vazia"></div>')
+        + '<div class="dia-produto-nome">' + escaparHtml(p.nome) + '</div>'
+        + '<div class="dia-produto-preco">' + Number(p.preco).toLocaleString('pt-PT') + ' MZN</div>'
+        + '<button class="dia-btn-add" data-id="' + p.id + '">Adicionar ao carrinho</button>'
+        + '</div>';
+    }).join('');
+
+    var botoes = grelha.querySelectorAll('.dia-btn-add');
+    botoes.forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var id = btn.getAttribute('data-id');
+        carrinho[id] = (carrinho[id] || 0) + 1;
+        guardarCarrinho();
+        renderCarrinho();
+        var textoOriginal = btn.textContent;
+        btn.textContent = 'Adicionado!';
+        setTimeout(function(){ btn.textContent = textoOriginal; }, 1200);
+      });
+    });
+  }
+
+  function itensDoCarrinho(){
+    return Object.keys(carrinho)
+      .filter(function(id){ return carrinho[id] > 0; })
+      .map(function(id){
+        var produto = produtosCache.filter(function(p){ return p.id === id; })[0];
+        return produto ? { produto: produto, quantidade: carrinho[id] } : null;
+      })
+      .filter(function(x){ return x; });
+  }
+
+  function renderCarrinho(){
+    var itens = itensDoCarrinho();
+    var contagem = itens.reduce(function(total, item){ return total + item.quantidade; }, 0);
+    var elContagem = document.getElementById('dia-carrinho-contagem');
+    if (elContagem) elContagem.textContent = contagem;
+
+    var container = document.getElementById('dia-itens-carrinho');
+    var elTotal = document.getElementById('dia-total-carrinho');
+    var btnFinalizar = document.getElementById('dia-btn-finalizar');
+    if (!container) return;
+
+    if (itens.length === 0) {
+      container.innerHTML = '<p class="dia-vazio">O carrinho está vazio.</p>';
+      elTotal.textContent = '';
+      btnFinalizar.disabled = true;
+      return;
+    }
+
+    var total = 0;
+    container.innerHTML = itens.map(function(item){
+      var subtotal = item.produto.preco * item.quantidade;
+      total += subtotal;
+      return ''
+        + '<div class="dia-item-carrinho">'
+        + '<div>' + escaparHtml(item.produto.nome) + ' x' + item.quantidade + '</div>'
+        + '<div>' + subtotal.toLocaleString('pt-PT') + ' MZN<br><button class="dia-remover" data-id="' + item.produto.id + '">Remover</button></div>'
+        + '</div>';
+    }).join('');
+    elTotal.textContent = 'Total: ' + total.toLocaleString('pt-PT') + ' MZN';
+    btnFinalizar.disabled = false;
+
+    container.querySelectorAll('.dia-remover').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        delete carrinho[btn.getAttribute('data-id')];
+        guardarCarrinho();
+        renderCarrinho();
+      });
+    });
+  }
+
+  // ======================================================
+  // Checkout (nome, telefone, método, e o pagamento a sério)
+  // ======================================================
+  var metodoSeleccionado = '';
+
+  function abrirCheckout(){
+    var itens = itensDoCarrinho();
+    if (itens.length === 0) return;
+
+    var overlay = document.createElement('div');
+    overlay.className = 'dia-overlay';
+    overlay.id = 'dia-overlay-checkout';
+    overlay.innerHTML = ''
+      + '<div class="dia-modal">'
+      + '<h3>Finalizar compra</h3>'
+      + '<div id="dia-checkout-form">'
+      + '<div class="dia-campo"><label>O teu nome</label><input type="text" id="dia-cliente-nome" maxlength="100"></div>'
+      + '<div class="dia-campo"><label>Telefone</label><input type="text" id="dia-cliente-telefone" maxlength="20" placeholder="84xxxxxxx"></div>'
+      + '<div class="dia-campo"><label>Método de pagamento</label>'
+      + '<div class="dia-metodos">'
+      + '<div class="dia-metodo" data-metodo="mpesa">M-Pesa</div>'
+      + '<div class="dia-metodo" data-metodo="emola">e-Mola</div>'
+      + '<div class="dia-metodo" data-metodo="cartao">Cartão (Visa / Mastercard)</div>'
+      + '</div></div>'
+      + '<button class="dia-btn-principal" id="dia-btn-pagar" style="margin:0;width:100%;">Pagar</button>'
+      + '<div class="dia-msg-erro" id="dia-checkout-erro"></div>'
+      + '</div>'
+      + '<div id="dia-checkout-estado" style="display:none"></div>'
+      + '<button class="dia-fechar-modal" id="dia-fechar-checkout">Fechar</button>'
+      + '</div>';
+    document.body.appendChild(overlay);
+
+    metodoSeleccionado = '';
+    overlay.querySelectorAll('.dia-metodo').forEach(function(el){
+      el.addEventListener('click', function(){
+        overlay.querySelectorAll('.dia-metodo').forEach(function(x){ x.classList.remove('seleccionado'); });
+        el.classList.add('seleccionado');
+        metodoSeleccionado = el.getAttribute('data-metodo');
+      });
+    });
+
+    document.getElementById('dia-fechar-checkout').addEventListener('click', function(){
+      overlay.remove();
+    });
+
+    document.getElementById('dia-btn-pagar').addEventListener('click', function(){
+      iniciarPagamento(overlay, itens);
+    });
+  }
+
+  function iniciarPagamento(overlay, itens){
+    var nome = document.getElementById('dia-cliente-nome').value.trim();
+    var telefone = document.getElementById('dia-cliente-telefone').value.trim();
+    var elErro = document.getElementById('dia-checkout-erro');
+    elErro.textContent = '';
+
+    if (!nome) { elErro.textContent = 'Escreve o teu nome.'; return; }
+    if (!telefone) { elErro.textContent = 'Escreve o teu telefone.'; return; }
+    if (!metodoSeleccionado) { elErro.textContent = 'Escolhe um método de pagamento.'; return; }
+
+    var btnPagar = document.getElementById('dia-btn-pagar');
+    btnPagar.disabled = true;
+    btnPagar.textContent = 'A processar...';
+
+    var itensParaEnviar = itens.map(function(item){
+      return { produto_id: item.produto.id, quantidade: item.quantidade };
+    });
+
+    fetch(CONTAINER_URL + '/loja-encomenda', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        site_id: SITE_ID,
+        cliente_nome: nome,
+        cliente_telefone: telefone,
+        itens: itensParaEnviar
+      })
+    }).then(function(r){ return r.json(); })
+      .then(function(rEncomenda){
+        if (rEncomenda.status !== 'success') {
+          throw new Error(rEncomenda.message || 'Não foi possível criar a encomenda.');
+        }
+        var encomendaId = rEncomenda.response.encomenda_id;
+        return fetch(CONTAINER_URL + '/loja-pagar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ encomenda_id: encomendaId, metodo: metodoSeleccionado })
+        }).then(function(r){ return r.json(); })
+          .then(function(rPagar){
+            if (rPagar.status !== 'success') {
+              throw new Error(rPagar.message || 'Não foi possível iniciar o pagamento.');
+            }
+            return { encomendaId: encomendaId, pagamento: rPagar.response };
+          });
+      })
+      .then(function(resultado){
+        if (resultado.pagamento.tipo === 'cartao') {
+          // Pagamento por cartão: sai desta página para a MozPayment, e
+          // volta automaticamente à loja depois (via /loja-obrigado).
+          window.location.href = resultado.pagamento.checkout_url;
+          return;
+        }
+        // M-Pesa / e-Mola: fica aqui a aguardar a confirmação no telemóvel.
+        limparCarrinho();
+        renderCarrinho();
+        mostrarEstadoPagamento(overlay, resultado.encomendaId);
+      })
+      .catch(function(erro){
+        btnPagar.disabled = false;
+        btnPagar.textContent = 'Pagar';
+        elErro.textContent = erro.message || 'Algo correu mal. Tenta novamente.';
+      });
+  }
+
+  function mostrarEstadoPagamento(overlay, encomendaId){
+    document.getElementById('dia-checkout-form').style.display = 'none';
+    var elEstado = document.getElementById('dia-checkout-estado');
+    elEstado.style.display = 'block';
+    elEstado.innerHTML = ''
+      + '<div class="dia-estado-pagamento">'
+      + '<div class="dia-spinner"></div>'
+      + '<div id="dia-estado-texto">Confirma o pagamento no teu telemóvel...</div>'
+      + '</div>';
+
+    var tentativas = 0;
+    var MAX_TENTATIVAS = 20;
+
+    function verificar(){
+      fetch(CONTAINER_URL + '/loja-estado', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ encomenda_id: encomendaId })
+      }).then(function(r){ return r.json(); })
+        .then(function(r){
+          if (r.status === 'success' && r.response.estado === 'Pago') {
+            elEstado.innerHTML = '<div class="dia-estado-pagamento"><strong>Pagamento confirmado!</strong><br>Obrigado pela tua compra.</div>';
+            return;
+          }
+          tentativas++;
+          if (tentativas >= MAX_TENTATIVAS) {
+            elEstado.innerHTML = '<div class="dia-estado-pagamento">Ainda não recebemos a confirmação. Se já pagaste, aguarda mais um pouco - vais receber a confirmação normalmente.</div>';
+            return;
+          }
+          setTimeout(verificar, 3000);
+        })
+        .catch(function(){
+          tentativas++;
+          if (tentativas >= MAX_TENTATIVAS) {
+            elEstado.innerHTML = '<div class="dia-estado-pagamento">Não foi possível confirmar o pagamento agora. Verifica mais tarde.</div>';
+            return;
+          }
+          setTimeout(verificar, 3000);
+        });
+    }
+    verificar();
+  }
+
+  // ======================================================
+  // Arranque
+  // ======================================================
+  function iniciar(){
+    injectarEstilos();
+    montarUI();
+    renderCarrinho();
+
+    fetch(CONTAINER_URL + '/loja-produtos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_id: SITE_ID })
+    }).then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.status === 'success') {
+          produtosCache = r.response.produtos || [];
+          renderGrelha();
+          renderCarrinho();
+        } else {
+          var grelha = document.getElementById('dia-grelha');
+          if (grelha) grelha.innerHTML = '<p class="dia-vazio">Não foi possível carregar os produtos.</p>';
+        }
+      })
+      .catch(function(){
+        var grelha = document.getElementById('dia-grelha');
+        if (grelha) grelha.innerHTML = '<p class="dia-vazio">Não foi possível ligar ao servidor.</p>';
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', iniciar);
+  } else {
+    iniciar();
+  }
+})();
+`;
 
 // ======================================================
 // Rotas
@@ -296,6 +742,15 @@ app.get('/', (req, res) => {
     version: VERSION,
     time: new Date().toISOString()
   });
+});
+
+// Serve o módulo fixo da loja. Cacheável por pouco tempo, para podermos
+// corrigir ou melhorar o carrinho/checkout para TODOS os sites de uma só
+// vez, sem precisar de regenerar nada.
+app.get('/loja-cart.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(LOJA_CART_JS);
 });
 
 // Nota sobre os nomes dos campos nas chamadas ao Bubble: têm de ser
@@ -388,7 +843,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
     }
 
     // ---- Gerar o HTML com a OpenAI ----
-    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl });
+    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId });
 
     // ---- Guardar o HTML no Bunny Storage ----
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
