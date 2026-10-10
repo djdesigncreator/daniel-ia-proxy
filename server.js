@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.14.1';
+const VERSION = '1.15.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -41,6 +41,11 @@ const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 
 const MOZPAYMENT_EMAIL = clean(process.env.MOZPAYMENT_EMAIL);
 const MOZPAYMENT_SENHA = clean(process.env.MOZPAYMENT_SENHA);
 const MOZPAYMENT_WALLET = clean(process.env.MOZPAYMENT_WALLET);
+
+// Endereço público deste container - usado para montar o "return_url" que
+// damos à MozPayment nos pagamentos por cartão (para onde o cliente volta
+// depois de pagar).
+const SELF_URL = clean(process.env.SELF_URL) || 'https://mc-8oxfde5o71.bunny.run';
 
 const app = express();
 
@@ -602,8 +607,106 @@ app.post('/loja-encomenda', async (req, res) => {
     return res.json({ status: 'success', response: { encomenda_id: encomendaId, valor_total: valorTotal } });
   } catch (erro) {
     console.error('Erro em /loja-encomenda:', erro);
-    // Temporário: mostrar o motivo real do erro, só para diagnosticar.
-    return res.json({ status: 'error', message: 'Não foi possível criar a encomenda.', debug: String(erro.message || erro) });
+    return res.json({ status: 'error', message: 'Não foi possível criar a encomenda.' });
+  }
+});
+
+// Inicia o pagamento de uma encomenda já criada - M-Pesa, e-Mola ou Cartão.
+// Nunca recebe nem usa nenhum valor vindo do browser: o montante e o nome
+// do cliente vêm sempre do registo da Encomenda, já calculados e
+// guardados em /loja-encomenda.
+app.post('/loja-pagar', async (req, res) => {
+  try {
+    const { encomenda_id, metodo } = req.body;
+
+    if (!encomenda_id || !metodo) {
+      return res.json({ status: 'error', message: 'Faltam dados: encomenda_id e metodo são obrigatórios.' });
+    }
+    const metodosValidos = ['mpesa', 'emola', 'cartao'];
+    if (!metodosValidos.includes(metodo)) {
+      return res.json({ status: 'error', message: 'Método de pagamento inválido.' });
+    }
+
+    const encomenda = await bubbleGet('encomenda', encomenda_id);
+    if (!encomenda) {
+      return res.json({ status: 'error', message: 'Encomenda não encontrada.' });
+    }
+    if (encomenda['Estado'] !== 'Pendente') {
+      return res.json({ status: 'error', message: 'Esta encomenda já foi paga ou já não está disponível para pagamento.' });
+    }
+
+    const valor = encomenda['Valor Total'];
+    const telefone = encomenda['Cliente Telefone'];
+    const nome = encomenda['Cliente Nome'];
+    const token = await mozpaymentToken();
+
+    // ---- M-Pesa / e-Mola ----
+    if (metodo === 'mpesa' || metodo === 'emola') {
+      const respMoz = await fetch('https://mozpayment.co.mz/api/1.1/wf/payment', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wallet: MOZPAYMENT_WALLET,
+          payment_method: metodo,
+          amount: String(valor),
+          number: telefone,
+          name: nome
+        })
+      });
+      const jsonMoz = await respMoz.json().catch(() => ({}));
+      if (!respMoz.ok) {
+        throw new Error('Pedido de pagamento falhou: ' + respMoz.status + ' ' + JSON.stringify(jsonMoz));
+      }
+      // Procuramos o identificador em vários campos possíveis - a
+      // documentação nem sempre bate certo com a resposta real.
+      const idPagamento = jsonMoz.idpayment || jsonMoz.id_payment ||
+        (jsonMoz.response && (jsonMoz.response.idpayment || jsonMoz.response.id_payment)) || '';
+      if (!idPagamento) {
+        throw new Error('A MozPayment não devolveu nenhum idpayment: ' + JSON.stringify(jsonMoz));
+      }
+
+      await bubblePatch('encomenda', encomenda_id, {
+        'Metodo': metodo,
+        'ID Pagamento': String(idPagamento)
+      });
+
+      return res.json({ status: 'success', response: { tipo: 'mobile', idpayment: String(idPagamento) } });
+    }
+
+    // ---- Cartão (Visa / Mastercard) ----
+    const returnUrl = `${SELF_URL}/loja-obrigado?encomenda_id=${encomenda_id}`;
+    const respCartao = await fetch('https://mozpayment.co.mz/api/1.1/wf/bankpayment', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        valor: String(valor),
+        nome_cliente: nome,
+        carteira: MOZPAYMENT_WALLET,
+        nome_producto: 'Encomenda Daniel.ia',
+        return_url: returnUrl
+      })
+    });
+    const jsonCartao = await respCartao.json().catch(() => ({}));
+    if (!respCartao.ok) {
+      throw new Error('Pedido de pagamento por cartão falhou: ' + respCartao.status + ' ' + JSON.stringify(jsonCartao));
+    }
+    const checkoutUrl = jsonCartao.url || jsonCartao.checkout_url ||
+      (jsonCartao.response && (jsonCartao.response.url || jsonCartao.response.checkout_url)) || '';
+    const sessionId = jsonCartao.session_id || (jsonCartao.response && jsonCartao.response.session_id) || '';
+    if (!checkoutUrl) {
+      throw new Error('A MozPayment não devolveu nenhum link de checkout: ' + JSON.stringify(jsonCartao));
+    }
+
+    await bubblePatch('encomenda', encomenda_id, {
+      'Metodo': 'cartao',
+      'ID Pagamento': String(sessionId)
+    });
+
+    return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl } });
+
+  } catch (erro) {
+    console.error('Erro em /loja-pagar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o pagamento. Tenta novamente.' });
   }
 });
 
