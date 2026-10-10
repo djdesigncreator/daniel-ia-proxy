@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -305,15 +305,10 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
     const caminhoSite = `sites/${owner}/${siteSlug}/index.html`;
     const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
 
-    // ---- Actualizar o Site para "Pronto" ----
-    await bubblePatch('site', siteId, {
-      'Status': 'Pronto',
-      'Bunny Path': caminhoSite,
-      'CDN URL': cdnUrl,
-      'Logo URL': logoUrl
-    });
-
     // ---- Actualizar a Generation ----
+    // (de propósito ANTES de marcar o Site como "Pronto" - se isto falhar,
+    // o catch mais abaixo marca tudo como "Erro" sem nunca termos chegado
+    // a dizer que o Site estava pronto)
     await bubblePatch('generation', generationId, {
       'Status': 'Pronto',
       'Tokens Usados': tokens
@@ -322,6 +317,16 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
     // ---- Actualizar os tokens usados do utilizador ----
     await bubblePatch('user', owner, {
       'Tokens Usados Mes': tokensUsados + tokens
+    });
+
+    // ---- Só agora marcamos o Site como "Pronto" ----
+    // Chegar aqui significa que a Generation e o User já foram actualizados
+    // com sucesso, por isso esta é a última coisa que pode falhar.
+    await bubblePatch('site', siteId, {
+      'Status': 'Pronto',
+      'Bunny Path': caminhoSite,
+      'CDN URL': cdnUrl,
+      'Logo URL': logoUrl
     });
 
   } catch (erro) {
