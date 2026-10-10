@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.16.0';
+const VERSION = '1.17.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -724,17 +724,98 @@ app.post('/loja-pagar', async (req, res) => {
   }
 });
 
+// Consulta o estado de uma encomenda - usada pela página de checkout para
+// ir verificando se o pagamento já foi confirmado pelo webhook.
+app.post('/loja-estado', async (req, res) => {
+  try {
+    const { encomenda_id } = req.body;
+    if (!encomenda_id) {
+      return res.json({ status: 'error', message: 'Falta o encomenda_id.' });
+    }
+    const encomenda = await bubbleGet('encomenda', encomenda_id);
+    if (!encomenda) {
+      return res.json({ status: 'error', message: 'Encomenda não encontrada.' });
+    }
+    return res.json({
+      status: 'success',
+      response: {
+        estado: encomenda['Estado'],
+        valor_total: encomenda['Valor Total']
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /loja-estado:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
+  }
+});
+
 // ---- Webhook da MozPayment (loja/checkout da Daniel.ia) ----
 // Endereço secreto (em vez de assinatura, que a MozPayment não confirmou
-// se envia) - só quem souber este URL exacto pode chamá-lo. É este URL
-// que deves entregar à MozPayment para a carteira 1791654840450x516696877833912300.
-// Por agora só regista o que chega, para confirmarmos a forma real do
-// payload antes de ligarmos a lógica que marca a encomenda como paga.
+// se envia) - só quem souber este URL exacto pode chamá-lo.
+//
+// Regras de confirmação, segundo a documentação da MozPayment:
+//   - "status" tem de ser exactamente "completed"
+//   - "reason" tem de bater certo com o identificador que nós próprios
+//     criámos e guardámos em "ID Pagamento" (idpayment para M-Pesa/e-Mola,
+//     session_id para cartão) - nunca confiamos num pagamento para uma
+//     encomenda que não criámos nós.
+// Além disso, confirmamos que o valor recebido bate certo com o valor
+// guardado, e usamos "Webhook Processado" para nunca aplicar o mesmo
+// pagamento duas vezes (idempotência), mesmo que a MozPayment reenvie o
+// mesmo aviso.
 app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
   console.log('Webhook da MozPayment (loja) recebido:', JSON.stringify(req.body));
-  // Responder sempre 200 rapidamente - é o que a generalidade dos serviços
-  // de pagamento espera, mesmo que ainda não façamos nada com os dados.
-  return res.sendStatus(200);
+  // Responder já 200 - é o que a generalidade dos serviços de pagamento
+  // espera, mesmo que o processamento a seguir ainda demore um pouco.
+  res.sendStatus(200);
+
+  try {
+    const body = req.body || {};
+    const status = String(body.status || '').trim().toLowerCase();
+    const identificador = body.reason || body.payment_id || body.idpayment || body.session_id || '';
+
+    if (status !== 'completed') {
+      console.log('Webhook ignorado - status não é "completed":', status);
+      return;
+    }
+    if (!identificador) {
+      console.log('Webhook ignorado - sem identificador ("reason") para encontrar a encomenda.');
+      return;
+    }
+
+    const encomendas = await bubbleList('encomenda', [
+      { key: 'ID Pagamento', constraint_type: 'equals', value: String(identificador) }
+    ]);
+
+    if (!encomendas || encomendas.length === 0) {
+      console.log('Webhook ignorado - nenhuma encomenda encontrada com este identificador:', identificador);
+      return;
+    }
+
+    const encomenda = encomendas[0];
+
+    if (encomenda['Webhook Processado']) {
+      console.log('Webhook ignorado - esta encomenda já tinha sido processada:', encomenda._id);
+      return;
+    }
+
+    const valorRecebido = Number(body.amount);
+    const valorEsperado = Number(encomenda['Valor Total']);
+    if (!isNaN(valorRecebido) && Math.abs(valorRecebido - valorEsperado) > 0.01) {
+      console.log('Webhook suspeito - valor não bate certo. Esperado:', valorEsperado, 'Recebido:', valorRecebido);
+      return;
+    }
+
+    await bubblePatch('encomenda', encomenda._id, {
+      'Estado': 'Pago',
+      'Transaction ID': String(body.transaction_id || ''),
+      'Webhook Processado': true
+    });
+
+    console.log('Encomenda marcada como paga:', encomenda._id);
+  } catch (erro) {
+    console.error('Erro ao processar webhook da loja:', erro);
+  }
 });
 
 app.listen(PORT, () => {
