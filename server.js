@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 // ---- Bubble ----
 const BUBBLE_BASE = clean(process.env.BUBBLE_BASE);
@@ -204,26 +204,29 @@ app.post('/generate', async (req, res) => {
     }
 
     // ---- 1. Carregar utilizador e plano ----
+    // Nota: os nomes dos campos aqui têm de ser EXACTAMENTE como aparecem
+    // no editor do Bubble (maiúsculas e espaços incluídos) - a Data API
+    // não os converte para minúsculas.
     const user = await bubbleGet('user', owner);
     if (!user) {
       return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
     }
 
-    const planId = user.plan;
+    const planId = user['Plan'];
     if (!planId) {
       return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
     }
     const plano = await bubbleGet('plan', planId);
 
     // ---- 2. Verificar limite de projectos ----
-    const sitesExistentes = await bubbleCount('site', [{ key: 'owner', constraint_type: 'equals', value: owner }]);
-    if (sitesExistentes >= (plano.sites_limit || 0)) {
-      return res.json({ status: 'error', message: `O teu plano "${plano.name}" permite até ${plano.sites_limit} projecto(s). Já atingiste esse limite.` });
+    const sitesExistentes = await bubbleCount('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]);
+    if (sitesExistentes >= (plano['Sites Limit'] || 0)) {
+      return res.json({ status: 'error', message: `O teu plano "${plano['Name']}" permite até ${plano['Sites Limit']} projecto(s). Já atingiste esse limite.` });
     }
 
     // ---- 3. Verificar limite de tokens do mês ----
-    const tokensUsados = user.tokens_usados_mes || 0;
-    const tokensIncluidos = plano.tokens_incluidos || 0;
+    const tokensUsados = user['Tokens Usados Mes'] || 0;
+    const tokensIncluidos = plano['Tokens Incluidos'] || 0;
     if (tokensUsados >= tokensIncluidos) {
       return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
     }
@@ -252,30 +255,30 @@ app.post('/generate', async (req, res) => {
 
     // ---- 7. Registar o Site no Bubble ----
     const siteId = await bubbleCreate('site', {
-      owner: owner,
-      nome: nome,
-      tipo: tipo,
-      prompt_original: prompt,
-      status: 'Pronto',
-      bunny_path: caminhoSite,
-      cdn_url: cdnUrl,
-      logo_url: logoUrl,
-      created_date: new Date().toISOString()
+      'Owner': owner,
+      'Nome': nome,
+      'Tipo': tipo,
+      'Prompt Original': prompt,
+      'Status': 'Pronto',
+      'Bunny Path': caminhoSite,
+      'CDN URL': cdnUrl,
+      'Logo URL': logoUrl,
+      'Created Date': new Date().toISOString()
     });
 
     // ---- 8. Registar a Generation ----
     await bubbleCreate('generation', {
-      site: siteId,
-      prompt: prompt,
-      status: 'Pronto',
-      tentativas: 1,
-      created_date: new Date().toISOString(),
-      tokens_usados: tokens
+      'Site': siteId,
+      'Prompt': prompt,
+      'Status': 'Pronto',
+      'Tentativas': 1,
+      'Created Date': new Date().toISOString(),
+      'Tokens Usados': tokens
     });
 
     // ---- 9. Actualizar os tokens usados do utilizador ----
     await bubblePatch('user', owner, {
-      tokens_usados_mes: tokensUsados + tokens
+      'Tokens Usados Mes': tokensUsados + tokens
     });
 
     return res.json({
