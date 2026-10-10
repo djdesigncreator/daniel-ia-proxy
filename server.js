@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.10.0';
+const VERSION = '1.10.1';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -158,11 +158,11 @@ async function uploadParaBunny(caminho, buffer, contentType) {
 // ======================================================
 // Helper - MozPayment
 // ======================================================
-// Passo 1 desta parte: só o login. Ainda não sabemos ao certo em que campo
-// da resposta vem o token (a documentação não o confirma), por isso esta
-// função devolve a resposta completa da MozPayment, sem adivinhar o nome
-// do campo. A rota de teste /moz-login-test deixa-nos ver essa resposta
-// real, para o próximo passo sabermos exactamente o que usar.
+// Confirmado a testar: o login devolve
+//   { status: 'success', response: { token, user_id, expires } }
+// onde "expires" vem em segundos (1 ano, na prática não expira).
+// Por isso guardamos o token em memória e só voltamos a fazer login
+// quando ele estiver perto de expirar (ou ainda não tivermos nenhum).
 
 async function mozpaymentLogin() {
   if (!MOZPAYMENT_EMAIL || !MOZPAYMENT_SENHA) {
@@ -178,6 +178,26 @@ async function mozpaymentLogin() {
     throw new Error('Login na MozPayment falhou: ' + res.status + ' ' + JSON.stringify(json));
   }
   return json;
+}
+
+// Cache do token em memória (apaga-se se o container reiniciar, mas aí
+// basta fazer login outra vez automaticamente - sem problema).
+let mozTokenCache = { token: '', expiraEm: 0 };
+
+async function mozpaymentToken() {
+  const agora = Date.now();
+  // Margem de segurança de 1 dia antes do fim real do prazo.
+  if (mozTokenCache.token && agora < mozTokenCache.expiraEm - 86400000) {
+    return mozTokenCache.token;
+  }
+  const login = await mozpaymentLogin();
+  const token = login && login.response && login.response.token;
+  if (!token) {
+    throw new Error('A MozPayment não devolveu nenhum token no login: ' + JSON.stringify(login));
+  }
+  const expiresSegundos = (login.response && login.response.expires) || 3600;
+  mozTokenCache = { token, expiraEm: agora + expiresSegundos * 1000 };
+  return token;
 }
 
 // ======================================================
@@ -443,13 +463,21 @@ app.post('/meus-sites', async (req, res) => {
 });
 
 // ---- Rota temporária de diagnóstico ----
-// Só serve para confirmarmos, uma vez, a forma exacta da resposta de login
-// da MozPayment (em especial o nome do campo do token). Depois de
-// confirmarmos isso, apagamos esta rota.
+// Já confirmámos a forma da resposta de login. Agora só confirma que o
+// mozpaymentToken() (com cache) funciona - mostra só os primeiros
+// caracteres do token, nunca o token completo. Apagamos esta rota depois
+// de confirmarmos.
 app.post('/moz-login-test', async (req, res) => {
   try {
-    const resultado = await mozpaymentLogin();
-    return res.json({ status: 'success', response: resultado });
+    const token = await mozpaymentToken();
+    return res.json({
+      status: 'success',
+      response: {
+        token_inicio: token.slice(0, 12) + '...',
+        tamanho_total: token.length,
+        expira_em: new Date(mozTokenCache.expiraEm).toISOString()
+      }
+    });
   } catch (erro) {
     console.error('Erro em /moz-login-test:', erro);
     return res.json({ status: 'error', message: erro.message });
