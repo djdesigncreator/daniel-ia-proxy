@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.14.0';
+const VERSION = '1.14.1';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -602,7 +602,8 @@ app.post('/loja-encomenda', async (req, res) => {
     return res.json({ status: 'success', response: { encomenda_id: encomendaId, valor_total: valorTotal } });
   } catch (erro) {
     console.error('Erro em /loja-encomenda:', erro);
-    return res.json({ status: 'error', message: 'Não foi possível criar a encomenda.' });
+    // Temporário: mostrar o motivo real do erro, só para diagnosticar.
+    return res.json({ status: 'error', message: 'Não foi possível criar a encomenda.', debug: String(erro.message || erro) });
   }
 });
 
