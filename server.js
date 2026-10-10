@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.17.0';
+const VERSION = '1.18.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -542,6 +542,84 @@ app.post('/loja-produto-criar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /loja-produto-criar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível criar o produto.' });
+  }
+});
+
+// Lista TODOS os produtos de uma loja (activos e inactivos), para o dono
+// gerir - ao contrário de /loja-produtos, que só mostra os activos e é
+// pública. Esta exige o owner e confirma que é mesmo o dono do Site.
+app.post('/loja-meus-produtos', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    if (!owner || !site_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: owner e site_id são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver os produtos deste projecto.' });
+    }
+
+    const produtos = await bubbleList(
+      'produto',
+      [{ key: 'Site', constraint_type: 'equals', value: site_id }],
+      'Created Date',
+      true
+    );
+
+    const lista = produtos.map(p => ({
+      id: p._id,
+      nome: p['Nome'],
+      preco: p['Preco MZN'],
+      descricao: p['Descricao'] || '',
+      imagem: p['Imagem URL'] || '',
+      activo: !!p['Is Active']
+    }));
+
+    return res.json({ status: 'success', response: { produtos: lista } });
+  } catch (erro) {
+    console.error('Erro em /loja-meus-produtos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os produtos.' });
+  }
+});
+
+// Edita um produto existente (incluindo activar/desactivar). Só o dono do
+// Site a que o produto pertence pode editá-lo.
+app.post('/loja-produto-editar', async (req, res) => {
+  try {
+    const { owner, produto_id, nome, preco, descricao, imagem_url, activo } = req.body;
+    if (!owner || !produto_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: produto_id é obrigatório.' });
+    }
+
+    const produto = await bubbleGet('produto', produto_id);
+    if (!produto) {
+      return res.json({ status: 'error', message: 'Produto não encontrado.' });
+    }
+
+    const site = await bubbleGet('site', produto['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para editar este produto.' });
+    }
+
+    const dados = {};
+    if (nome !== undefined) dados['Nome'] = nome;
+    if (descricao !== undefined) dados['Descricao'] = descricao;
+    if (imagem_url !== undefined) dados['Imagem URL'] = imagem_url;
+    if (activo !== undefined) dados['Is Active'] = !!activo;
+    if (preco !== undefined) {
+      const precoNum = Number(preco);
+      if (isNaN(precoNum) || precoNum <= 0) {
+        return res.json({ status: 'error', message: 'O preço tem de ser um número maior que zero.' });
+      }
+      dados['Preco MZN'] = precoNum;
+    }
+
+    await bubblePatch('produto', produto_id, dados);
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /loja-produto-editar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível actualizar o produto.' });
   }
 });
 
