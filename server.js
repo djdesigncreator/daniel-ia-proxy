@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.15.1';
+const VERSION = '1.16.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -690,24 +690,37 @@ app.post('/loja-pagar', async (req, res) => {
     if (!respCartao.ok) {
       throw new Error('Pedido de pagamento por cartão falhou: ' + respCartao.status + ' ' + JSON.stringify(jsonCartao));
     }
-    const checkoutUrl = jsonCartao.url || jsonCartao.checkout_url ||
-      (jsonCartao.response && (jsonCartao.response.url || jsonCartao.response.checkout_url)) || '';
-    const sessionId = jsonCartao.session_id || (jsonCartao.response && jsonCartao.response.session_id) || '';
+    // Confirmado a testar: a MozPayment devolve o link em "payment_url",
+    // dentro de "response" - e o session_id vem só como parâmetro desse
+    // link, não como campo separado.
+    const checkoutUrl = jsonCartao.payment_url || jsonCartao.url || jsonCartao.checkout_url ||
+      (jsonCartao.response && (jsonCartao.response.payment_url || jsonCartao.response.url || jsonCartao.response.checkout_url)) || '';
     if (!checkoutUrl) {
       throw new Error('A MozPayment não devolveu nenhum link de checkout: ' + JSON.stringify(jsonCartao));
     }
 
+    let sessionId = jsonCartao.session_id || (jsonCartao.response && jsonCartao.response.session_id) || '';
+    if (!sessionId) {
+      try {
+        sessionId = new URL(checkoutUrl).searchParams.get('session_id') || '';
+      } catch (e) {
+        // Se o link vier numa forma inesperada, seguimos sem session_id.
+      }
+    }
+    // Se mesmo assim não conseguirmos extrair o session_id, guardamos o
+    // link completo - é melhor termos algum identificador do que nenhum.
+    const identificador = sessionId || checkoutUrl;
+
     await bubblePatch('encomenda', encomenda_id, {
       'Metodo': 'cartao',
-      'ID Pagamento': String(sessionId)
+      'ID Pagamento': String(identificador)
     });
 
     return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl } });
 
   } catch (erro) {
     console.error('Erro em /loja-pagar:', erro);
-    // Temporário: mostrar o motivo real do erro, só para diagnosticar.
-    return res.json({ status: 'error', message: 'Não foi possível iniciar o pagamento. Tenta novamente.', debug: String(erro.message || erro) });
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o pagamento. Tenta novamente.' });
   }
 });
 
