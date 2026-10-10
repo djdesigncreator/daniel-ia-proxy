@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -201,6 +201,10 @@ app.get('/', (req, res) => {
   });
 });
 
+// Nota sobre os nomes dos campos nas chamadas ao Bubble: têm de ser
+// EXACTAMENTE como aparecem no editor do Bubble (maiúsculas e espaços
+// incluídos) - a Data API não os converte para minúsculas.
+
 app.post('/generate', async (req, res) => {
   try {
     const { owner, nome, tipo, prompt, logo_data_url } = req.body;
@@ -210,9 +214,6 @@ app.post('/generate', async (req, res) => {
     }
 
     // ---- 1. Carregar utilizador e plano ----
-    // Nota: os nomes dos campos aqui têm de ser EXACTAMENTE como aparecem
-    // no editor do Bubble (maiúsculas e espaços incluídos) - a Data API
-    // não os converte para minúsculas.
     const user = await bubbleGet('user', owner);
     if (!user) {
       return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
@@ -237,7 +238,45 @@ app.post('/generate', async (req, res) => {
       return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
     }
 
-    // ---- 4. Logótipo (opcional) ----
+    // ---- 4. Registar já o Site e a Generation, com estado "A gerar" ----
+    // Respondemos de imediato à página - o trabalho pesado (OpenAI + upload)
+    // corre a seguir, em segundo plano, porque demora mais do que o tempo
+    // que o Bunny deixa um pedido ficar à espera (daí o 504 que estávamos a ver).
+    const siteId = await bubbleCreate('site', {
+      'Owner': owner,
+      'Nome': nome,
+      'Tipo': tipo,
+      'Prompt Original': prompt,
+      'Status': 'A gerar',
+      'Created Date': new Date().toISOString()
+    });
+
+    const generationId = await bubbleCreate('generation', {
+      'Site': siteId,
+      'Prompt': prompt,
+      'Status': 'A gerar',
+      'Tentativas': 1,
+      'Created Date': new Date().toISOString()
+    });
+
+    res.json({
+      status: 'success',
+      response: { site_id: siteId, generation_id: generationId }
+    });
+
+    // ---- 5. Trabalho pesado, sem bloquear a resposta ----
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados })
+      .catch(erro => console.error('Erro em processarGeracao:', erro));
+
+  } catch (erro) {
+    console.error('Erro em /generate:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar a geração. Tenta novamente.' });
+  }
+});
+
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados }) {
+  try {
+    // ---- Logótipo (opcional) ----
     let logoUrl = '';
     if (logo_data_url) {
       const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(logo_data_url);
@@ -251,54 +290,60 @@ app.post('/generate', async (req, res) => {
       }
     }
 
-    // ---- 5. Gerar o HTML com a OpenAI ----
+    // ---- Gerar o HTML com a OpenAI ----
     const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl });
 
-    // ---- 6. Guardar o HTML no Bunny Storage ----
+    // ---- Guardar o HTML no Bunny Storage ----
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const caminhoSite = `sites/${owner}/${siteSlug}/index.html`;
     const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
 
-    // ---- 7. Registar o Site no Bubble ----
-    const siteId = await bubbleCreate('site', {
-      'Owner': owner,
-      'Nome': nome,
-      'Tipo': tipo,
-      'Prompt Original': prompt,
+    // ---- Actualizar o Site para "Pronto" ----
+    await bubblePatch('site', siteId, {
       'Status': 'Pronto',
       'Bunny Path': caminhoSite,
       'CDN URL': cdnUrl,
-      'Logo URL': logoUrl,
-      'Created Date': new Date().toISOString()
+      'Logo URL': logoUrl
     });
 
-    // ---- 8. Registar a Generation ----
-    await bubbleCreate('generation', {
-      'Site': siteId,
-      'Prompt': prompt,
+    // ---- Actualizar a Generation ----
+    await bubblePatch('generation', generationId, {
       'Status': 'Pronto',
-      'Tentativas': 1,
-      'Created Date': new Date().toISOString(),
       'Tokens Usados': tokens
     });
 
-    // ---- 9. Actualizar os tokens usados do utilizador ----
+    // ---- Actualizar os tokens usados do utilizador ----
     await bubblePatch('user', owner, {
       'Tokens Usados Mes': tokensUsados + tokens
     });
 
+  } catch (erro) {
+    console.error('Erro em processarGeracao:', erro);
+    await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {});
+    await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
+  }
+}
+
+app.post('/generate-status', async (req, res) => {
+  try {
+    const { site_id } = req.body;
+    if (!site_id) {
+      return res.json({ status: 'error', message: 'Falta o site_id.' });
+    }
+    const site = await bubbleGet('site', site_id);
+    if (!site) {
+      return res.json({ status: 'error', message: 'Projecto não encontrado.' });
+    }
     return res.json({
       status: 'success',
       response: {
-        site_id: siteId,
-        cdn_url: cdnUrl,
-        tokens_usados: tokens
+        estado: site['Status'],
+        cdn_url: site['CDN URL'] || ''
       }
     });
-
   } catch (erro) {
-    console.error('Erro em /generate:', erro);
-    return res.json({ status: 'error', message: 'Não foi possível gerar o projecto. Tenta novamente.' });
+    console.error('Erro em /generate-status:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
   }
 });
 
