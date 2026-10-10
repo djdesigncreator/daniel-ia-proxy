@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.15.0';
+const VERSION = '1.15.1';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -706,7 +706,8 @@ app.post('/loja-pagar', async (req, res) => {
 
   } catch (erro) {
     console.error('Erro em /loja-pagar:', erro);
-    return res.json({ status: 'error', message: 'Não foi possível iniciar o pagamento. Tenta novamente.' });
+    // Temporário: mostrar o motivo real do erro, só para diagnosticar.
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o pagamento. Tenta novamente.', debug: String(erro.message || erro) });
   }
 });
 
