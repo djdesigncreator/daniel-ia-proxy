@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -124,7 +124,10 @@ async function uploadParaBunny(caminho, buffer, contentType) {
     const texto = await res.text().catch(() => '');
     throw new Error('Upload para o Bunny falhou: ' + res.status + ' ' + texto);
   }
-  return `https://${CDN_HOST}/${caminho}`;
+  // A Pull Zone não está ligada directamente à raiz da storage zone, por
+  // isso o caminho servido pela CDN tem de incluir o nome da zona
+  // (confirmado a testar: só funcionou com /daniel-ia/ no meio do URL).
+  return `https://${CDN_HOST}/${STORAGE_ZONE}/${caminho}`;
 }
 
 // ======================================================
