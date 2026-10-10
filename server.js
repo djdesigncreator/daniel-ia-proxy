@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.9.0';
+const VERSION = '1.10.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -33,6 +33,14 @@ const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
 const OPENAI_MODEL = clean(process.env.OPENAI_MODEL) || 'gpt-5.6-sol';
 const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'low';
 const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 16000;
+
+// ---- MozPayment ----
+// Credenciais da conta MozPayment da Daniel.ia (diferente da carteira do
+// projecto Bag Security). Nunca aparecem em nenhum HTML gerado nem são
+// devolvidas a nenhuma página - ficam só aqui no container.
+const MOZPAYMENT_EMAIL = clean(process.env.MOZPAYMENT_EMAIL);
+const MOZPAYMENT_SENHA = clean(process.env.MOZPAYMENT_SENHA);
+const MOZPAYMENT_WALLET = clean(process.env.MOZPAYMENT_WALLET);
 
 const app = express();
 
@@ -145,6 +153,31 @@ async function uploadParaBunny(caminho, buffer, contentType) {
   // isso o caminho servido pela CDN tem de incluir o nome da zona
   // (confirmado a testar: só funcionou com /daniel-ia/ no meio do URL).
   return `https://${CDN_HOST}/${STORAGE_ZONE}/${caminho}`;
+}
+
+// ======================================================
+// Helper - MozPayment
+// ======================================================
+// Passo 1 desta parte: só o login. Ainda não sabemos ao certo em que campo
+// da resposta vem o token (a documentação não o confirma), por isso esta
+// função devolve a resposta completa da MozPayment, sem adivinhar o nome
+// do campo. A rota de teste /moz-login-test deixa-nos ver essa resposta
+// real, para o próximo passo sabermos exactamente o que usar.
+
+async function mozpaymentLogin() {
+  if (!MOZPAYMENT_EMAIL || !MOZPAYMENT_SENHA) {
+    throw new Error('Faltam as variáveis MOZPAYMENT_EMAIL / MOZPAYMENT_SENHA no container.');
+  }
+  const res = await fetch('https://mozpayment.co.mz/api/1.1/wf/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: MOZPAYMENT_EMAIL, senha: MOZPAYMENT_SENHA })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error('Login na MozPayment falhou: ' + res.status + ' ' + JSON.stringify(json));
+  }
+  return json;
 }
 
 // ======================================================
@@ -406,6 +439,20 @@ app.post('/meus-sites', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /meus-sites:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os teus projectos.' });
+  }
+});
+
+// ---- Rota temporária de diagnóstico ----
+// Só serve para confirmarmos, uma vez, a forma exacta da resposta de login
+// da MozPayment (em especial o nome do campo do token). Depois de
+// confirmarmos isso, apagamos esta rota.
+app.post('/moz-login-test', async (req, res) => {
+  try {
+    const resultado = await mozpaymentLogin();
+    return res.json({ status: 'success', response: resultado });
+  } catch (erro) {
+    console.error('Erro em /moz-login-test:', erro);
+    return res.json({ status: 'error', message: erro.message });
   }
 });
 
