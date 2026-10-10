@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -75,6 +75,23 @@ async function bubbleCount(tipo, constraints) {
   const count = json.response.count || 0;
   const remaining = json.response.remaining || 0;
   return count + remaining;
+}
+
+async function bubbleList(tipo, constraints, sortField, descending) {
+  const params = new URLSearchParams();
+  params.set('constraints', JSON.stringify(constraints));
+  if (sortField) {
+    params.set('sort_field', sortField);
+    params.set('descending', descending ? 'true' : 'false');
+  }
+  params.set('limit', '100');
+  const url = `${BUBBLE_BASE}/${tipo}?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` }
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('bubbleList falhou: ' + JSON.stringify(json));
+  return json.response.results || [];
 }
 
 async function bubbleCreate(tipo, dados) {
@@ -359,6 +376,36 @@ app.post('/generate-status', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /generate-status:', erro);
     return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
+  }
+});
+
+app.post('/meus-sites', async (req, res) => {
+  try {
+    const { owner } = req.body;
+    if (!owner) {
+      return res.json({ status: 'error', message: 'Falta o owner.' });
+    }
+
+    const sites = await bubbleList(
+      'site',
+      [{ key: 'Owner', constraint_type: 'equals', value: owner }],
+      'Created Date',
+      true
+    );
+
+    const lista = sites.map(s => ({
+      id: s._id,
+      nome: s['Nome'],
+      tipo: s['Tipo'],
+      estado: s['Status'],
+      cdn_url: s['CDN URL'] || '',
+      criado: s['Created Date']
+    }));
+
+    return res.json({ status: 'success', response: { sites: lista } });
+  } catch (erro) {
+    console.error('Erro em /meus-sites:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os teus projectos.' });
   }
 });
 
