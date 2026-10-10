@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -537,6 +537,72 @@ app.post('/loja-produto-criar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /loja-produto-criar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível criar o produto.' });
+  }
+});
+
+// Cria uma encomenda. O passo mais importante aqui, por segurança: o valor
+// total NUNCA vem do que o browser envia - é sempre recalculado aqui, a
+// partir dos preços reais guardados nos registos de Produto. Assim,
+// ninguém consegue alterar o preço antes de pagar.
+app.post('/loja-encomenda', async (req, res) => {
+  try {
+    const { site_id, cliente_nome, cliente_telefone, itens } = req.body;
+
+    if (!site_id || !cliente_nome || !cliente_telefone || !Array.isArray(itens) || itens.length === 0) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id, cliente_nome, cliente_telefone e itens são obrigatórios.' });
+    }
+
+    // Buscar os produtos realmente activos desta loja - a fonte da verdade
+    // para os preços é sempre esta, nunca o que vier do pedido.
+    const produtosAtivos = await bubbleList(
+      'produto',
+      [
+        { key: 'Site', constraint_type: 'equals', value: site_id },
+        { key: 'Is Active', constraint_type: 'equals', value: true }
+      ]
+    );
+    const porId = {};
+    produtosAtivos.forEach(p => { porId[p._id] = p; });
+
+    let valorTotal = 0;
+    const itensCalculados = [];
+    for (const item of itens) {
+      const produto = porId[item.produto_id];
+      if (!produto) {
+        return res.json({ status: 'error', message: 'Um dos produtos já não está disponível nesta loja.' });
+      }
+      const quantidade = Math.max(1, parseInt(item.quantidade, 10) || 1);
+      const precoUnitario = produto['Preco MZN'];
+      valorTotal += precoUnitario * quantidade;
+      itensCalculados.push({
+        produto_id: produto._id,
+        nome: produto['Nome'],
+        preco_unitario: precoUnitario,
+        quantidade
+      });
+    }
+
+    if (valorTotal <= 0) {
+      return res.json({ status: 'error', message: 'O valor da encomenda tem de ser maior que zero.' });
+    }
+
+    const encomendaId = await bubbleCreate('encomenda', {
+      'Site': site_id,
+      'Produtos Json': JSON.stringify(itensCalculados),
+      'Cliente Nome': cliente_nome,
+      'Cliente Telefone': cliente_telefone,
+      'Valor Total': valorTotal,
+      'Metodo': '',
+      'ID Pagamento': '',
+      'Estado': 'Pendente',
+      'Transaction ID': '',
+      'Webhook Processado': false
+    });
+
+    return res.json({ status: 'success', response: { encomenda_id: encomendaId, valor_total: valorTotal } });
+  } catch (erro) {
+    console.error('Erro em /loja-encomenda:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar a encomenda.' });
   }
 });
 
