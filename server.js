@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.11.2';
+const VERSION = '1.13.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -498,8 +498,45 @@ app.post('/loja-produtos', async (req, res) => {
     return res.json({ status: 'success', response: { produtos: lista } });
   } catch (erro) {
     console.error('Erro em /loja-produtos:', erro);
-    // Temporário: mostrar o motivo real do erro, só para diagnosticar.
-    return res.json({ status: 'error', message: 'Não foi possível carregar os produtos.', debug: String(erro.message || erro) });
+    return res.json({ status: 'error', message: 'Não foi possível carregar os produtos.' });
+  }
+});
+
+// Cria um novo produto numa loja. Esta rota não é pública como a anterior -
+// exige o "owner" (quem está a pedir) e confirma que esse owner é mesmo o
+// dono do Site antes de criar nada, para ninguém poder adicionar produtos
+// a uma loja que não é sua.
+app.post('/loja-produto-criar', async (req, res) => {
+  try {
+    const { owner, site_id, nome, preco, descricao, imagem_url } = req.body;
+
+    if (!owner || !site_id || !nome || preco === undefined || preco === null || preco === '') {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id, nome e preco são obrigatórios.' });
+    }
+
+    const precoNum = Number(preco);
+    if (isNaN(precoNum) || precoNum <= 0) {
+      return res.json({ status: 'error', message: 'O preço tem de ser um número maior que zero.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para adicionar produtos a este projecto.' });
+    }
+
+    const produtoId = await bubbleCreate('produto', {
+      'Site': site_id,
+      'Nome': nome,
+      'Preco MZN': precoNum,
+      'Descricao': descricao || '',
+      'Imagem URL': imagem_url || '',
+      'Is Active': true
+    });
+
+    return res.json({ status: 'success', response: { produto_id: produtoId } });
+  } catch (erro) {
+    console.error('Erro em /loja-produto-criar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar o produto.' });
   }
 });
 
