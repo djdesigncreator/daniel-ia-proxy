@@ -10,10 +10,166 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
+
+// ---- Bubble ----
+const BUBBLE_BASE = clean(process.env.BUBBLE_BASE);
+const BUBBLE_TOKEN = clean(process.env.BUBBLE_TOKEN);
+
+// ---- Bunny Storage / CDN ----
+const STORAGE_ZONE = clean(process.env.STORAGE_ZONE);
+const STORAGE_PASSWORD = clean(process.env.STORAGE_PASSWORD);
+const STORAGE_HOST = clean(process.env.STORAGE_HOST) || 'storage.bunnycdn.com';
+const CDN_HOST = clean(process.env.CDN_HOST);
+
+// ---- OpenAI ----
+const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
+const OPENAI_MODEL = clean(process.env.OPENAI_MODEL) || 'gpt-5.6-sol';
+const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'medium';
+const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 8000;
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '15mb' })); // 15mb para caber um logótipo em base64
+
+// ======================================================
+// Helpers - Bubble Data API
+// ======================================================
+
+async function bubbleGet(tipo, id) {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${id}`, {
+    headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` }
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('bubbleGet falhou: ' + JSON.stringify(json));
+  return json.response;
+}
+
+async function bubbleCount(tipo, constraints) {
+  const url = `${BUBBLE_BASE}/${tipo}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` }
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('bubbleCount falhou: ' + JSON.stringify(json));
+  const count = json.response.count || 0;
+  const remaining = json.response.remaining || 0;
+  return count + remaining;
+}
+
+async function bubbleCreate(tipo, dados) {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${BUBBLE_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(dados)
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('bubbleCreate falhou: ' + JSON.stringify(json));
+  return json.id;
+}
+
+async function bubblePatch(tipo, id, dados) {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${id}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${BUBBLE_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(dados)
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error('bubblePatch falhou: ' + JSON.stringify(json));
+  }
+}
+
+// ======================================================
+// Helpers - Bunny Storage
+// ======================================================
+
+async function uploadParaBunny(caminho, buffer, contentType) {
+  const url = `https://${STORAGE_HOST}/${STORAGE_ZONE}/${caminho}`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      AccessKey: STORAGE_PASSWORD,
+      'Content-Type': contentType || 'application/octet-stream'
+    },
+    body: buffer
+  });
+  if (!res.ok) {
+    const texto = await res.text().catch(() => '');
+    throw new Error('Upload para o Bunny falhou: ' + res.status + ' ' + texto);
+  }
+  return `https://${CDN_HOST}/${caminho}`;
+}
+
+// ======================================================
+// Helper - OpenAI
+// ======================================================
+
+const GUIA_TIPO = {
+  'E-commerce': 'Cria uma loja online com uma grelha de produtos de exemplo coerentes com o prompt (nome, preço em MZN, imagem via placeholder de cor), botões "Adicionar ao carrinho" (só visuais, sem funcionar de verdade por agora), e rodapé com contactos.',
+  'Checkout': 'Cria uma página de checkout para um único produto ou serviço descrito no prompt: resumo da compra, campos de nome/telefone/email, e botões de pagamento (M-Pesa, e-Mola, Cartão) só visuais por agora, sem processar pagamento real.',
+  'Landing Page': 'Cria uma landing page de uma página: secção hero com título forte, benefícios/funcionalidades, depoimentos fictícios coerentes, chamada para acção clara, e rodapé com contactos.',
+  'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", grelha de projectos/trabalhos de exemplo coerentes com o prompt, e secção de contacto.',
+  'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.'
+};
+
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl }) {
+  const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
+  const instrucaoLogo = logoUrl
+    ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
+    : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
+
+  const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
+Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
+O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
+${guia}`;
+
+  const userPrompt = `Nome do negócio: ${nome}
+Tipo de projecto: ${tipo}
+${instrucaoLogo}
+Descrição pedida pela pessoa: ${prompt}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      reasoning_effort: OPENAI_REASONING_EFFORT,
+      max_completion_tokens: OPENAI_MAX_TOKENS,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
+    })
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error('OpenAI falhou: ' + JSON.stringify(json));
+  }
+
+  let html = json.choices[0].message.content.trim();
+
+  // Defesa: se a IA mesmo assim devolver com blocos markdown, limpamos
+  html = html.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+
+  const tokens = (json.usage && json.usage.total_tokens) || 0;
+
+  return { html, tokens };
+}
+
+// ======================================================
+// Rotas
+// ======================================================
 
 app.get('/', (req, res) => {
   res.json({
@@ -22,6 +178,104 @@ app.get('/', (req, res) => {
     version: VERSION,
     time: new Date().toISOString()
   });
+});
+
+app.post('/generate', async (req, res) => {
+  try {
+    const { owner, nome, tipo, prompt, logo_data_url } = req.body;
+
+    if (!owner || !nome || !tipo || !prompt) {
+      return res.json({ status: 'error', message: 'Faltam dados: nome, tipo e prompt são obrigatórios.' });
+    }
+
+    // ---- 1. Carregar utilizador e plano ----
+    const user = await bubbleGet('user', owner);
+    if (!user) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+
+    const planId = user.plan;
+    if (!planId) {
+      return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
+    }
+    const plano = await bubbleGet('plan', planId);
+
+    // ---- 2. Verificar limite de projectos ----
+    const sitesExistentes = await bubbleCount('site', [{ key: 'owner', constraint_type: 'equals', value: owner }]);
+    if (sitesExistentes >= (plano.sites_limit || 0)) {
+      return res.json({ status: 'error', message: `O teu plano "${plano.name}" permite até ${plano.sites_limit} projecto(s). Já atingiste esse limite.` });
+    }
+
+    // ---- 3. Verificar limite de tokens do mês ----
+    const tokensUsados = user.tokens_usados_mes || 0;
+    const tokensIncluidos = plano.tokens_incluidos || 0;
+    if (tokensUsados >= tokensIncluidos) {
+      return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
+    }
+
+    // ---- 4. Logótipo (opcional) ----
+    let logoUrl = '';
+    if (logo_data_url) {
+      const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(logo_data_url);
+      if (match) {
+        const mime = match[1];
+        const base64 = match[2];
+        const buffer = Buffer.from(base64, 'base64');
+        const extensao = mime.split('/')[1].replace('+xml', '').replace('jpeg', 'jpg');
+        const caminhoLogo = `logos/${owner}-${Date.now()}.${extensao}`;
+        logoUrl = await uploadParaBunny(caminhoLogo, buffer, mime);
+      }
+    }
+
+    // ---- 5. Gerar o HTML com a OpenAI ----
+    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl });
+
+    // ---- 6. Guardar o HTML no Bunny Storage ----
+    const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const caminhoSite = `sites/${owner}/${siteSlug}/index.html`;
+    const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+
+    // ---- 7. Registar o Site no Bubble ----
+    const siteId = await bubbleCreate('site', {
+      owner: owner,
+      nome: nome,
+      tipo: tipo,
+      prompt_original: prompt,
+      status: 'Pronto',
+      bunny_path: caminhoSite,
+      cdn_url: cdnUrl,
+      logo_url: logoUrl,
+      created_date: new Date().toISOString()
+    });
+
+    // ---- 8. Registar a Generation ----
+    await bubbleCreate('generation', {
+      site: siteId,
+      prompt: prompt,
+      status: 'Pronto',
+      tentativas: 1,
+      created_date: new Date().toISOString(),
+      tokens_usados: tokens
+    });
+
+    // ---- 9. Actualizar os tokens usados do utilizador ----
+    await bubblePatch('user', owner, {
+      tokens_usados_mes: tokensUsados + tokens
+    });
+
+    return res.json({
+      status: 'success',
+      response: {
+        site_id: siteId,
+        cdn_url: cdnUrl,
+        tokens_usados: tokens
+      }
+    });
+
+  } catch (erro) {
+    console.error('Erro em /generate:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível gerar o projecto. Tenta novamente.' });
+  }
 });
 
 app.listen(PORT, () => {
