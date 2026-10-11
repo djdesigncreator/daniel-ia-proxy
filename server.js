@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.31.0';
+const VERSION = '1.32.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -70,6 +70,10 @@ const MOZPAYMENT_WALLET = clean(process.env.MOZPAYMENT_WALLET);
 // damos à MozPayment nos pagamentos por cartão (para onde o cliente volta
 // depois de pagar).
 const SELF_URL = clean(process.env.SELF_URL) || 'https://mc-8oxfde5o71.bunny.run';
+
+// Endereço do dashboard da app Daniel.ia - usado para onde a pessoa volta
+// depois de assinar um plano (ver /assinatura-obrigado).
+const APP_URL = clean(process.env.APP_URL) || 'https://daniel-ia.com/dashboard';
 
 // ---- Bunny Stream (vídeo da Galeria) ----
 // Video Library própria da conta Bunny do Daniel.ia, separada da storage
@@ -3727,6 +3731,454 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     console.log('Encomenda marcada como paga:', encomenda._id);
   } catch (erro) {
     console.error('Erro ao processar webhook da loja:', erro);
+  }
+});
+
+// ======================================================
+// Assinatura de planos pagos da própria Daniel.ia
+// ======================================================
+// Mesmo padrão exacto do pagamento das lojas (/loja-pagar, /loja-estado,
+// /loja-obrigado, webhook) - só que aqui quem paga é o próprio dono da
+// conta Daniel.ia, para subir de plano, e no fim quem é actualizado é o
+// seu User (campo Plan), não um Site.
+//
+// Data type nova no Bubble, "Assinatura": User, Plano, Valor MZN, Metodo,
+// ID Pagamento, Estado (Pendente/Pago), Transaction ID, Webhook Processado,
+// Created Date - exactamente os mesmos papéis dos campos de "Encomenda".
+// Pressupõe que o tipo Plan tem um campo "Price MZN" (number) com o preço
+// mensal - se esse campo ainda não existir no Bubble, cria-o antes de usar
+// esta rota.
+
+// Lista os planos activos, para a pessoa escolher a quem quer mudar.
+app.post('/planos', async (req, res) => {
+  try {
+    const planos = await bubbleList('plan', [
+      { key: 'Is Active', constraint_type: 'equals', value: true }
+    ]);
+    const lista = planos.map(p => ({
+      id: p._id,
+      nome: p['Name'],
+      preco_mzn: p['Price MZN'] || 0,
+      sites_limit: p['Sites Limit'] || 0,
+      tokens_incluidos: p['Tokens Incluidos'] || 0,
+      max_colaboradores: p['Max Colaboradores'] || 0,
+      permite_dominio: !!p['Permite Dominio']
+    }));
+    return res.json({ status: 'success', response: { planos: lista } });
+  } catch (erro) {
+    console.error('Erro em /planos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os planos.' });
+  }
+});
+
+// Regista a intenção de mudar de plano. Se o plano escolhido for grátis
+// (0 MZN, ex: voltar para o Free), aplica-se logo, sem precisar de
+// nenhum pagamento. Se for pago, cria a Assinatura "Pendente" para
+// /assinatura-pagar iniciar o pagamento a sério.
+app.post('/assinatura-iniciar', async (req, res) => {
+  try {
+    const { owner, plano_id } = req.body;
+    if (!owner || !plano_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: owner e plano_id são obrigatórios.' });
+    }
+
+    const user = await bubbleGet('user', owner);
+    if (!user) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+    const plano = await bubbleGet('plan', plano_id);
+    if (!plano || !plano['Is Active']) {
+      return res.json({ status: 'error', message: 'Este plano não está disponível.' });
+    }
+
+    const valor = plano['Price MZN'] || 0;
+
+    // Plano grátis - aplica-se de imediato, sem pagamento nenhum.
+    if (valor <= 0) {
+      const agora = new Date();
+      const expira = new Date(agora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      await bubblePatch('user', owner, {
+        'Plan': plano_id,
+        'Plan Started': agora.toISOString(),
+        'Plan Expires': expira.toISOString()
+      });
+      return res.json({ status: 'success', response: { gratis: true, nome_plano: plano['Name'] } });
+    }
+
+    const assinaturaId = await bubbleCreate('assinatura', {
+      'User': owner,
+      'Plano': plano_id,
+      'Valor MZN': valor,
+      'Metodo': '',
+      'ID Pagamento': '',
+      'Estado': 'Pendente',
+      'Transaction ID': '',
+      'Webhook Processado': false,
+      'Created Date': new Date().toISOString()
+    });
+
+    return res.json({
+      status: 'success',
+      response: { gratis: false, assinatura_id: assinaturaId, valor_mzn: valor, nome_plano: plano['Name'] }
+    });
+  } catch (erro) {
+    console.error('Erro em /assinatura-iniciar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar a mudança de plano.' });
+  }
+});
+
+// Inicia o pagamento de uma assinatura já criada - M-Pesa, e-Mola ou
+// Cartão. Espelha /loja-pagar quase campo a campo; a única diferença é
+// que o M-Pesa/e-Mola precisam de um número de telefone que aqui vem do
+// corpo do pedido (a conta Daniel.ia não tem necessariamente um
+// telefone guardado), em vez de vir de um formulário de cliente anónimo.
+app.post('/assinatura-pagar', async (req, res) => {
+  try {
+    const { assinatura_id, metodo, telefone } = req.body;
+
+    if (!assinatura_id || !metodo) {
+      return res.json({ status: 'error', message: 'Faltam dados: assinatura_id e metodo são obrigatórios.' });
+    }
+    const metodosValidos = ['mpesa', 'emola', 'cartao'];
+    if (!metodosValidos.includes(metodo)) {
+      return res.json({ status: 'error', message: 'Método de pagamento inválido.' });
+    }
+    if ((metodo === 'mpesa' || metodo === 'emola') && !telefone) {
+      return res.json({ status: 'error', message: 'Falta o número de telefone para M-Pesa/e-Mola.' });
+    }
+
+    const assinatura = await bubbleGet('assinatura', assinatura_id);
+    if (!assinatura) {
+      return res.json({ status: 'error', message: 'Assinatura não encontrada.' });
+    }
+    if (assinatura['Estado'] !== 'Pendente') {
+      return res.json({ status: 'error', message: 'Esta assinatura já foi paga ou já não está disponível para pagamento.' });
+    }
+
+    const user = await bubbleGet('user', assinatura['User']);
+    if (!user) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+
+    const valor = assinatura['Valor MZN'];
+    const nome = user['Full Name'] || 'Cliente Daniel.ia';
+    const token = await mozpaymentToken();
+
+    // ---- M-Pesa / e-Mola ----
+    if (metodo === 'mpesa' || metodo === 'emola') {
+      const respMoz = await fetch('https://mozpayment.co.mz/api/1.1/wf/payment', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wallet: MOZPAYMENT_WALLET,
+          payment_method: metodo,
+          amount: String(valor),
+          number: telefone,
+          name: nome
+        })
+      });
+      const jsonMoz = await respMoz.json().catch(() => ({}));
+      if (!respMoz.ok) {
+        throw new Error('Pedido de pagamento falhou: ' + respMoz.status + ' ' + JSON.stringify(jsonMoz));
+      }
+      const idPagamento = jsonMoz.idpayment || jsonMoz.id_payment ||
+        (jsonMoz.response && (jsonMoz.response.idpayment || jsonMoz.response.id_payment)) || '';
+      if (!idPagamento) {
+        throw new Error('A MozPayment não devolveu nenhum idpayment: ' + JSON.stringify(jsonMoz));
+      }
+
+      await bubblePatch('assinatura', assinatura_id, {
+        'Metodo': metodo,
+        'ID Pagamento': String(idPagamento)
+      });
+
+      return res.json({ status: 'success', response: { tipo: 'mobile', idpayment: String(idPagamento) } });
+    }
+
+    // ---- Cartão (Visa / Mastercard) ----
+    const returnUrl = `${SELF_URL}/assinatura-obrigado?assinatura_id=${assinatura_id}`;
+    const respCartao = await fetch('https://mozpayment.co.mz/api/1.1/wf/bankpayment', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        valor: String(valor),
+        nome_cliente: nome,
+        carteira: MOZPAYMENT_WALLET,
+        nome_producto: 'Assinatura Daniel.ia',
+        return_url: returnUrl
+      })
+    });
+    const jsonCartao = await respCartao.json().catch(() => ({}));
+    if (!respCartao.ok) {
+      throw new Error('Pedido de pagamento por cartão falhou: ' + respCartao.status + ' ' + JSON.stringify(jsonCartao));
+    }
+    const checkoutUrl = jsonCartao.payment_url || jsonCartao.url || jsonCartao.checkout_url ||
+      (jsonCartao.response && (jsonCartao.response.payment_url || jsonCartao.response.url || jsonCartao.response.checkout_url)) || '';
+    if (!checkoutUrl) {
+      throw new Error('A MozPayment não devolveu nenhum link de checkout: ' + JSON.stringify(jsonCartao));
+    }
+
+    let sessionId = jsonCartao.session_id || (jsonCartao.response && jsonCartao.response.session_id) || '';
+    if (!sessionId) {
+      try {
+        sessionId = new URL(checkoutUrl).searchParams.get('session_id') || '';
+      } catch (e) {
+        // Se o link vier numa forma inesperada, seguimos sem session_id.
+      }
+    }
+    const identificador = sessionId || checkoutUrl;
+
+    await bubblePatch('assinatura', assinatura_id, {
+      'Metodo': 'cartao',
+      'ID Pagamento': String(identificador)
+    });
+
+    return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl } });
+
+  } catch (erro) {
+    console.error('Erro em /assinatura-pagar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o pagamento. Tenta novamente.' });
+  }
+});
+
+// Consulta o estado de uma assinatura - usada pela página de espera para
+// ir verificando se o pagamento já foi confirmado pelo webhook.
+app.post('/assinatura-estado', async (req, res) => {
+  try {
+    const { assinatura_id } = req.body;
+    if (!assinatura_id) {
+      return res.json({ status: 'error', message: 'Falta o assinatura_id.' });
+    }
+    const assinatura = await bubbleGet('assinatura', assinatura_id);
+    if (!assinatura) {
+      return res.json({ status: 'error', message: 'Assinatura não encontrada.' });
+    }
+    return res.json({
+      status: 'success',
+      response: { estado: assinatura['Estado'], valor_mzn: assinatura['Valor MZN'] }
+    });
+  } catch (erro) {
+    console.error('Erro em /assinatura-estado:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
+  }
+});
+
+// Página de "obrigado" para onde a pessoa volta depois de pagar a
+// assinatura com cartão (é o "return_url" que damos à MozPayment em
+// /assinatura-pagar). Espelha /loja-obrigado - só que no fim volta para
+// o dashboard da Daniel.ia, não para um site.
+app.get('/assinatura-obrigado', async (req, res) => {
+  const assinaturaId = String(req.query.assinatura_id || '');
+
+  const html = `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obrigado</title>
+<style>
+  :root{
+    --bg:#0A0A12;
+    --card:#14141F;
+    --border:#24243A;
+    --text:#F5F5F7;
+    --text-dim:#9699B0;
+    --accent-1:#A855F7;
+    --accent-2:#6366F1;
+    --success:#22C55E;
+    --error:#FF5C7A;
+    --warning:#F5A623;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    padding:24px;
+  }
+  .caixa{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:40px 32px;
+    max-width:380px;
+    width:100%;
+    text-align:center;
+  }
+  .icone{
+    width:56px;height:56px;
+    border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    margin:0 auto 20px auto;
+  }
+  .icone.a-confirmar{background:rgba(245,166,35,0.14);}
+  .icone.pago{background:rgba(34,197,94,0.14);}
+  .icone.erro{background:rgba(255,92,122,0.14);}
+  .spinner{
+    width:24px;height:24px;
+    border-radius:50%;
+    border:3px solid var(--border);
+    border-top-color:var(--warning);
+    animation:girar .8s linear infinite;
+  }
+  @keyframes girar{to{transform:rotate(360deg);}}
+  h1{font-size:18px;margin:0 0 8px 0;}
+  p{font-size:13px;color:var(--text-dim);margin:0 0 24px 0;line-height:1.5;}
+  .btn{
+    display:inline-block;
+    background:linear-gradient(135deg,var(--accent-1),var(--accent-2));
+    color:#fff;
+    border:none;
+    border-radius:10px;
+    padding:11px 22px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    text-decoration:none;
+  }
+</style>
+</head>
+<body>
+  <div class="caixa">
+    <div class="icone a-confirmar" id="icone">
+      <div class="spinner"></div>
+    </div>
+    <h1 id="titulo">A confirmar o teu pagamento...</h1>
+    <p id="texto">Isto demora só alguns segundos. Não feches esta página.</p>
+    <a class="btn" id="btn-voltar" href="${escaparHtml(APP_URL)}" style="display:none;">Ir para o dashboard</a>
+  </div>
+
+<script>
+var ASSINATURA_ID = ${JSON.stringify(assinaturaId)};
+var APP_URL_JS = ${JSON.stringify(APP_URL)};
+var tentativas = 0;
+var MAX_TENTATIVAS = 15;
+
+function mostrarEstado(tipo, titulo, texto){
+  var icone = document.getElementById('icone');
+  icone.className = 'icone ' + tipo;
+  if (tipo !== 'a-confirmar') {
+    icone.innerHTML = '';
+  }
+  document.getElementById('titulo').textContent = titulo;
+  document.getElementById('texto').textContent = texto;
+  if (tipo === 'pago') {
+    document.getElementById('btn-voltar').style.display = 'inline-block';
+  }
+}
+
+function verificar(){
+  if (!ASSINATURA_ID) {
+    mostrarEstado('erro', 'Não encontrámos a tua assinatura', 'Volta ao dashboard e tenta novamente.');
+    return;
+  }
+  fetch('/assinatura-estado', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assinatura_id: ASSINATURA_ID })
+  }).then(function(r){ return r.json(); })
+    .then(function(r){
+      if (r.status === 'success' && r.response.estado === 'Pago') {
+        mostrarEstado('pago', 'Pagamento confirmado!', 'O teu plano já está actualizado.');
+        setTimeout(function(){ window.location.href = APP_URL_JS; }, 4000);
+        return;
+      }
+      tentativas++;
+      if (tentativas >= MAX_TENTATIVAS) {
+        mostrarEstado('erro', 'Ainda a processar', 'O pagamento pode ainda estar a ser confirmado. Verifica mais tarde no dashboard.');
+        return;
+      }
+      setTimeout(verificar, 3000);
+    })
+    .catch(function(){
+      tentativas++;
+      if (tentativas >= MAX_TENTATIVAS) {
+        mostrarEstado('erro', 'Não foi possível confirmar', 'Verifica a tua ligação e tenta novamente mais tarde.');
+        return;
+      }
+      setTimeout(verificar, 3000);
+    });
+}
+
+verificar();
+</script>
+</body>
+</html>`;
+
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  return res.send(html);
+});
+
+// ---- Webhook da MozPayment (assinatura de plano da Daniel.ia) ----
+// Endereço secreto, mesma lógica de segurança do webhook da loja: só
+// aplica um pagamento a uma Assinatura "Pendente" que o próprio
+// container criou, com o valor a bater certo, e nunca duas vezes
+// (idempotência via "Webhook Processado").
+app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
+  console.log('Webhook da MozPayment (assinatura) recebido:', JSON.stringify(req.body));
+  res.sendStatus(200);
+
+  try {
+    const body = req.body || {};
+    const status = String(body.status || '').trim().toLowerCase();
+    const identificador = body.reason || body.payment_id || body.idpayment || body.session_id || '';
+
+    if (status !== 'completed') {
+      console.log('Webhook ignorado - status não é "completed":', status);
+      return;
+    }
+    if (!identificador) {
+      console.log('Webhook ignorado - sem identificador ("reason") para encontrar a assinatura.');
+      return;
+    }
+
+    const assinaturas = await bubbleList('assinatura', [
+      { key: 'ID Pagamento', constraint_type: 'equals', value: String(identificador) }
+    ]);
+
+    if (!assinaturas || assinaturas.length === 0) {
+      console.log('Webhook ignorado - nenhuma assinatura encontrada com este identificador:', identificador);
+      return;
+    }
+
+    const assinatura = assinaturas[0];
+
+    if (assinatura['Webhook Processado']) {
+      console.log('Webhook ignorado - esta assinatura já tinha sido processada:', assinatura._id);
+      return;
+    }
+
+    const valorRecebido = Number(body.amount);
+    const valorEsperado = Number(assinatura['Valor MZN']);
+    if (!isNaN(valorRecebido) && Math.abs(valorRecebido - valorEsperado) > 0.01) {
+      console.log('Webhook suspeito - valor não bate certo. Esperado:', valorEsperado, 'Recebido:', valorRecebido);
+      return;
+    }
+
+    await bubblePatch('assinatura', assinatura._id, {
+      'Estado': 'Pago',
+      'Transaction ID': String(body.transaction_id || ''),
+      'Webhook Processado': true
+    });
+
+    // ---- Aplica o plano novo ao utilizador ----
+    const agora = new Date();
+    const expira = new Date(agora.getTime() + 30 * 24 * 60 * 60 * 1000);
+    await bubblePatch('user', assinatura['User'], {
+      'Plan': assinatura['Plano'],
+      'Plan Started': agora.toISOString(),
+      'Plan Expires': expira.toISOString(),
+      'Tokens Usados Mes': 0
+    });
+
+    console.log('Assinatura paga e plano actualizado:', assinatura._id);
+  } catch (erro) {
+    console.error('Erro ao processar webhook da assinatura:', erro);
   }
 });
 
