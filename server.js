@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.22.0';
+const VERSION = '1.23.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -200,6 +200,21 @@ async function purgeCacheBunny(url) {
   } catch (erro) {
     console.error('Erro a tentar purgar a cache Bunny:', erro);
   }
+}
+
+// Extrai e sobe para o Bunny uma imagem enviada em base64 (data URL),
+// devolvendo o URL da CDN já pronto para guardar. Usado nos Trabalhos do
+// Portefólio e nos Posts do Blog, onde a pessoa carrega a imagem a sério
+// em vez de colar um link. Devolve null se o texto não for um data URL
+// de imagem válido (nesse caso quem chamou decide o que fazer).
+async function uploadImagemBase64(pasta, owner, dataUrl) {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl || '');
+  if (!match) return null;
+  const mime = match[1];
+  const buffer = Buffer.from(match[2], 'base64');
+  const extensao = mime.split('/')[1].replace('+xml', '').replace('jpeg', 'jpg');
+  const caminho = `${pasta}/${owner}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extensao}`;
+  return uploadParaBunny(caminho, buffer, mime);
 }
 
 // ======================================================
@@ -1343,6 +1358,315 @@ app.post('/loja-produto-editar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /loja-produto-editar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível actualizar o produto.' });
+  }
+});
+
+// ======================================================
+// Portefólio - Trabalhos reais (upload de imagens, geridos pelo dono)
+// ======================================================
+// Mesmo espírito dos Produtos da loja: a IA nunca inventa os trabalhos no
+// site gerado, só desenha a casca e deixa uma div vazia - os trabalhos a
+// sério vêm sempre destas rotas, geridos pelo dono numa página própria.
+
+// Lista pública dos trabalhos activos de um site - é esta rota que o
+// módulo fixo do portefólio (injectado no site gerado) chama.
+app.post('/portfolio-trabalhos', async (req, res) => {
+  try {
+    const { site_id } = req.body;
+    if (!site_id) {
+      return res.json({ status: 'error', message: 'Falta o site_id.' });
+    }
+
+    const trabalhos = await bubbleList(
+      'trabalho',
+      [
+        { key: 'Site', constraint_type: 'equals', value: site_id },
+        { key: 'Is Active', constraint_type: 'equals', value: true }
+      ],
+      'Created Date',
+      false
+    );
+
+    const lista = trabalhos.map(t => ({
+      id: t._id,
+      titulo: t['Titulo'],
+      descricao: t['Descricao'] || '',
+      imagem: t['Imagem URL'] || '',
+      link: t['Link'] || ''
+    }));
+
+    return res.json({ status: 'success', response: { trabalhos: lista } });
+  } catch (erro) {
+    console.error('Erro em /portfolio-trabalhos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os trabalhos.' });
+  }
+});
+
+// Cria um trabalho novo. A imagem pode vir de duas formas: `imagem_data_url`
+// (upload real, em base64 - sobe para o Bunny) ou `imagem_url` (um link já
+// existente, para quem preferir colar um). Se vierem os dois, o upload
+// ganha.
+app.post('/portfolio-trabalho-criar', async (req, res) => {
+  try {
+    const { owner, site_id, titulo, descricao, link, imagem_url, imagem_data_url } = req.body;
+
+    if (!owner || !site_id || !titulo) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id e titulo são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para adicionar trabalhos a este projecto.' });
+    }
+
+    let imagemFinal = imagem_url || '';
+    if (imagem_data_url) {
+      const urlSubida = await uploadImagemBase64('trabalhos', owner, imagem_data_url);
+      if (urlSubida) imagemFinal = urlSubida;
+    }
+
+    const trabalhoId = await bubbleCreate('trabalho', {
+      'Site': site_id,
+      'Titulo': titulo,
+      'Descricao': descricao || '',
+      'Link': link || '',
+      'Imagem URL': imagemFinal,
+      'Is Active': true,
+      'Created Date': new Date().toISOString()
+    });
+
+    return res.json({ status: 'success', response: { trabalho_id: trabalhoId } });
+  } catch (erro) {
+    console.error('Erro em /portfolio-trabalho-criar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar o trabalho.' });
+  }
+});
+
+// Lista TODOS os trabalhos de um site (activos e inactivos), para o dono
+// gerir - ao contrário de /portfolio-trabalhos, que só mostra os activos.
+app.post('/portfolio-meus-trabalhos', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    if (!owner || !site_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: owner e site_id são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver os trabalhos deste projecto.' });
+    }
+
+    const trabalhos = await bubbleList(
+      'trabalho',
+      [{ key: 'Site', constraint_type: 'equals', value: site_id }],
+      'Created Date',
+      true
+    );
+
+    const lista = trabalhos.map(t => ({
+      id: t._id,
+      titulo: t['Titulo'],
+      descricao: t['Descricao'] || '',
+      imagem: t['Imagem URL'] || '',
+      link: t['Link'] || '',
+      activo: !!t['Is Active']
+    }));
+
+    return res.json({ status: 'success', response: { trabalhos: lista } });
+  } catch (erro) {
+    console.error('Erro em /portfolio-meus-trabalhos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os trabalhos.' });
+  }
+});
+
+// Edita um trabalho existente (incluindo activar/desactivar e trocar a
+// imagem). Só o dono do site pode editar.
+app.post('/portfolio-trabalho-editar', async (req, res) => {
+  try {
+    const { owner, trabalho_id, titulo, descricao, link, imagem_url, imagem_data_url, activo } = req.body;
+    if (!owner || !trabalho_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: trabalho_id é obrigatório.' });
+    }
+
+    const trabalho = await bubbleGet('trabalho', trabalho_id);
+    if (!trabalho) {
+      return res.json({ status: 'error', message: 'Trabalho não encontrado.' });
+    }
+
+    const site = await bubbleGet('site', trabalho['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para editar este trabalho.' });
+    }
+
+    const dados = {};
+    if (titulo !== undefined) dados['Titulo'] = titulo;
+    if (descricao !== undefined) dados['Descricao'] = descricao;
+    if (link !== undefined) dados['Link'] = link;
+    if (activo !== undefined) dados['Is Active'] = !!activo;
+    if (imagem_data_url) {
+      const urlSubida = await uploadImagemBase64('trabalhos', owner, imagem_data_url);
+      if (urlSubida) dados['Imagem URL'] = urlSubida;
+    } else if (imagem_url !== undefined) {
+      dados['Imagem URL'] = imagem_url;
+    }
+
+    await bubblePatch('trabalho', trabalho_id, dados);
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /portfolio-trabalho-editar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível actualizar o trabalho.' });
+  }
+});
+
+// ======================================================
+// Blog - Posts reais (upload de imagens, geridos pelo dono)
+// ======================================================
+
+// Lista pública dos posts activos de um site - é esta rota que o módulo
+// fixo do blog (injectado no site gerado) chama.
+app.post('/blog-posts', async (req, res) => {
+  try {
+    const { site_id } = req.body;
+    if (!site_id) {
+      return res.json({ status: 'error', message: 'Falta o site_id.' });
+    }
+
+    const posts = await bubbleList(
+      'post',
+      [
+        { key: 'Site', constraint_type: 'equals', value: site_id },
+        { key: 'Is Active', constraint_type: 'equals', value: true }
+      ],
+      'Created Date',
+      true
+    );
+
+    const lista = posts.map(p => ({
+      id: p._id,
+      titulo: p['Titulo'],
+      resumo: p['Resumo'] || '',
+      conteudo: p['Conteudo'] || '',
+      imagem: p['Imagem URL'] || '',
+      data: p['Created Date'] || ''
+    }));
+
+    return res.json({ status: 'success', response: { posts: lista } });
+  } catch (erro) {
+    console.error('Erro em /blog-posts:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os artigos.' });
+  }
+});
+
+// Cria um artigo novo. Mesma lógica de imagem dos Trabalhos: upload real
+// (imagem_data_url) ou link colado (imagem_url).
+app.post('/blog-post-criar', async (req, res) => {
+  try {
+    const { owner, site_id, titulo, resumo, conteudo, imagem_url, imagem_data_url } = req.body;
+
+    if (!owner || !site_id || !titulo || !conteudo) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id, titulo e conteudo são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para adicionar artigos a este projecto.' });
+    }
+
+    let imagemFinal = imagem_url || '';
+    if (imagem_data_url) {
+      const urlSubida = await uploadImagemBase64('posts', owner, imagem_data_url);
+      if (urlSubida) imagemFinal = urlSubida;
+    }
+
+    const postId = await bubbleCreate('post', {
+      'Site': site_id,
+      'Titulo': titulo,
+      'Resumo': resumo || '',
+      'Conteudo': conteudo,
+      'Imagem URL': imagemFinal,
+      'Is Active': true,
+      'Created Date': new Date().toISOString()
+    });
+
+    return res.json({ status: 'success', response: { post_id: postId } });
+  } catch (erro) {
+    console.error('Erro em /blog-post-criar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar o artigo.' });
+  }
+});
+
+// Lista TODOS os posts de um site (activos e inactivos), para o dono gerir.
+app.post('/blog-meus-posts', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    if (!owner || !site_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: owner e site_id são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver os artigos deste projecto.' });
+    }
+
+    const posts = await bubbleList(
+      'post',
+      [{ key: 'Site', constraint_type: 'equals', value: site_id }],
+      'Created Date',
+      true
+    );
+
+    const lista = posts.map(p => ({
+      id: p._id,
+      titulo: p['Titulo'],
+      resumo: p['Resumo'] || '',
+      conteudo: p['Conteudo'] || '',
+      imagem: p['Imagem URL'] || '',
+      activo: !!p['Is Active']
+    }));
+
+    return res.json({ status: 'success', response: { posts: lista } });
+  } catch (erro) {
+    console.error('Erro em /blog-meus-posts:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os artigos.' });
+  }
+});
+
+// Edita um artigo existente (incluindo activar/desactivar e trocar a
+// imagem). Só o dono do site pode editar.
+app.post('/blog-post-editar', async (req, res) => {
+  try {
+    const { owner, post_id, titulo, resumo, conteudo, imagem_url, imagem_data_url, activo } = req.body;
+    if (!owner || !post_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: post_id é obrigatório.' });
+    }
+
+    const post = await bubbleGet('post', post_id);
+    if (!post) {
+      return res.json({ status: 'error', message: 'Artigo não encontrado.' });
+    }
+
+    const site = await bubbleGet('site', post['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para editar este artigo.' });
+    }
+
+    const dados = {};
+    if (titulo !== undefined) dados['Titulo'] = titulo;
+    if (resumo !== undefined) dados['Resumo'] = resumo;
+    if (conteudo !== undefined) dados['Conteudo'] = conteudo;
+    if (activo !== undefined) dados['Is Active'] = !!activo;
+    if (imagem_data_url) {
+      const urlSubida = await uploadImagemBase64('posts', owner, imagem_data_url);
+      if (urlSubida) dados['Imagem URL'] = urlSubida;
+    } else if (imagem_url !== undefined) {
+      dados['Imagem URL'] = imagem_url;
+    }
+
+    await bubblePatch('post', post_id, dados);
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /blog-post-editar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível actualizar o artigo.' });
   }
 });
 
