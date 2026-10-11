@@ -822,7 +822,7 @@ app.post('/generate', async (req, res) => {
 
   } catch (erro) {
     console.error('Erro em /generate:', erro);
-    return res.json({ status: 'error', message: 'Não foi possível iniciar a geração. Tenta novamente.' });
+    return res.json({ status: 'error', message: 'Não foi possível iniciar a geração. Tenta novamente.', debug: String(erro && erro.message || erro) });
   }
 });
 
