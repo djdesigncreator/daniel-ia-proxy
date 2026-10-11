@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 
 // Limpa variáveis de ambiente - remove espaços, aspas e barras a mais
 function clean(value) {
@@ -10,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.23.0';
+const VERSION = '1.24.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -63,6 +64,16 @@ const MOZPAYMENT_WALLET = clean(process.env.MOZPAYMENT_WALLET);
 // damos à MozPayment nos pagamentos por cartão (para onde o cliente volta
 // depois de pagar).
 const SELF_URL = clean(process.env.SELF_URL) || 'https://mc-8oxfde5o71.bunny.run';
+
+// ---- Bunny Stream (vídeo da Galeria) ----
+// Video Library própria da conta Bunny do Daniel.ia, separada da storage
+// zone/pull zone usadas para fotos e ficheiros dos sites. Vídeo não sobe
+// em base64 (ficaria grande demais) - sobe directamente do browser para o
+// Bunny Stream por TUS (upload com retoma), e este container só autoriza
+// o upload e depois consulta o estado da conversão.
+const STREAM_LIBRARY = clean(process.env.STREAM_LIBRARY);
+const STREAM_KEY = clean(process.env.STREAM_KEY);
+const STREAM_CDN = semProtocolo(process.env.STREAM_CDN);
 
 const app = express();
 
@@ -153,6 +164,17 @@ async function bubblePatch(tipo, id, dados) {
   }
 }
 
+async function bubbleDelete(tipo, id) {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` }
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error('bubbleDelete falhou: ' + JSON.stringify(json));
+  }
+}
+
 // ======================================================
 // Helpers - Bunny Storage
 // ======================================================
@@ -218,6 +240,64 @@ async function uploadImagemBase64(pasta, owner, dataUrl) {
 }
 
 // ======================================================
+// Helpers - Bunny Stream (vídeo da Galeria)
+// ======================================================
+
+// Cria o "espaço" do vídeo no Bunny Stream antes do upload - devolve o
+// video_id (guid) que depois é usado tanto para autorizar o upload por TUS
+// como para consultar o estado da conversão.
+async function criarVideoBunnyStream(titulo) {
+  const res = await fetch(`https://video.bunnycdn.com/library/${STREAM_LIBRARY}/videos`, {
+    method: 'POST',
+    headers: {
+      AccessKey: STREAM_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ title: titulo || 'video' })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.guid) {
+    throw new Error('Não foi possível criar o vídeo no Bunny Stream: ' + JSON.stringify(json));
+  }
+  return json.guid;
+}
+
+// Assinatura exigida pelo Bunny para autorizar um upload por TUS sem expor
+// a STREAM_KEY ao browser: sha256(library_id + api_key + expira + video_id).
+function assinaturaTusBunny(videoId, expira) {
+  const base = STREAM_LIBRARY + STREAM_KEY + expira + videoId;
+  return crypto.createHash('sha256').update(base).digest('hex');
+}
+
+// Consulta o estado da conversão de um vídeo. Estados do Bunny Stream:
+// 0 Criado, 1 Enviado, 2 A processar, 3 A converter, 4 Pronto,
+// 5 Erro, 6 Falha no envio.
+async function estadoVideoBunnyStream(videoId) {
+  const res = await fetch(`https://video.bunnycdn.com/library/${STREAM_LIBRARY}/videos/${videoId}`, {
+    headers: { AccessKey: STREAM_KEY }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error('Não foi possível consultar o estado do vídeo: ' + JSON.stringify(json));
+  }
+  return json;
+}
+
+// Apaga um vídeo do Bunny Stream (usado quando a pessoa remove um vídeo da
+// galeria). Nunca deixa a remoção do registo falhar por causa disto - só
+// avisa na consola se o Bunny recusar.
+async function apagarVideoBunnyStream(videoId) {
+  try {
+    await fetch(`https://video.bunnycdn.com/library/${STREAM_LIBRARY}/videos/${videoId}`, {
+      method: 'DELETE',
+      headers: { AccessKey: STREAM_KEY }
+    });
+  } catch (erro) {
+    console.error('Erro a apagar vídeo do Bunny Stream:', erro);
+  }
+}
+
+// ======================================================
 // Helper - MozPayment
 // ======================================================
 // Confirmado a testar: o login devolve
@@ -271,7 +351,8 @@ const GUIA_TIPO = {
   'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno: cabeçalho com o nome do negócio, uma frase curta de apresentação, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
   'Landing Page': 'Cria uma landing page de uma página: secção hero com título forte, benefícios/funcionalidades, depoimentos fictícios coerentes, chamada para acção clara, e rodapé com contactos.',
   'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", grelha de projectos/trabalhos de exemplo coerentes com o prompt, e secção de contacto.',
-  'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.'
+  'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.',
+  'Galeria': 'Cria a aparência de um site de fotógrafo/videógrafo profissional: cabeçalho com o nome, uma frase curta de apresentação, uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
 };
 
 async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarcaDeAgua }) {
@@ -1667,6 +1748,392 @@ app.post('/blog-post-editar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /blog-post-editar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível actualizar o artigo.' });
+  }
+});
+
+// ======================================================
+// Galeria - Álbuns e Media (fotos + vídeo) para fotógrafos/videógrafos
+// ======================================================
+
+// Lista os álbuns ACTIVOS de um site, com uma "capa" cada (o primeiro
+// ficheiro do álbum) - usado na página pública que os clientes do
+// fotógrafo vão ver.
+app.post('/galeria-albuns', async (req, res) => {
+  try {
+    const { site_id } = req.body;
+    if (!site_id) {
+      return res.json({ status: 'error', message: 'Falta o site_id.' });
+    }
+
+    const albuns = await bubbleList(
+      'album',
+      [
+        { key: 'Site', constraint_type: 'equals', value: site_id },
+        { key: 'Is Active', constraint_type: 'equals', value: true }
+      ],
+      'Created Date',
+      true
+    );
+
+    const lista = [];
+    for (const a of albuns) {
+      const medias = await bubbleList(
+        'media',
+        [{ key: 'Album', constraint_type: 'equals', value: a._id }],
+        'Ordem',
+        false
+      );
+      const capaMedia = medias.find(m => m['Status'] === 'Pronto') || null;
+      lista.push({
+        id: a._id,
+        titulo: a['Titulo'],
+        descricao: a['Descricao'] || '',
+        capa: capaMedia ? (capaMedia['Tipo'] === 'video' ? (capaMedia['Thumbnail URL'] || '') : (capaMedia['URL'] || '')) : '',
+        total_media: medias.length
+      });
+    }
+
+    return res.json({ status: 'success', response: { albuns: lista } });
+  } catch (erro) {
+    console.error('Erro em /galeria-albuns:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os álbuns.' });
+  }
+});
+
+// Cria um álbum novo (ex: "Casamento Ana & Jorge"). Só o dono do site.
+app.post('/galeria-album-criar', async (req, res) => {
+  try {
+    const { owner, site_id, titulo, descricao } = req.body;
+    if (!owner || !site_id || !titulo) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id e titulo são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para adicionar álbuns a este projecto.' });
+    }
+
+    const albumId = await bubbleCreate('album', {
+      'Site': site_id,
+      'Titulo': titulo,
+      'Descricao': descricao || '',
+      'Is Active': true,
+      'Created Date': new Date().toISOString()
+    });
+
+    return res.json({ status: 'success', response: { album_id: albumId } });
+  } catch (erro) {
+    console.error('Erro em /galeria-album-criar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar o álbum.' });
+  }
+});
+
+// Lista TODOS os álbuns de um site (activos e inactivos), com o número de
+// ficheiros em cada um - para o dono gerir.
+app.post('/galeria-meus-albuns', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    if (!owner || !site_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: owner e site_id são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver os álbuns deste projecto.' });
+    }
+
+    const albuns = await bubbleList(
+      'album',
+      [{ key: 'Site', constraint_type: 'equals', value: site_id }],
+      'Created Date',
+      true
+    );
+
+    const lista = [];
+    for (const a of albuns) {
+      const total = await bubbleCount('media', [{ key: 'Album', constraint_type: 'equals', value: a._id }]);
+      lista.push({
+        id: a._id,
+        titulo: a['Titulo'],
+        descricao: a['Descricao'] || '',
+        activo: !!a['Is Active'],
+        total_media: total
+      });
+    }
+
+    return res.json({ status: 'success', response: { albuns: lista } });
+  } catch (erro) {
+    console.error('Erro em /galeria-meus-albuns:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os álbuns.' });
+  }
+});
+
+// Edita um álbum existente (título, descrição, activar/desactivar). Só o
+// dono do site.
+app.post('/galeria-album-editar', async (req, res) => {
+  try {
+    const { owner, album_id, titulo, descricao, activo } = req.body;
+    if (!owner || !album_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: album_id é obrigatório.' });
+    }
+
+    const album = await bubbleGet('album', album_id);
+    if (!album) {
+      return res.json({ status: 'error', message: 'Álbum não encontrado.' });
+    }
+    const site = await bubbleGet('site', album['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para editar este álbum.' });
+    }
+
+    const dados = {};
+    if (titulo !== undefined) dados['Titulo'] = titulo;
+    if (descricao !== undefined) dados['Descricao'] = descricao;
+    if (activo !== undefined) dados['Is Active'] = !!activo;
+
+    await bubblePatch('album', album_id, dados);
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /galeria-album-editar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível actualizar o álbum.' });
+  }
+});
+
+// Lista as fotos/vídeos de um álbum, ordenados - para o dono gerir dentro
+// do álbum.
+app.post('/galeria-album-media', async (req, res) => {
+  try {
+    const { owner, album_id } = req.body;
+    if (!owner || !album_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: owner e album_id são obrigatórios.' });
+    }
+
+    const album = await bubbleGet('album', album_id);
+    if (!album) {
+      return res.json({ status: 'error', message: 'Álbum não encontrado.' });
+    }
+    const site = await bubbleGet('site', album['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver este álbum.' });
+    }
+
+    const medias = await bubbleList(
+      'media',
+      [{ key: 'Album', constraint_type: 'equals', value: album_id }],
+      'Ordem',
+      false
+    );
+
+    const lista = medias.map(m => ({
+      id: m._id,
+      tipo: m['Tipo'],
+      url: m['URL'] || '',
+      thumbnail: m['Thumbnail URL'] || '',
+      status: m['Status'] || '',
+      ordem: m['Ordem'] || 0
+    }));
+
+    return res.json({
+      status: 'success',
+      response: {
+        album: {
+          id: album._id,
+          titulo: album['Titulo'],
+          descricao: album['Descricao'] || '',
+          activo: !!album['Is Active']
+        },
+        media: lista
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /galeria-album-media:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os ficheiros deste álbum.' });
+  }
+});
+
+// Adiciona uma foto a um álbum - upload a sério (ficheiro -> base64 ->
+// Bunny Storage), tal como os Trabalhos do Portefólio e os Posts do Blog.
+app.post('/galeria-foto-adicionar', async (req, res) => {
+  try {
+    const { owner, album_id, imagem_data_url } = req.body;
+    if (!owner || !album_id || !imagem_data_url) {
+      return res.json({ status: 'error', message: 'Faltam dados: album_id e imagem_data_url são obrigatórios.' });
+    }
+
+    const album = await bubbleGet('album', album_id);
+    if (!album) {
+      return res.json({ status: 'error', message: 'Álbum não encontrado.' });
+    }
+    const site = await bubbleGet('site', album['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para adicionar fotos a este álbum.' });
+    }
+
+    const urlSubida = await uploadImagemBase64('galeria', owner, imagem_data_url);
+    if (!urlSubida) {
+      return res.json({ status: 'error', message: 'Essa imagem não é válida.' });
+    }
+
+    const total = await bubbleCount('media', [{ key: 'Album', constraint_type: 'equals', value: album_id }]);
+    const mediaId = await bubbleCreate('media', {
+      'Album': album_id,
+      'Tipo': 'foto',
+      'URL': urlSubida,
+      'Status': 'Pronto',
+      'Ordem': total,
+      'Created Date': new Date().toISOString()
+    });
+
+    return res.json({ status: 'success', response: { media_id: mediaId } });
+  } catch (erro) {
+    console.error('Erro em /galeria-foto-adicionar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível adicionar a foto.' });
+  }
+});
+
+// Inicia o envio de um vídeo: cria o espaço no Bunny Stream, regista já o
+// registo de Media (Status "A processar") e devolve tudo o que a página
+// precisa para fazer o upload por TUS directamente para o Bunny (o
+// ficheiro de vídeo nunca passa por este container).
+app.post('/galeria-video-iniciar', async (req, res) => {
+  try {
+    const { owner, album_id, titulo } = req.body;
+    if (!owner || !album_id) {
+      return res.json({ status: 'error', message: 'Falta o album_id.' });
+    }
+    if (!STREAM_LIBRARY || !STREAM_KEY || !STREAM_CDN) {
+      return res.json({ status: 'error', message: 'O envio de vídeo ainda não está configurado neste servidor.' });
+    }
+
+    const album = await bubbleGet('album', album_id);
+    if (!album) {
+      return res.json({ status: 'error', message: 'Álbum não encontrado.' });
+    }
+    const site = await bubbleGet('site', album['Site']);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para adicionar vídeos a este álbum.' });
+    }
+
+    const videoId = await criarVideoBunnyStream(titulo || album['Titulo'] || 'video');
+    const expira = Math.floor(Date.now() / 1000) + 3600; // 1 hora para completar o upload
+    const assinatura = assinaturaTusBunny(videoId, expira);
+
+    const total = await bubbleCount('media', [{ key: 'Album', constraint_type: 'equals', value: album_id }]);
+    const mediaId = await bubbleCreate('media', {
+      'Album': album_id,
+      'Tipo': 'video',
+      'URL': '',
+      'Bunny Video ID': videoId,
+      'Thumbnail URL': '',
+      'Status': 'A processar',
+      'Ordem': total,
+      'Created Date': new Date().toISOString()
+    });
+
+    return res.json({
+      status: 'success',
+      response: {
+        media_id: mediaId,
+        video_id: videoId,
+        library_id: STREAM_LIBRARY,
+        signature: assinatura,
+        expire: expira,
+        tus_endpoint: 'https://video.bunnycdn.com/tusupload'
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /galeria-video-iniciar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o envio do vídeo.' });
+  }
+});
+
+// Consulta o estado da conversão de um vídeo e actualiza o registo de
+// Media quando terminar (ou falhar). A página de gestão chama isto de
+// poucos em poucos segundos enquanto o vídeo não estiver "Pronto".
+app.post('/galeria-video-estado', async (req, res) => {
+  try {
+    const { owner, media_id } = req.body;
+    if (!owner || !media_id) {
+      return res.json({ status: 'error', message: 'Falta o media_id.' });
+    }
+
+    const media = await bubbleGet('media', media_id);
+    if (!media) {
+      return res.json({ status: 'error', message: 'Vídeo não encontrado.' });
+    }
+    const album = await bubbleGet('album', media['Album']);
+    const site = album ? await bubbleGet('site', album['Site']) : null;
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver este vídeo.' });
+    }
+
+    if (media['Status'] === 'Pronto' || media['Status'] === 'Erro') {
+      return res.json({
+        status: 'success',
+        response: { estado: media['Status'], url: media['URL'] || '', thumbnail: media['Thumbnail URL'] || '' }
+      });
+    }
+
+    const videoId = media['Bunny Video ID'];
+    const infoVideo = await estadoVideoBunnyStream(videoId);
+
+    let novoEstado = 'A processar';
+    const dados = {};
+    if (infoVideo.status === 4) {
+      novoEstado = 'Pronto';
+      dados['Status'] = 'Pronto';
+      dados['URL'] = `https://${STREAM_CDN}/${videoId}/playlist.m3u8`;
+      dados['Thumbnail URL'] = `https://${STREAM_CDN}/${videoId}/thumbnail.jpg`;
+    } else if (infoVideo.status === 5 || infoVideo.status === 6) {
+      novoEstado = 'Erro';
+      dados['Status'] = 'Erro';
+    }
+    if (Object.keys(dados).length > 0) {
+      await bubblePatch('media', media_id, dados);
+    }
+
+    return res.json({
+      status: 'success',
+      response: {
+        estado: novoEstado,
+        progresso: infoVideo.encodeProgress || 0,
+        url: dados['URL'] || '',
+        thumbnail: dados['Thumbnail URL'] || ''
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /galeria-video-estado:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível consultar o estado do vídeo.' });
+  }
+});
+
+// Apaga uma foto ou vídeo. Para vídeo, apaga também do Bunny Stream.
+app.post('/galeria-media-apagar', async (req, res) => {
+  try {
+    const { owner, media_id } = req.body;
+    if (!owner || !media_id) {
+      return res.json({ status: 'error', message: 'Falta o media_id.' });
+    }
+
+    const media = await bubbleGet('media', media_id);
+    if (!media) {
+      return res.json({ status: 'error', message: 'Ficheiro não encontrado.' });
+    }
+    const album = await bubbleGet('album', media['Album']);
+    const site = album ? await bubbleGet('site', album['Site']) : null;
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para apagar este ficheiro.' });
+    }
+
+    if (media['Tipo'] === 'video' && media['Bunny Video ID']) {
+      await apagarVideoBunnyStream(media['Bunny Video ID']);
+    }
+    await bubbleDelete('media', media_id);
+
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /galeria-media-apagar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível apagar o ficheiro.' });
   }
 });
 
