@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.21.0';
+const VERSION = '1.22.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -259,7 +259,7 @@ const GUIA_TIPO = {
   'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.'
 };
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarcaDeAgua }) {
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const instrucaoLogo = logoUrl
@@ -322,8 +322,25 @@ Descrição pedida pela pessoa: ${prompt}`;
   }
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
+  html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
+}
+
+// Mostra ou remove o selo "Feito com Daniel.ia" no canto do site, segundo o
+// plano do dono (só o Free tem marca de água). Remove sempre primeiro
+// qualquer selo que já exista e só volta a pô-lo se for preciso - assim,
+// se a pessoa subir de plano e depois editar o site, o selo desaparece
+// sozinho na próxima vez que o ficheiro for reescrito.
+function aplicarMarcaDeAgua(html, mostrar) {
+  html = html.replace(/\s*<a[^>]*id=["']daniel-ia-marca-dagua["'][^>]*>[\s\S]*?<\/a>/i, '');
+  if (!mostrar) return html;
+
+  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.com" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:6px;background:#0A0A12;color:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:500;padding:8px 14px;border-radius:999px;text-decoration:none;box-shadow:0 4px 16px rgba(0,0,0,0.25);">⚡ Feito com <strong>Daniel.ia</strong></a>\n`;
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, selo + '</body>');
+  }
+  return html + selo;
 }
 
 // Para E-commerce/Checkout: garante a div dos produtos (defesa, caso a IA
@@ -358,17 +375,19 @@ function injectarLojaSeNecessario(html, ehLoja, siteId) {
 // criar um site do zero. Recebe o HTML actual completo e devolve o HTML
 // completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
 // pedaço), porque é isso que depois sobe para o Bunny no lugar do antigo.
-async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId }) {
+async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarMarcaDeAgua }) {
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
 
   const instrucaoLoja = ehLoja
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
+  const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel.ia"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
+
   const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
-Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}`;
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoMarca}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -409,6 +428,7 @@ ${htmlAtual}`;
   }
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
+  html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
 }
@@ -877,6 +897,7 @@ app.post('/generate', async (req, res) => {
       return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
     }
     const plano = await bubbleGet('plan', planId);
+    const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
 
     // ---- 2. Verificar limite de projectos ----
     const sitesExistentes = await bubbleCount('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]);
@@ -918,7 +939,7 @@ app.post('/generate', async (req, res) => {
     });
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados })
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
@@ -927,7 +948,7 @@ app.post('/generate', async (req, res) => {
   }
 });
 
-async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados }) {
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua }) {
   try {
     // ---- Logótipo (opcional) ----
     let logoUrl = '';
@@ -944,7 +965,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
     }
 
     // ---- Gerar o HTML com a OpenAI ----
-    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId });
+    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarcaDeAgua });
 
     // ---- Guardar o HTML no Bunny Storage ----
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1080,7 +1101,8 @@ async function processarEdicao({ owner, site_id, site, prompt, generationId, tok
       tipo: site['Tipo'],
       prompt,
       htmlAtual,
-      siteId: site_id
+      siteId: site_id,
+      mostrarMarcaDeAgua: ehPlanoFree
     });
 
     // ---- Publicar no MESMO caminho (o link não muda) ----
