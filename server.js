@@ -10,7 +10,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.20.0';
+const VERSION = '1.21.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -39,6 +39,11 @@ const STORAGE_ZONE = clean(process.env.STORAGE_ZONE);
 const STORAGE_PASSWORD = clean(process.env.STORAGE_PASSWORD);
 const STORAGE_HOST = semProtocolo(process.env.STORAGE_HOST) || 'storage.bunnycdn.com';
 const CDN_HOST = semProtocolo(process.env.CDN_HOST);
+// Chave de API da CONTA Bunny (Account Settings > API) - diferente da
+// STORAGE_PASSWORD. Serve só para limpar a cache da CDN depois de editarmos
+// um site (reescrevemos o mesmo caminho, e sem purga a versão antiga podia
+// continuar a aparecer até a cache expirar sozinha).
+const BUNNY_API_KEY = clean(process.env.BUNNY_API_KEY);
 
 // ---- OpenAI ----
 const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
@@ -172,6 +177,31 @@ async function uploadParaBunny(caminho, buffer, contentType) {
   return `https://${CDN_HOST}/${STORAGE_ZONE}/${caminho}`;
 }
 
+// Limpa a cache da CDN para um URL específico. Usado depois de editar um
+// site (reescrevemos o mesmo ficheiro no mesmo caminho) para a pessoa ver
+// a alteração de imediato, em vez de continuar a ver a versão antiga até a
+// cache expirar sozinha. Se a BUNNY_API_KEY não estiver configurada, não
+// falha a edição por causa disso - só avisa na consola do container.
+async function purgeCacheBunny(url) {
+  if (!BUNNY_API_KEY) {
+    console.error('BUNNY_API_KEY não configurada - não foi possível limpar a cache da CDN para ' + url);
+    return;
+  }
+  try {
+    const purgeUrl = 'https://api.bunny.net/purge?url=' + encodeURIComponent(url) + '&async=false';
+    const res = await fetch(purgeUrl, {
+      method: 'POST',
+      headers: { AccessKey: BUNNY_API_KEY }
+    });
+    if (!res.ok) {
+      const texto = await res.text().catch(() => '');
+      console.error('Purga da cache Bunny falhou: ' + res.status + ' ' + texto);
+    }
+  } catch (erro) {
+    console.error('Erro a tentar purgar a cache Bunny:', erro);
+  }
+}
+
 // ======================================================
 // Helper - MozPayment
 // ======================================================
@@ -291,16 +321,29 @@ Descrição pedida pela pessoa: ${prompt}`;
     throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
   }
 
-  // Para E-commerce/Checkout: garante a div dos produtos (defesa, caso a IA
-  // se tenha esquecido) e injecta sempre o módulo fixo da loja antes de
-  // </body>. Isto acontece sempre, nunca depende do que a IA escreveu.
-  if (ehLoja) {
-    if (!/id=["']daniel-ia-produtos["']/.test(html)) {
-      html = html.replace(
-        /<\/body>/i,
-        '<div id="daniel-ia-produtos" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
-      );
-    }
+  html = injectarLojaSeNecessario(html, ehLoja, siteId);
+
+  return { html, tokens };
+}
+
+// Para E-commerce/Checkout: garante a div dos produtos (defesa, caso a IA
+// se tenha esquecido dela) e injecta sempre o módulo fixo da loja antes de
+// </body>. Chamado tanto na criação como na edição de um site - nunca
+// depende do que a IA escreveu, é sempre reaplicado por cima.
+function injectarLojaSeNecessario(html, ehLoja, siteId) {
+  if (!ehLoja) return html;
+
+  if (!/id=["']daniel-ia-produtos["']/.test(html)) {
+    html = html.replace(
+      /<\/body>/i,
+      '<div id="daniel-ia-produtos" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
+    );
+  }
+
+  // Só injecta os scripts se ainda não estiverem lá - importante na edição,
+  // onde o HTML que entra aqui já pode trazer os scripts da versão
+  // anterior (reinjectá-los duplicaria a inicialização do carrinho).
+  if (!/loja-cart\.js/.test(html)) {
     const scriptLoja = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/loja-cart.js"></script>\n`;
     if (/<\/body>/i.test(html)) {
       html = html.replace(/<\/body>/i, scriptLoja + '</body>');
@@ -308,6 +351,64 @@ Descrição pedida pela pessoa: ${prompt}`;
       html += scriptLoja;
     }
   }
+  return html;
+}
+
+// Pede à OpenAI para aplicar uma alteração a um site já gerado, em vez de
+// criar um site do zero. Recebe o HTML actual completo e devolve o HTML
+// completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
+// pedaço), porque é isso que depois sobe para o Bunny no lugar do antigo.
+async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId }) {
+  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+
+  const instrucaoLoja = ehLoja
+    ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
+    : '';
+
+  const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
+Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
+A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}`;
+
+  const userPrompt = `Nome do negócio: ${nome}
+Tipo de projecto: ${tipo}
+Pedido de alteração: ${prompt}
+
+Código HTML actual completo:
+${htmlAtual}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      reasoning_effort: OPENAI_REASONING_EFFORT,
+      max_completion_tokens: OPENAI_MAX_TOKENS,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
+    })
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error('OpenAI falhou: ' + JSON.stringify(json));
+  }
+
+  let html = (json.choices[0].message.content || '').trim();
+  html = html.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+
+  const tokens = (json.usage && json.usage.total_tokens) || 0;
+
+  if (!html || html.length < 100) {
+    throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
+  }
+
+  html = injectarLojaSeNecessario(html, ehLoja, siteId);
 
   return { html, tokens };
 }
@@ -822,7 +923,7 @@ app.post('/generate', async (req, res) => {
 
   } catch (erro) {
     console.error('Erro em /generate:', erro);
-    return res.json({ status: 'error', message: 'Não foi possível iniciar a geração. Tenta novamente.', debug: String(erro && erro.message || erro) });
+    return res.json({ status: 'error', message: 'Não foi possível iniciar a geração. Tenta novamente.' });
   }
 });
 
@@ -877,6 +978,139 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
   } catch (erro) {
     console.error('Erro em processarGeracao:', erro);
     await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {});
+    await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
+  }
+}
+
+// ======================================================
+// Editar um site já gerado
+// ======================================================
+// Mesma lógica assíncrona do /generate (responde logo, trabalha a seguir),
+// mas em vez de criar um Site novo, lê o HTML já publicado, pede à IA para
+// aplicar só a alteração pedida, e volta a publicar no MESMO caminho do
+// Bunny (o link não muda) - depois limpa a cache da CDN para a alteração
+// aparecer já.
+//
+// Regra especial do plano Free (decidida com o utilizador): a primeira
+// edição de um site consome SEMPRE todos os tokens que restarem no mês,
+// mesmo que a IA tenha gastado menos do que isso - não há segunda edição
+// grátis. Nos planos pagos, cada edição soma só o que foi gasto a sério,
+// tal como a criação.
+app.post('/editar', async (req, res) => {
+  try {
+    const { owner, site_id, prompt } = req.body;
+    if (!owner || !site_id || !prompt) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id e prompt são obrigatórios.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site) {
+      return res.json({ status: 'error', message: 'Projecto não encontrado.' });
+    }
+    if (site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    }
+    if (site['Status'] !== 'Pronto') {
+      return res.json({ status: 'error', message: 'Este projecto ainda não está pronto para ser editado. Espera a geração terminar.' });
+    }
+    if (!site['CDN URL'] || !site['Bunny Path']) {
+      return res.json({ status: 'error', message: 'Este projecto não tem nenhum ficheiro gerado para editar.' });
+    }
+
+    const user = await bubbleGet('user', owner);
+    if (!user) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+    const planId = user['Plan'];
+    if (!planId) {
+      return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
+    }
+    const plano = await bubbleGet('plan', planId);
+
+    const tokensUsados = user['Tokens Usados Mes'] || 0;
+    const tokensIncluidos = plano['Tokens Incluidos'] || 0;
+    if (tokensUsados >= tokensIncluidos) {
+      return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
+    }
+
+    // Esta vai ser a primeira edição deste site se só existir, até agora,
+    // a Generation da criação original (nunca criámos uma segunda).
+    const geracoesExistentes = await bubbleCount('generation', [
+      { key: 'Site', constraint_type: 'equals', value: site_id }
+    ]);
+    const ehPrimeiraEdicao = geracoesExistentes <= 1;
+    const ehPlanoFree = String(plano['Name'] || '').trim().toLowerCase() === 'free';
+
+    const generationId = await bubbleCreate('generation', {
+      'Site': site_id,
+      'Prompt': prompt,
+      'Status': 'A gerar',
+      'Tentativas': 1,
+      'Created Date': new Date().toISOString()
+    });
+
+    await bubblePatch('site', site_id, { 'Status': 'A gerar' });
+
+    res.json({
+      status: 'success',
+      response: { generation_id: generationId }
+    });
+
+    processarEdicao({ owner, site_id, site, prompt, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree })
+      .catch(erro => console.error('Erro em processarEdicao:', erro));
+
+  } catch (erro) {
+    console.error('Erro em /editar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar a edição. Tenta novamente.' });
+  }
+});
+
+async function processarEdicao({ owner, site_id, site, prompt, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree }) {
+  try {
+    // ---- Ler o HTML publicado agora mesmo ----
+    const respAtual = await fetch(site['CDN URL']);
+    if (!respAtual.ok) {
+      throw new Error('Não foi possível ler o ficheiro actual do site (HTTP ' + respAtual.status + ').');
+    }
+    const htmlAtual = await respAtual.text();
+
+    // ---- Pedir à IA para aplicar a alteração ----
+    const { html, tokens } = await editarComOpenAI({
+      nome: site['Nome'],
+      tipo: site['Tipo'],
+      prompt,
+      htmlAtual,
+      siteId: site_id
+    });
+
+    // ---- Publicar no MESMO caminho (o link não muda) ----
+    const caminhoSite = site['Bunny Path'];
+    const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+    await purgeCacheBunny(cdnUrl);
+
+    await bubblePatch('generation', generationId, {
+      'Status': 'Pronto',
+      'Tokens Usados': tokens
+    });
+
+    // ---- Tokens: regra especial do plano Free ----
+    const novoTotalTokens = (ehPlanoFree && ehPrimeiraEdicao)
+      ? tokensIncluidos
+      : tokensUsados + tokens;
+    await bubblePatch('user', owner, { 'Tokens Usados Mes': novoTotalTokens });
+
+    // ---- Site volta a "Pronto", com o mesmo link ----
+    await bubblePatch('site', site_id, {
+      'Status': 'Pronto',
+      'CDN URL': cdnUrl
+    });
+
+  } catch (erro) {
+    console.error('Erro em processarEdicao:', erro);
+    // O site antigo continua válido - só a tentativa de edição falhou -
+    // por isso volta a "Pronto" em vez de "Erro" (que pareceria ter
+    // destruído o site inteiro).
+    await bubblePatch('site', site_id, { 'Status': 'Pronto' }).catch(() => {});
     await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
   }
 }
