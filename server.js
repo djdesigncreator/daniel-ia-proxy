@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.28.0';
+const VERSION = '1.29.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -2184,9 +2184,16 @@ async function processarEdicao({ owner, site_id, site, prompt, generationId, tok
   }
 }
 
+// Usada por duas páginas: "criar" (só manda site_id) e o modal "Editar"
+// do dashboard (manda também generation_id). A diferença importa porque,
+// numa edição, o Site volta sempre a "Pronto" mesmo que a IA tenha
+// falhado (ver nota em processarEdicao - o site antigo continua válido).
+// Por isso, quando vem generation_id, devolvemos também o estado dessa
+// tentativa em concreto (geracao_estado), que é o único sítio onde um
+// "Erro" de edição fica registado.
 app.post('/generate-status', async (req, res) => {
   try {
-    const { site_id } = req.body;
+    const { site_id, generation_id } = req.body;
     if (!site_id) {
       return res.json({ status: 'error', message: 'Falta o site_id.' });
     }
@@ -2194,13 +2201,18 @@ app.post('/generate-status', async (req, res) => {
     if (!site) {
       return res.json({ status: 'error', message: 'Projecto não encontrado.' });
     }
-    return res.json({
-      status: 'success',
-      response: {
-        estado: site['Status'],
-        cdn_url: site['CDN URL'] || ''
-      }
-    });
+
+    const response = {
+      estado: site['Status'],
+      cdn_url: site['CDN URL'] || ''
+    };
+
+    if (generation_id) {
+      const generation = await bubbleGet('generation', generation_id);
+      response.geracao_estado = generation ? generation['Status'] : '';
+    }
+
+    return res.json({ status: 'success', response });
   } catch (erro) {
     console.error('Erro em /generate-status:', erro);
     return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
