@@ -1938,6 +1938,7 @@ app.post('/galeria-album-media', async (req, res) => {
       response: {
         album: {
           id: album._id,
+          site_id: album['Site'],
           titulo: album['Titulo'],
           descricao: album['Descricao'] || '',
           activo: !!album['Is Active']
