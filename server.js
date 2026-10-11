@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.30.0';
+const VERSION = '1.31.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -437,12 +437,12 @@ async function mozpaymentToken() {
 // ======================================================
 
 const GUIA_TIPO = {
-  'E-commerce': 'Desenha a aparência de uma loja online: cabeçalho com o nome do negócio, uma secção de apresentação curta, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
-  'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno: cabeçalho com o nome do negócio, uma frase curta de apresentação, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
-  'Landing Page': 'Cria uma landing page de uma página: secção hero com título forte, benefícios/funcionalidades, depoimentos fictícios coerentes, chamada para acção clara, e rodapé com contactos.',
-  'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", e secção de contacto. NÃO desenhes trabalhos/projectos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
-  'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio. NÃO desenhes artigos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
-  'Galeria': 'Cria a aparência de um site de fotógrafo/videógrafo profissional: cabeçalho com o nome, uma frase curta de apresentação, uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
+  'E-commerce': 'Desenha a aparência completa de uma loja online, com várias secções bem desenvolvidas: cabeçalho com o nome do negócio, hero de apresentação com uma frase forte sobre o que vendem, uma secção "sobre nós" com texto real (não só uma frase), destaques ou categorias, uma secção de confiança (ex: entrega, garantia, atendimento), e rodapé completo com contactos e redes sociais. NÃO desenhes produtos, carrinho, nem botões de compra - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
+  'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno, mas ainda assim completa: cabeçalho com o nome do negócio, uma secção de apresentação com texto real sobre o negócio, o que o torna especial, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
+  'Landing Page': 'Cria uma landing page completa e bem desenvolvida, com várias secções: hero com título forte e subtítulo, benefícios/funcionalidades detalhados (não só títulos soltos, explica cada um), uma secção "como funciona" ou "sobre", depoimentos fictícios coerentes e bem escritos, perguntas frequentes se fizer sentido, chamada para acção clara, e rodapé completo com contactos.',
+  'Portefólio': 'Cria um portefólio pessoal/profissional completo, com várias secções bem desenvolvidas: hero de apresentação com o nome e uma frase de impacto sobre o que a pessoa faz, uma secção "sobre" com texto real e com substância (percurso, especialidades, o que a distingue - não só uma frase), uma secção de serviços ou áreas de actuação se fizer sentido para o tipo de trabalho, e uma secção de contacto completa. NÃO desenhes trabalhos/projectos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
+  'Blog': 'Cria uma página inicial de blog completa: cabeçalho com o nome do negócio/autor, um hero de apresentação com uma frase sobre o que o blog aborda, e uma secção "sobre" com texto real sobre quem escreve e porquê. NÃO desenhes artigos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
+  'Galeria': 'Cria a aparência completa de um site de fotógrafo/videógrafo profissional, com várias secções: cabeçalho com o nome, hero com uma frase de impacto sobre o estilo de trabalho, uma secção "sobre" com texto real (percurso, estilo, o que distingue o trabalho), uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto completa. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
 };
 
 async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua }) {
@@ -455,13 +455,18 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
     ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
     : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
 
-  // Imagens que a pessoa anexou ao pedido (fotos de produtos, da equipa,
-  // do espaço, etc. - nada a ver com o logótipo, que é tratado à parte
-  // acima). A IA usa-as nos sítios que fizerem sentido para o tipo de
-  // site e para o que foi pedido; se não houver nenhuma, a secção fica
-  // de fora do prompt por completo.
+  // Imagens que a pessoa anexou ao pedido - duas razões possíveis para
+  // existirem, e a IA tem de olhar bem para elas (são enviadas como
+  // imagem a sério à API, não só o URL em texto) para distinguir qual é:
+  // 1) referência de estilo - a pessoa pede para o site ficar "parecido"
+  //    ou "como" uma imagem (ex: um print de outro site, um design) -
+  //    aí a IA copia o estilo visual (cores, disposição, tipografia),
+  //    nunca o conteúdo/marca de outra empresa que apareça na imagem;
+  // 2) conteúdo a sério - fotos de produtos, da equipa, do espaço, etc,
+  //    para usar directamente no site.
+  // Se não houver nenhuma imagem, esta instrução fica de fora do pedido.
   const instrucaoImagens = (imagensUrls && imagensUrls.length)
-    ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) a este pedido, para usares no site onde fizer sentido (ex: fotos de produtos, da equipa, do espaço, de trabalhos). Usa exactamente estes URLs, cada um no máximo uma vez:\n${imagensUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
+    ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) a este pedido - estão incluídas a seguir, na ordem em que aparecem. Olha bem para cada uma antes de decidires o que fazer: se o pedido disser para o site ficar "assim", "como esta imagem" ou "neste estilo", usa essa imagem como referência visual e desenha o site nesse mesmo estilo (cores, disposição, tipografia, sensação geral) - nunca copies texto, logótipos ou marca de outra empresa que apareça nela, só o estilo. Se a imagem for antes conteúdo (foto de um produto, da equipa, do espaço, de um trabalho), usa-a directamente no site, no sítio onde fizer sentido.`
     : '';
 
   // Para E-commerce/Checkout, a IA nunca escreve a lógica de produtos,
@@ -497,12 +502,23 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
+IMPORTANTE: o site tem de ficar completo e bem desenvolvido - nunca curto, vazio ou com ar de esqueleto. Capricha mesmo em todas as secções: textos bem escritos e com substância (não só uma frase solta), várias secções relevantes para o tipo de negócio, boa quantidade de conteúdo coerente. Isto aplica-se a todos os tipos, incluindo os mais simples como Portefólio ou Blog - não te limites ao mínimo só porque o tipo parece simples.
 ${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}`;
 
-  const userPrompt = `Nome do negócio: ${nome}
+  const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 ${instrucaoLogo}${instrucaoImagens}
 Descrição pedida pela pessoa: ${prompt}`;
+
+  // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
+  // URL em texto) - só assim a IA consegue "ver" o que está nelas, seja
+  // para copiar um estilo ou para usar como conteúdo. Sem imagens, o
+  // pedido continua a ser simplesmente texto, como sempre foi.
+  let userContent = textoPedido;
+  if (imagensUrls && imagensUrls.length) {
+    userContent = [{ type: 'text', text: textoPedido }];
+    imagensUrls.forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
+  }
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -516,7 +532,7 @@ Descrição pedida pela pessoa: ${prompt}`;
       max_completion_tokens: OPENAI_MAX_TOKENS,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'user', content: userContent }
       ]
     })
   });
@@ -681,9 +697,12 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
   const ehBlog = (tipo === 'Blog');
 
   // Mesma lógica de gerarComOpenAI: imagens novas que a pessoa anexou a
-  // este pedido de edição, para a IA usar onde fizer sentido.
+  // este pedido de edição - mandadas a sério para a API (ver userContent
+  // mais abaixo), não só o URL em texto, para a IA conseguir distinguir
+  // entre referência de estilo ("faz como esta imagem") e conteúdo a
+  // sério (uma foto para usar no site).
   const instrucaoImagens = (imagensUrls && imagensUrls.length)
-    ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) nova(s) a este pedido de alteração, para usares no site onde fizer sentido. Usa exactamente estes URLs, cada um no máximo uma vez:\n${imagensUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
+    ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) nova(s) a este pedido de alteração - estão incluídas a seguir. Olha bem para cada uma: se o pedido disser para ficar "como esta imagem" ou seguir o estilo dela, aplica esse estilo visual (cores, disposição, tipografia) ao site, sem copiar texto, logótipos ou marca de outra empresa que apareça nela. Se for conteúdo (uma foto para usar no site), usa-a onde fizer sentido.`
     : '';
 
   const instrucaoLoja = ehLoja
@@ -707,14 +726,23 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
   const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
-Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoMarca}`;
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
+IMPORTANTE: o site tem de continuar completo e bem desenvolvido depois da alteração - nunca o deixes curto, vazio ou com ar de esqueleto. Se a alteração pedida implicar reescrever ou ampliar alguma secção, capricha nela (textos com substância, boa quantidade de conteúdo), mesmo em tipos mais simples como Portefólio ou Blog.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoMarca}`;
 
-  const userPrompt = `Nome do negócio: ${nome}
+  const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Pedido de alteração: ${prompt}${instrucaoImagens}
 
 Código HTML actual completo:
 ${htmlAtual}`;
+
+  // Mesma lógica de gerarComOpenAI: com imagens anexadas, mandamo-las a
+  // sério para a API em vez de só o URL em texto.
+  let userContent = textoPedido;
+  if (imagensUrls && imagensUrls.length) {
+    userContent = [{ type: 'text', text: textoPedido }];
+    imagensUrls.forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
+  }
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -728,7 +756,7 @@ ${htmlAtual}`;
       max_completion_tokens: OPENAI_MAX_TOKENS,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'user', content: userContent }
       ]
     })
   });
