@@ -11,7 +11,13 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.29.0';
+const VERSION = '1.30.0';
+
+// Quantas imagens a pessoa pode anexar a um único pedido de criação ou
+// edição (para além do logótipo, que é um campo à parte). É um limite de
+// quantidade, não de tamanho - o tamanho de cada uma continua sujeito ao
+// espaço que sobra no plano (verificarEspaco).
+const MAX_IMAGENS_POR_PEDIDO = 5;
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -302,6 +308,27 @@ async function uploadImagemBase64(pasta, owner, dataUrl) {
   return { url, erro: '', bytes: buffer.length };
 }
 
+// Sobe várias imagens em base64 de uma vez só, para anexar a um pedido de
+// criação ou edição (ex: fotos de produtos, imagens para a galeria). Uma
+// de cada vez, nunca em paralelo - cada chamada a uploadImagemBase64 lê o
+// espaço já actualizado pela anterior, por isso o total fica sempre
+// correcto mesmo com várias imagens seguidas. Pára logo na primeira que
+// falhar (normalmente por falta de espaço) e devolve esse erro - preferível
+// a subir só metade das imagens pedidas e não dizer quais ficaram de fora.
+// Devolve { urls, erro }.
+async function uploadMultiplasImagensBase64(pasta, owner, dataUrls) {
+  const urls = [];
+  const lista = (dataUrls || []).slice(0, MAX_IMAGENS_POR_PEDIDO);
+  for (const dataUrl of lista) {
+    const resultado = await uploadImagemBase64(pasta, owner, dataUrl);
+    if (resultado.erro) {
+      return { urls, erro: resultado.erro };
+    }
+    if (resultado.url) urls.push(resultado.url);
+  }
+  return { urls, erro: '' };
+}
+
 // ======================================================
 // Helpers - Bunny Stream (vídeo da Galeria)
 // ======================================================
@@ -418,7 +445,7 @@ const GUIA_TIPO = {
   'Galeria': 'Cria a aparência de um site de fotógrafo/videógrafo profissional: cabeçalho com o nome, uma frase curta de apresentação, uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
 };
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarcaDeAgua }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua }) {
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
@@ -427,6 +454,15 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarc
   const instrucaoLogo = logoUrl
     ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
     : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
+
+  // Imagens que a pessoa anexou ao pedido (fotos de produtos, da equipa,
+  // do espaço, etc. - nada a ver com o logótipo, que é tratado à parte
+  // acima). A IA usa-as nos sítios que fizerem sentido para o tipo de
+  // site e para o que foi pedido; se não houver nenhuma, a secção fica
+  // de fora do prompt por completo.
+  const instrucaoImagens = (imagensUrls && imagensUrls.length)
+    ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) a este pedido, para usares no site onde fizer sentido (ex: fotos de produtos, da equipa, do espaço, de trabalhos). Usa exactamente estes URLs, cada um no máximo uma vez:\n${imagensUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
+    : '';
 
   // Para E-commerce/Checkout, a IA nunca escreve a lógica de produtos,
   // carrinho ou pagamento - isso é sempre o mesmo módulo testado por nós
@@ -465,7 +501,7 @@ ${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}`
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
-${instrucaoLogo}
+${instrucaoLogo}${instrucaoImagens}
 Descrição pedida pela pessoa: ${prompt}`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -638,11 +674,17 @@ function injectarBlogSeNecessario(html, ehBlog, siteId) {
 // criar um site do zero. Recebe o HTML actual completo e devolve o HTML
 // completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
 // pedaço), porque é isso que depois sobe para o Bunny no lugar do antigo.
-async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarMarcaDeAgua }) {
+async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, siteId, mostrarMarcaDeAgua }) {
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
   const ehPortfolio = (tipo === 'Portefólio');
   const ehBlog = (tipo === 'Blog');
+
+  // Mesma lógica de gerarComOpenAI: imagens novas que a pessoa anexou a
+  // este pedido de edição, para a IA usar onde fizer sentido.
+  const instrucaoImagens = (imagensUrls && imagensUrls.length)
+    ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) nova(s) a este pedido de alteração, para usares no site onde fizer sentido. Usa exactamente estes URLs, cada um no máximo uma vez:\n${imagensUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
+    : '';
 
   const instrucaoLoja = ehLoja
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
@@ -669,7 +711,7 @@ Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos 
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
-Pedido de alteração: ${prompt}
+Pedido de alteração: ${prompt}${instrucaoImagens}
 
 Código HTML actual completo:
 ${htmlAtual}`;
@@ -1917,7 +1959,7 @@ app.get('/blog-viewer.js', (req, res) => {
 
 app.post('/generate', async (req, res) => {
   try {
-    const { owner, nome, tipo, prompt, logo_data_url } = req.body;
+    const { owner, nome, tipo, prompt, logo_data_url, imagens_data_url } = req.body;
 
     if (!owner || !nome || !tipo || !prompt) {
       return res.json({ status: 'error', message: 'Faltam dados: nome, tipo e prompt são obrigatórios.' });
@@ -1976,7 +2018,7 @@ app.post('/generate', async (req, res) => {
     });
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua })
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
@@ -1985,7 +2027,7 @@ app.post('/generate', async (req, res) => {
   }
 });
 
-async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua }) {
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua }) {
   try {
     // ---- Logótipo (opcional) ----
     // Esta função já corre depois de termos respondido ao pedido (ver nota
@@ -2011,8 +2053,22 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
       }
     }
 
+    // ---- Imagens anexadas ao pedido (opcional) ----
+    // Ao contrário do logótipo, estas foram pedidas explicitamente pela
+    // pessoa para entrarem no site - se o envio falhar (normalmente por
+    // falta de espaço), é melhor travar a geração toda e dizer porquê do
+    // que gerar um site sem as imagens que a pessoa esperava ver lá.
+    let imagensUrls = [];
+    if (imagens_data_url && imagens_data_url.length) {
+      const resultadoImagens = await uploadMultiplasImagensBase64('imagens-pedido', owner, imagens_data_url);
+      if (resultadoImagens.erro) {
+        throw new Error('Não foi possível enviar as imagens anexadas: ' + resultadoImagens.erro);
+      }
+      imagensUrls = resultadoImagens.urls;
+    }
+
     // ---- Gerar o HTML com a OpenAI ----
-    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarcaDeAgua });
+    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua });
 
     // ---- Guardar o HTML no Bunny Storage ----
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2066,7 +2122,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
 // tal como a criação.
 app.post('/editar', async (req, res) => {
   try {
-    const { owner, site_id, prompt } = req.body;
+    const { owner, site_id, prompt, imagens_data_url } = req.body;
     if (!owner || !site_id || !prompt) {
       return res.json({ status: 'error', message: 'Faltam dados: site_id e prompt são obrigatórios.' });
     }
@@ -2124,7 +2180,7 @@ app.post('/editar', async (req, res) => {
       response: { generation_id: generationId }
     });
 
-    processarEdicao({ owner, site_id, site, prompt, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree })
+    processarEdicao({ owner, site_id, site, prompt, imagens_data_url, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree })
       .catch(erro => console.error('Erro em processarEdicao:', erro));
 
   } catch (erro) {
@@ -2133,7 +2189,7 @@ app.post('/editar', async (req, res) => {
   }
 });
 
-async function processarEdicao({ owner, site_id, site, prompt, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree }) {
+async function processarEdicao({ owner, site_id, site, prompt, imagens_data_url, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree }) {
   try {
     // ---- Ler o HTML publicado agora mesmo ----
     const respAtual = await fetch(site['CDN URL']);
@@ -2142,12 +2198,25 @@ async function processarEdicao({ owner, site_id, site, prompt, generationId, tok
     }
     const htmlAtual = await respAtual.text();
 
+    // ---- Imagens anexadas a este pedido de edição (opcional) ----
+    // Mesma regra do processarGeracao: pedidas explicitamente pela pessoa,
+    // por isso falham a edição toda em vez de ficarem de fora em silêncio.
+    let imagensUrls = [];
+    if (imagens_data_url && imagens_data_url.length) {
+      const resultadoImagens = await uploadMultiplasImagensBase64('imagens-pedido', owner, imagens_data_url);
+      if (resultadoImagens.erro) {
+        throw new Error('Não foi possível enviar as imagens anexadas: ' + resultadoImagens.erro);
+      }
+      imagensUrls = resultadoImagens.urls;
+    }
+
     // ---- Pedir à IA para aplicar a alteração ----
     const { html, tokens } = await editarComOpenAI({
       nome: site['Nome'],
       tipo: site['Tipo'],
       prompt,
       htmlAtual,
+      imagensUrls,
       siteId: site_id,
       mostrarMarcaDeAgua: ehPlanoFree
     });
