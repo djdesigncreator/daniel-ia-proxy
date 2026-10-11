@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.27.0';
+const VERSION = '1.28.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -414,7 +414,7 @@ const GUIA_TIPO = {
   'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno: cabeçalho com o nome do negócio, uma frase curta de apresentação, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
   'Landing Page': 'Cria uma landing page de uma página: secção hero com título forte, benefícios/funcionalidades, depoimentos fictícios coerentes, chamada para acção clara, e rodapé com contactos.',
   'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", e secção de contacto. NÃO desenhes trabalhos/projectos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
-  'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.',
+  'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio. NÃO desenhes artigos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
   'Galeria': 'Cria a aparência de um site de fotógrafo/videógrafo profissional: cabeçalho com o nome, uma frase curta de apresentação, uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
 };
 
@@ -423,6 +423,7 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarc
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
   const ehPortfolio = (tipo === 'Portefólio');
+  const ehBlog = (tipo === 'Blog');
   const instrucaoLogo = logoUrl
     ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
     : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
@@ -449,11 +450,18 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarc
     ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-portfolio"></div> - é ali que os trabalhos/projectos a sério vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum trabalho/projecto falso para além dos exemplos pedidos acima - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Trabalhos" ou "Projectos").`
     : '';
 
+  // Para o Blog, o mesmo princípio: a IA nunca desenha artigos a sério -
+  // isso é sempre o mesmo módulo testado por nós (BLOG_VIEWER_JS),
+  // injectado depois.
+  const instrucaoBlog = ehBlog
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-blog"></div> - é ali que os artigos a sério vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum artigo falso - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Artigos" ou "Blog").`
+    : '';
+
   const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
-${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}`;
+${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -499,6 +507,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
+  html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -600,6 +609,31 @@ function injectarPortfolioSeNecessario(html, ehPortfolio, siteId) {
   return html;
 }
 
+// Para o Blog: garante a div dos artigos (defesa, caso a IA se tenha
+// esquecido dela) e injecta sempre o módulo fixo do visualizador antes
+// de </body>. Espelha exactamente injectarPortfolioSeNecessario, só que
+// para "daniel-ia-blog" e "blog-viewer.js".
+function injectarBlogSeNecessario(html, ehBlog, siteId) {
+  if (!ehBlog) return html;
+
+  if (!/id=["']daniel-ia-blog["']/.test(html)) {
+    html = html.replace(
+      /<\/body>/i,
+      '<div id="daniel-ia-blog" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
+    );
+  }
+
+  if (!/blog-viewer\.js/.test(html)) {
+    const scriptBlog = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/blog-viewer.js"></script>\n`;
+    if (/<\/body>/i.test(html)) {
+      html = html.replace(/<\/body>/i, scriptBlog + '</body>');
+    } else {
+      html += scriptBlog;
+    }
+  }
+  return html;
+}
+
 // Pede à OpenAI para aplicar uma alteração a um site já gerado, em vez de
 // criar um site do zero. Recebe o HTML actual completo e devolve o HTML
 // completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
@@ -608,6 +642,7 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarM
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
   const ehPortfolio = (tipo === 'Portefólio');
+  const ehBlog = (tipo === 'Blog');
 
   const instrucaoLoja = ehLoja
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
@@ -621,12 +656,16 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarM
     ? `\nATENÇÃO: esta página é um portefólio. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-portfolio"></div> e os dois <script> antes de </body> que carregam o módulo do portefólio (window.DANIEL_IA_SITE_ID e portfolio-viewer.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu trabalhos/projectos a sério - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
+  const instrucaoBlog = ehBlog
+    ? `\nATENÇÃO: esta página é um blog. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-blog"></div> e os dois <script> antes de </body> que carregam o módulo do blog (window.DANIEL_IA_SITE_ID e blog-viewer.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu artigos a sério - isso continua a ser tratado à parte, automaticamente.`
+    : '';
+
   const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel.ia"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
 
   const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
-Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoMarca}`;
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoMarca}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -669,6 +708,7 @@ ${htmlAtual}`;
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
+  html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -1629,6 +1669,203 @@ const PORTFOLIO_VIEWER_JS = `/*
 `;
 
 // ======================================================
+// Script fixo do visualizador do Blog, servido directamente
+// ======================================================
+// Guardado aqui como texto para ser servido por /blog-viewer.js. É este
+// ficheiro que todos os sites de Blog gerados carregam - nunca é a IA a
+// escrever esta lógica. Mesmo padrão do Portefólio: grelha de cartões
+// (imagem, data, título, resumo) e, ao clicar, um "artigo" num overlay
+// com a imagem grande e o conteúdo completo.
+const BLOG_VIEWER_JS = `/*
+  Daniel.ia - módulo fixo do Blog (grelha de artigos)
+  ---------------------------------------------------------------------
+  Este ficheiro é servido pelo próprio container em /blog-viewer.js e é
+  carregado por TODOS os sites de Blog gerados pela IA. A IA nunca
+  escreve esta lógica - só desenha a aparência do site e deixa uma div
+  com id="daniel-ia-blog" onde este módulo mostra os artigos a sério.
+
+  Cada página gerada define, antes de carregar este ficheiro:
+    window.DANIEL_IA_SITE_ID = 'xxxxx';
+*/
+(function(){
+  'use strict';
+
+  var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
+  var SITE_ID = window.DANIEL_IA_SITE_ID || '';
+
+  if (!SITE_ID) {
+    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o blog não pode arrancar.');
+    return;
+  }
+
+  var postsCache = [];
+
+  function escaparHtml(t){
+    var d = document.createElement('div');
+    d.textContent = (t == null ? '' : String(t));
+    return d.innerHTML;
+  }
+  function escaparAtributo(t){
+    return escaparHtml(t).replace(/"/g, '&quot;');
+  }
+  function formatarData(iso){
+    if (!iso) return '';
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleDateString('pt-PT', { day: '2-digit', month: 'long', year: 'numeric' });
+    } catch (e) { return ''; }
+  }
+
+  function injectarEstilos(){
+    var css = ''
+      + '.dib-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:24px;margin:0;padding:0;}'
+      + '.dib-card{cursor:pointer;border-radius:14px;overflow:hidden;background:#15151b;font-family:inherit;}'
+      + '.dib-card-img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#1f1f27;transition:transform .35s ease;}'
+      + '.dib-card:hover .dib-card-img{transform:scale(1.04);}'
+      + '.dib-card-img-vazia{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;}'
+      + '.dib-card-corpo{padding:18px;}'
+      + '.dib-card-data{font-size:12px;color:#8a8a94;margin-bottom:6px;text-transform:capitalize;}'
+      + '.dib-card-titulo{font-weight:700;font-size:16px;margin-bottom:8px;color:#fff;}'
+      + '.dib-card-resumo{font-size:13px;color:#b9b9c2;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}'
+      + '.dib-vazio{color:#777;font-size:13px;}'
+      + '.dib-overlay{position:fixed;inset:0;background:rgba(6,6,10,.94);z-index:100000;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;opacity:0;pointer-events:none;transition:opacity .22s ease;font-family:inherit;}'
+      + '.dib-overlay.dib-aberto{opacity:1;pointer-events:auto;}'
+      + '.dib-artigo{background:#15151b;border-radius:16px;max-width:720px;width:100%;position:relative;transform:translateY(10px);opacity:0;transition:opacity .22s ease,transform .22s ease;margin-bottom:40px;}'
+      + '.dib-overlay.dib-aberto .dib-artigo{transform:translateY(0);opacity:1;}'
+      + '.dib-artigo-img{width:100%;max-height:360px;object-fit:cover;display:block;background:#1f1f27;border-radius:16px 16px 0 0;}'
+      + '.dib-artigo-corpo{padding:30px;}'
+      + '.dib-artigo-data{font-size:12px;color:#8a8a94;margin-bottom:10px;text-transform:capitalize;}'
+      + '.dib-artigo-titulo{font-weight:700;font-size:24px;color:#fff;margin-bottom:18px;line-height:1.3;}'
+      + '.dib-artigo-conteudo{font-size:15px;color:#c6c6cf;line-height:1.75;white-space:pre-wrap;}'
+      + '.dib-fechar{position:absolute;top:14px;right:14px;background:rgba(255,255,255,.1);border:none;color:#fff;font-size:20px;line-height:1;width:36px;height:36px;border-radius:50%;cursor:pointer;z-index:2;}'
+      + '.dib-fechar:hover{background:rgba(255,255,255,.2);}';
+    var style = document.createElement('style');
+    style.setAttribute('data-daniel-ia', 'blog');
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  function montarGrelha(){
+    var alvo = document.getElementById('daniel-ia-blog');
+    if (!alvo) {
+      console.error('Daniel.ia: falta uma div com id="daniel-ia-blog" nesta página - os artigos não têm onde aparecer.');
+      return null;
+    }
+    alvo.innerHTML = '<div id="dib-grelha" class="dib-grelha"><p class="dib-vazio">A carregar artigos...</p></div>';
+    return document.getElementById('dib-grelha');
+  }
+
+  function renderGrelha(posts){
+    var grelha = document.getElementById('dib-grelha');
+    if (!grelha) return;
+    if (!posts || posts.length === 0) {
+      grelha.innerHTML = '<p class="dib-vazio">Ainda não há artigos aqui.</p>';
+      return;
+    }
+    grelha.innerHTML = posts.map(function(p){
+      var imagem = p.imagem
+        ? '<img class="dib-card-img" src="' + escaparAtributo(p.imagem) + '" alt="' + escaparAtributo(p.titulo) + '">'
+        : '<div class="dib-card-img dib-card-img-vazia">Sem imagem</div>';
+      var dataFormatada = formatarData(p.data);
+      return ''
+        + '<div class="dib-card" data-id="' + p.id + '">'
+        + imagem
+        + '<div class="dib-card-corpo">'
+        + (dataFormatada ? '<div class="dib-card-data">' + escaparHtml(dataFormatada) + '</div>' : '')
+        + '<div class="dib-card-titulo">' + escaparHtml(p.titulo) + '</div>'
+        + (p.resumo ? '<div class="dib-card-resumo">' + escaparHtml(p.resumo) + '</div>' : '')
+        + '</div>'
+        + '</div>';
+    }).join('');
+
+    grelha.querySelectorAll('.dib-card').forEach(function(cartao){
+      cartao.addEventListener('click', function(){
+        var post = postsCache.filter(function(p){ return p.id === cartao.getAttribute('data-id'); })[0];
+        if (post) abrirArtigo(post);
+      });
+    });
+  }
+
+  var overlayEl = null;
+
+  function montarOverlay(){
+    if (overlayEl) return overlayEl;
+    var el = document.createElement('div');
+    el.className = 'dib-overlay';
+    el.id = 'dib-overlay';
+    document.body.appendChild(el);
+    overlayEl = el;
+    el.addEventListener('click', function(e){
+      if (e.target === el) fecharArtigo();
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && overlayEl.classList.contains('dib-aberto')) fecharArtigo();
+    });
+    return el;
+  }
+
+  function abrirArtigo(post){
+    var el = montarOverlay();
+    var imagem = post.imagem
+      ? '<img class="dib-artigo-img" src="' + escaparAtributo(post.imagem) + '" alt="' + escaparAtributo(post.titulo) + '">'
+      : '';
+    var dataFormatada = formatarData(post.data);
+    el.innerHTML = ''
+      + '<div class="dib-artigo">'
+      + '<button class="dib-fechar" id="dib-fechar" aria-label="Fechar">&times;</button>'
+      + imagem
+      + '<div class="dib-artigo-corpo">'
+      + (dataFormatada ? '<div class="dib-artigo-data">' + escaparHtml(dataFormatada) + '</div>' : '')
+      + '<div class="dib-artigo-titulo">' + escaparHtml(post.titulo) + '</div>'
+      + '<div class="dib-artigo-conteudo">' + escaparHtml(post.conteudo || post.resumo || '') + '</div>'
+      + '</div>'
+      + '</div>';
+    document.getElementById('dib-fechar').addEventListener('click', fecharArtigo);
+    el.classList.add('dib-aberto');
+    el.scrollTop = 0;
+    document.body.style.overflow = 'hidden';
+  }
+
+  function fecharArtigo(){
+    if (!overlayEl) return;
+    overlayEl.classList.remove('dib-aberto');
+    document.body.style.overflow = '';
+  }
+
+  function iniciar(){
+    injectarEstilos();
+    if (!montarGrelha()) return;
+
+    fetch(CONTAINER_URL + '/blog-posts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_id: SITE_ID })
+    }).then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.status === 'success') {
+          postsCache = r.response.posts || [];
+          renderGrelha(postsCache);
+        } else {
+          var grelha = document.getElementById('dib-grelha');
+          if (grelha) grelha.innerHTML = '<p class="dib-vazio">Não foi possível carregar os artigos.</p>';
+        }
+      })
+      .catch(function(){
+        var grelha = document.getElementById('dib-grelha');
+        if (grelha) grelha.innerHTML = '<p class="dib-vazio">Não foi possível ligar ao servidor.</p>';
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', iniciar);
+  } else {
+    iniciar();
+  }
+})();
+`;
+
+// ======================================================
 // Rotas
 // ======================================================
 
@@ -1664,6 +1901,14 @@ app.get('/portfolio-viewer.js', (req, res) => {
   res.set('Content-Type', 'application/javascript; charset=utf-8');
   res.set('Cache-Control', 'public, max-age=300');
   return res.send(PORTFOLIO_VIEWER_JS);
+});
+
+// Serve o módulo fixo do Blog (grelha de artigos). Mesmo princípio do
+// /loja-cart.js acima.
+app.get('/blog-viewer.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(BLOG_VIEWER_JS);
 });
 
 // Nota sobre os nomes dos campos nas chamadas ao Bubble: têm de ser
