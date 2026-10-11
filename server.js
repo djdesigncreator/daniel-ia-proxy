@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.26.0';
+const VERSION = '1.27.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -413,7 +413,7 @@ const GUIA_TIPO = {
   'E-commerce': 'Desenha a aparência de uma loja online: cabeçalho com o nome do negócio, uma secção de apresentação curta, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
   'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno: cabeçalho com o nome do negócio, uma frase curta de apresentação, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
   'Landing Page': 'Cria uma landing page de uma página: secção hero com título forte, benefícios/funcionalidades, depoimentos fictícios coerentes, chamada para acção clara, e rodapé com contactos.',
-  'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", grelha de projectos/trabalhos de exemplo coerentes com o prompt, e secção de contacto.',
+  'Portefólio': 'Cria um portefólio pessoal/profissional: secção "sobre", e secção de contacto. NÃO desenhes trabalhos/projectos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
   'Blog': 'Cria uma página inicial de blog: cabeçalho com o nome do negócio, e uma grelha de artigos de exemplo (título, resumo curto, data), coerentes com o tema do prompt.',
   'Galeria': 'Cria a aparência de um site de fotógrafo/videógrafo profissional: cabeçalho com o nome, uma frase curta de apresentação, uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
 };
@@ -422,6 +422,7 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarc
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
+  const ehPortfolio = (tipo === 'Portefólio');
   const instrucaoLogo = logoUrl
     ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
     : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
@@ -441,11 +442,18 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarc
     ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-galeria"></div> - é ali que os álbuns a sério (com as fotos e vídeos reais, e o visualizador deles) vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum álbum, foto ou vídeo falso para além dos exemplos pedidos acima - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos trabalhos" ou "Álbuns").`
     : '';
 
+  // Para o Portefólio, o mesmo princípio: a IA nunca desenha trabalhos a
+  // sério - isso é sempre o mesmo módulo testado por nós
+  // (PORTFOLIO_VIEWER_JS), injectado depois.
+  const instrucaoPortfolio = ehPortfolio
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-portfolio"></div> - é ali que os trabalhos/projectos a sério vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum trabalho/projecto falso para além dos exemplos pedidos acima - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Trabalhos" ou "Projectos").`
+    : '';
+
   const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
-${guia}${instrucaoLoja}${instrucaoGaleria}`;
+${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -490,6 +498,7 @@ Descrição pedida pela pessoa: ${prompt}`;
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
+  html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -566,6 +575,31 @@ function injectarGaleriaSeNecessario(html, ehGaleria, siteId) {
   return html;
 }
 
+// Para o Portefólio: garante a div dos trabalhos (defesa, caso a IA se
+// tenha esquecido dela) e injecta sempre o módulo fixo do visualizador
+// antes de </body>. Espelha exactamente injectarGaleriaSeNecessario, só
+// que para "daniel-ia-portfolio" e "portfolio-viewer.js".
+function injectarPortfolioSeNecessario(html, ehPortfolio, siteId) {
+  if (!ehPortfolio) return html;
+
+  if (!/id=["']daniel-ia-portfolio["']/.test(html)) {
+    html = html.replace(
+      /<\/body>/i,
+      '<div id="daniel-ia-portfolio" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
+    );
+  }
+
+  if (!/portfolio-viewer\.js/.test(html)) {
+    const scriptPortfolio = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/portfolio-viewer.js"></script>\n`;
+    if (/<\/body>/i.test(html)) {
+      html = html.replace(/<\/body>/i, scriptPortfolio + '</body>');
+    } else {
+      html += scriptPortfolio;
+    }
+  }
+  return html;
+}
+
 // Pede à OpenAI para aplicar uma alteração a um site já gerado, em vez de
 // criar um site do zero. Recebe o HTML actual completo e devolve o HTML
 // completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
@@ -573,6 +607,7 @@ function injectarGaleriaSeNecessario(html, ehGaleria, siteId) {
 async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarMarcaDeAgua }) {
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
+  const ehPortfolio = (tipo === 'Portefólio');
 
   const instrucaoLoja = ehLoja
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
@@ -582,12 +617,16 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarM
     ? `\nATENÇÃO: esta página é uma galeria. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-galeria"></div> e os dois <script> antes de </body> que carregam o módulo da galeria (window.DANIEL_IA_SITE_ID e galeria-viewer.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu álbuns, fotos ou vídeos a sério - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
+  const instrucaoPortfolio = ehPortfolio
+    ? `\nATENÇÃO: esta página é um portefólio. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-portfolio"></div> e os dois <script> antes de </body> que carregam o módulo do portefólio (window.DANIEL_IA_SITE_ID e portfolio-viewer.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu trabalhos/projectos a sério - isso continua a ser tratado à parte, automaticamente.`
+    : '';
+
   const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel.ia"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
 
   const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
-Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoGaleria}${instrucaoMarca}`;
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoMarca}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -629,6 +668,7 @@ ${htmlAtual}`;
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
+  html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -1401,6 +1441,194 @@ const GALERIA_VIEWER_JS = `/*
 `;
 
 // ======================================================
+// Script fixo do visualizador do Portefólio, servido directamente
+// ======================================================
+// Guardado aqui como texto para ser servido por /portfolio-viewer.js. É
+// este ficheiro que todos os sites de Portefólio gerados carregam - nunca
+// é a IA a escrever esta lógica. Mais simples que a Galeria: não há
+// álbuns dentro de álbuns, só uma grelha de trabalhos, e um modal com a
+// descrição completa (e um link "Ver projecto", se o dono tiver posto um).
+const PORTFOLIO_VIEWER_JS = `/*
+  Daniel.ia - módulo fixo do Portefólio (grelha de trabalhos)
+  ---------------------------------------------------------------------
+  Este ficheiro é servido pelo próprio container em /portfolio-viewer.js
+  e é carregado por TODOS os sites de Portefólio gerados pela IA. A IA
+  nunca escreve esta lógica - só desenha a aparência do site e deixa uma
+  div com id="daniel-ia-portfolio" onde este módulo mostra os trabalhos
+  a sério.
+
+  Cada página gerada define, antes de carregar este ficheiro:
+    window.DANIEL_IA_SITE_ID = 'xxxxx';
+*/
+(function(){
+  'use strict';
+
+  var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
+  var SITE_ID = window.DANIEL_IA_SITE_ID || '';
+
+  if (!SITE_ID) {
+    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o portefólio não pode arrancar.');
+    return;
+  }
+
+  var trabalhosCache = [];
+
+  function escaparHtml(t){
+    var d = document.createElement('div');
+    d.textContent = (t == null ? '' : String(t));
+    return d.innerHTML;
+  }
+  function escaparAtributo(t){
+    return escaparHtml(t).replace(/"/g, '&quot;');
+  }
+
+  function injectarEstilos(){
+    var css = ''
+      + '.dip-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:22px;margin:0;padding:0;}'
+      + '.dip-card{cursor:pointer;border-radius:14px;overflow:hidden;background:#15151b;font-family:inherit;}'
+      + '.dip-card-img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#1f1f27;transition:transform .35s ease;}'
+      + '.dip-card:hover .dip-card-img{transform:scale(1.04);}'
+      + '.dip-card-img-vazia{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;}'
+      + '.dip-card-corpo{padding:16px;}'
+      + '.dip-card-titulo{font-weight:700;font-size:15px;margin-bottom:6px;color:#fff;}'
+      + '.dip-card-desc{font-size:13px;color:#b9b9c2;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}'
+      + '.dip-vazio{color:#777;font-size:13px;}'
+      + '.dip-overlay{position:fixed;inset:0;background:rgba(6,6,10,.92);z-index:100000;display:flex;align-items:center;justify-content:center;padding:24px;opacity:0;pointer-events:none;transition:opacity .22s ease;font-family:inherit;}'
+      + '.dip-overlay.dip-aberto{opacity:1;pointer-events:auto;}'
+      + '.dip-modal{background:#15151b;border-radius:16px;max-width:620px;width:100%;max-height:88vh;overflow-y:auto;position:relative;transform:scale(.97);opacity:0;transition:opacity .22s ease,transform .22s ease;}'
+      + '.dip-overlay.dip-aberto .dip-modal{transform:scale(1);opacity:1;}'
+      + '.dip-modal-img{width:100%;max-height:360px;object-fit:cover;display:block;background:#1f1f27;}'
+      + '.dip-modal-corpo{padding:22px;}'
+      + '.dip-modal-titulo{font-weight:700;font-size:19px;color:#fff;margin-bottom:10px;}'
+      + '.dip-modal-desc{font-size:14px;color:#c6c6cf;line-height:1.6;white-space:pre-wrap;}'
+      + '.dip-modal-link{display:inline-block;margin-top:16px;color:#fff;font-size:13px;font-weight:600;text-decoration:underline;}'
+      + '.dip-fechar{position:absolute;top:14px;right:14px;background:rgba(255,255,255,.1);border:none;color:#fff;font-size:20px;line-height:1;width:36px;height:36px;border-radius:50%;cursor:pointer;z-index:2;}'
+      + '.dip-fechar:hover{background:rgba(255,255,255,.2);}';
+    var style = document.createElement('style');
+    style.setAttribute('data-daniel-ia', 'portfolio');
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  function montarGrelha(){
+    var alvo = document.getElementById('daniel-ia-portfolio');
+    if (!alvo) {
+      console.error('Daniel.ia: falta uma div com id="daniel-ia-portfolio" nesta página - os trabalhos não têm onde aparecer.');
+      return null;
+    }
+    alvo.innerHTML = '<div id="dip-grelha" class="dip-grelha"><p class="dip-vazio">A carregar trabalhos...</p></div>';
+    return document.getElementById('dip-grelha');
+  }
+
+  function renderGrelha(trabalhos){
+    var grelha = document.getElementById('dip-grelha');
+    if (!grelha) return;
+    if (!trabalhos || trabalhos.length === 0) {
+      grelha.innerHTML = '<p class="dip-vazio">Ainda não há trabalhos aqui.</p>';
+      return;
+    }
+    grelha.innerHTML = trabalhos.map(function(t){
+      var imagem = t.imagem
+        ? '<img class="dip-card-img" src="' + escaparAtributo(t.imagem) + '" alt="' + escaparAtributo(t.titulo) + '">'
+        : '<div class="dip-card-img dip-card-img-vazia">Sem imagem</div>';
+      return ''
+        + '<div class="dip-card" data-id="' + t.id + '">'
+        + imagem
+        + '<div class="dip-card-corpo">'
+        + '<div class="dip-card-titulo">' + escaparHtml(t.titulo) + '</div>'
+        + (t.descricao ? '<div class="dip-card-desc">' + escaparHtml(t.descricao) + '</div>' : '')
+        + '</div>'
+        + '</div>';
+    }).join('');
+
+    grelha.querySelectorAll('.dip-card').forEach(function(cartao){
+      cartao.addEventListener('click', function(){
+        var trabalho = trabalhosCache.filter(function(t){ return t.id === cartao.getAttribute('data-id'); })[0];
+        if (trabalho) abrirTrabalho(trabalho);
+      });
+    });
+  }
+
+  var overlayEl = null;
+
+  function montarOverlay(){
+    if (overlayEl) return overlayEl;
+    var el = document.createElement('div');
+    el.className = 'dip-overlay';
+    el.id = 'dip-overlay';
+    document.body.appendChild(el);
+    overlayEl = el;
+    el.addEventListener('click', function(e){
+      if (e.target === el) fecharTrabalho();
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && overlayEl.classList.contains('dip-aberto')) fecharTrabalho();
+    });
+    return el;
+  }
+
+  function abrirTrabalho(trabalho){
+    var el = montarOverlay();
+    var imagem = trabalho.imagem
+      ? '<img class="dip-modal-img" src="' + escaparAtributo(trabalho.imagem) + '" alt="' + escaparAtributo(trabalho.titulo) + '">'
+      : '';
+    var link = trabalho.link
+      ? '<a class="dip-modal-link" href="' + escaparAtributo(trabalho.link) + '" target="_blank" rel="noopener">Ver projecto &#8594;</a>'
+      : '';
+    el.innerHTML = ''
+      + '<div class="dip-modal">'
+      + '<button class="dip-fechar" id="dip-fechar" aria-label="Fechar">&times;</button>'
+      + imagem
+      + '<div class="dip-modal-corpo">'
+      + '<div class="dip-modal-titulo">' + escaparHtml(trabalho.titulo) + '</div>'
+      + (trabalho.descricao ? '<div class="dip-modal-desc">' + escaparHtml(trabalho.descricao) + '</div>' : '')
+      + link
+      + '</div>'
+      + '</div>';
+    document.getElementById('dip-fechar').addEventListener('click', fecharTrabalho);
+    el.classList.add('dip-aberto');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function fecharTrabalho(){
+    if (!overlayEl) return;
+    overlayEl.classList.remove('dip-aberto');
+    document.body.style.overflow = '';
+  }
+
+  function iniciar(){
+    injectarEstilos();
+    if (!montarGrelha()) return;
+
+    fetch(CONTAINER_URL + '/portfolio-trabalhos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_id: SITE_ID })
+    }).then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.status === 'success') {
+          trabalhosCache = r.response.trabalhos || [];
+          renderGrelha(trabalhosCache);
+        } else {
+          var grelha = document.getElementById('dip-grelha');
+          if (grelha) grelha.innerHTML = '<p class="dip-vazio">Não foi possível carregar os trabalhos.</p>';
+        }
+      })
+      .catch(function(){
+        var grelha = document.getElementById('dip-grelha');
+        if (grelha) grelha.innerHTML = '<p class="dip-vazio">Não foi possível ligar ao servidor.</p>';
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', iniciar);
+  } else {
+    iniciar();
+  }
+})();
+`;
+
+// ======================================================
 // Rotas
 // ======================================================
 
@@ -1428,6 +1656,14 @@ app.get('/galeria-viewer.js', (req, res) => {
   res.set('Content-Type', 'application/javascript; charset=utf-8');
   res.set('Cache-Control', 'public, max-age=300');
   return res.send(GALERIA_VIEWER_JS);
+});
+
+// Serve o módulo fixo do Portefólio (grelha de trabalhos). Mesmo
+// princípio do /loja-cart.js acima.
+app.get('/portfolio-viewer.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(PORTFOLIO_VIEWER_JS);
 });
 
 // Nota sobre os nomes dos campos nas chamadas ao Bubble: têm de ser
