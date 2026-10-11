@@ -2043,7 +2043,8 @@ app.post('/galeria-video-iniciar', async (req, res) => {
     });
   } catch (erro) {
     console.error('Erro em /galeria-video-iniciar:', erro);
-    return res.json({ status: 'error', message: 'Não foi possível iniciar o envio do vídeo.' });
+    // DEBUG TEMPORÁRIO - remover depois de confirmarmos a causa.
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o envio do vídeo.', debug: String(erro && erro.message || erro) });
   }
 });
 
