@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.25.1';
+const VERSION = '1.26.0';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -421,6 +421,7 @@ const GUIA_TIPO = {
 async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarcaDeAgua }) {
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  const ehGaleria = (tipo === 'Galeria');
   const instrucaoLogo = logoUrl
     ? `A pessoa forneceu um logótipo. Usa exactamente esta imagem no cabeçalho: ${logoUrl}`
     : `A pessoa não forneceu logótipo. Cria um wordmark simples em texto com o nome do negócio, bem estilizado.`;
@@ -433,11 +434,18 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, siteId, mostrarMarc
     ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-produtos"></div> - é ali que os produtos a sério, o carrinho de compras e o pagamento vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum produto, preço, botão "comprar" ou "adicionar ao carrinho" - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos produtos" ou "A nossa loja").`
     : '';
 
+  // Para a Galeria, o mesmo princípio do Loja: a IA nunca desenha álbuns,
+  // fotos ou vídeos a sério, nem o visualizador - isso é sempre o mesmo
+  // módulo testado por nós (GALERIA_VIEWER_JS), injectado depois.
+  const instrucaoGaleria = ehGaleria
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-galeria"></div> - é ali que os álbuns a sério (com as fotos e vídeos reais, e o visualizador deles) vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum álbum, foto ou vídeo falso para além dos exemplos pedidos acima - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos trabalhos" ou "Álbuns").`
+    : '';
+
   const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
-${guia}${instrucaoLoja}`;
+${guia}${instrucaoLoja}${instrucaoGaleria}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -481,6 +489,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   }
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
+  html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -530,15 +539,47 @@ function injectarLojaSeNecessario(html, ehLoja, siteId) {
   return html;
 }
 
+// Para a Galeria: garante a div dos álbuns (defesa, caso a IA se tenha
+// esquecido dela) e injecta sempre o módulo fixo do visualizador antes de
+// </body>. Chamado tanto na criação como na edição de um site - nunca
+// depende do que a IA escreveu, é sempre reaplicado por cima. Espelha
+// exactamente injectarLojaSeNecessario, só que para "daniel-ia-galeria" e
+// "galeria-viewer.js".
+function injectarGaleriaSeNecessario(html, ehGaleria, siteId) {
+  if (!ehGaleria) return html;
+
+  if (!/id=["']daniel-ia-galeria["']/.test(html)) {
+    html = html.replace(
+      /<\/body>/i,
+      '<div id="daniel-ia-galeria" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
+    );
+  }
+
+  if (!/galeria-viewer\.js/.test(html)) {
+    const scriptGaleria = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/galeria-viewer.js"></script>\n`;
+    if (/<\/body>/i.test(html)) {
+      html = html.replace(/<\/body>/i, scriptGaleria + '</body>');
+    } else {
+      html += scriptGaleria;
+    }
+  }
+  return html;
+}
+
 // Pede à OpenAI para aplicar uma alteração a um site já gerado, em vez de
 // criar um site do zero. Recebe o HTML actual completo e devolve o HTML
 // completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
 // pedaço), porque é isso que depois sobe para o Bunny no lugar do antigo.
 async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarMarcaDeAgua }) {
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  const ehGaleria = (tipo === 'Galeria');
 
   const instrucaoLoja = ehLoja
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
+    : '';
+
+  const instrucaoGaleria = ehGaleria
+    ? `\nATENÇÃO: esta página é uma galeria. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-galeria"></div> e os dois <script> antes de </body> que carregam o módulo da galeria (window.DANIEL_IA_SITE_ID e galeria-viewer.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu álbuns, fotos ou vídeos a sério - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
   const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel.ia"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
@@ -546,7 +587,7 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, siteId, mostrarM
   const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
-Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoMarca}`;
+Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.${instrucaoLoja}${instrucaoGaleria}${instrucaoMarca}`;
 
   const userPrompt = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -587,6 +628,7 @@ ${htmlAtual}`;
   }
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
+  html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -1012,6 +1054,353 @@ const LOJA_CART_JS = `/*
 `;
 
 // ======================================================
+// Script fixo do visualizador da Galeria, servido directamente
+// ======================================================
+// Guardado aqui como texto para ser servido por /galeria-viewer.js. É
+// este ficheiro que todos os sites de Galeria gerados carregam - nunca é
+// a IA a escrever esta lógica. Espelha o mesmo padrão do LOJA_CART_JS:
+// uma div vazia com id="daniel-ia-galeria", preenchida sozinha com os
+// álbuns a sério (grelha de capas) e um lightbox para ver as fotos e
+// vídeos de cada álbum, com transições suaves e vídeo por HLS (hls.js,
+// carregado só se for mesmo preciso).
+const GALERIA_VIEWER_JS = `/*
+  Daniel.ia - módulo fixo da Galeria (álbuns + visualizador)
+  ---------------------------------------------------------------------
+  Este ficheiro é servido pelo próprio container em /galeria-viewer.js e
+  é carregado por TODOS os sites de Galeria gerados pela IA. A IA nunca
+  escreve esta lógica - só desenha a aparência do site e deixa uma div
+  com id="daniel-ia-galeria" onde este módulo mostra os álbuns a sério.
+
+  Cada página gerada define, antes de carregar este ficheiro:
+    window.DANIEL_IA_SITE_ID = 'xxxxx';
+*/
+(function(){
+  'use strict';
+
+  var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
+  var SITE_ID = window.DANIEL_IA_SITE_ID || '';
+
+  if (!SITE_ID) {
+    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o visualizador da galeria não pode arrancar.');
+    return;
+  }
+
+  var mediaAtual = [];
+  var albumActual = null;
+  var indiceAtual = 0;
+  var hlsInstancia = null;
+
+  // ======================================================
+  // Texto seguro para dentro de HTML
+  // ======================================================
+  function escaparHtml(t){
+    var d = document.createElement('div');
+    d.textContent = (t == null ? '' : String(t));
+    return d.innerHTML;
+  }
+  function escaparAtributo(t){
+    return escaparHtml(t).replace(/"/g, '&quot;');
+  }
+
+  // ======================================================
+  // Estilos (isolados com o prefixo "dig-" para não colidir com o CSS
+  // que a IA desenhou para o resto do site)
+  // ======================================================
+  function injectarEstilos(){
+    var css = ''
+      + '.dig-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:20px;margin:0;padding:0;}'
+      + '.dig-album-card{cursor:pointer;border-radius:14px;overflow:hidden;background:#15151b;position:relative;font-family:inherit;}'
+      + '.dig-album-capa{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#1f1f27;transition:transform .35s ease;}'
+      + '.dig-album-card:hover .dig-album-capa{transform:scale(1.04);}'
+      + '.dig-album-capa-vazia{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;}'
+      + '.dig-album-info{position:absolute;left:0;right:0;bottom:0;padding:14px 16px;background:linear-gradient(to top,rgba(0,0,0,.78),rgba(0,0,0,0));}'
+      + '.dig-album-titulo{color:#fff;font-weight:700;font-size:15px;margin-bottom:2px;}'
+      + '.dig-album-meta{color:#d6d6de;font-size:12px;}'
+      + '.dig-vazio{color:#777;font-size:13px;}'
+      + '.dig-lightbox{position:fixed;inset:0;background:rgba(6,6,10,.96);z-index:100000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s ease;font-family:inherit;}'
+      + '.dig-lightbox.dig-aberto{opacity:1;pointer-events:auto;}'
+      + '.dig-lightbox-topo{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:18px 20px;color:#eee;z-index:2;}'
+      + '.dig-lightbox-titulo-album{font-size:14px;font-weight:600;color:#fff;}'
+      + '.dig-lightbox-contador{font-size:12px;color:#aaa;margin-top:2px;}'
+      + '.dig-lightbox-fechar{background:rgba(255,255,255,.08);border:none;color:#fff;font-size:20px;line-height:1;width:38px;height:38px;border-radius:50%;cursor:pointer;}'
+      + '.dig-lightbox-fechar:hover{background:rgba(255,255,255,.18);}'
+      + '.dig-lightbox-palco{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:70px 70px;box-sizing:border-box;position:relative;}'
+      + '.dig-lightbox-conteudo{max-width:100%;max-height:100%;opacity:0;transform:scale(.97);transition:opacity .22s ease,transform .22s ease;display:flex;align-items:center;justify-content:center;}'
+      + '.dig-lightbox-conteudo.dig-visivel{opacity:1;transform:scale(1);}'
+      + '.dig-lightbox-conteudo img,.dig-lightbox-conteudo video{max-width:100%;max-height:78vh;border-radius:6px;display:block;background:#000;}'
+      + '.dig-lightbox-spinner{width:32px;height:32px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;animation:dig-girar .8s linear infinite;}'
+      + '@keyframes dig-girar{to{transform:rotate(360deg);}}'
+      + '.dig-lightbox-seta{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.08);border:none;color:#fff;width:46px;height:46px;border-radius:50%;font-size:20px;cursor:pointer;z-index:2;}'
+      + '.dig-lightbox-seta:hover{background:rgba(255,255,255,.2);}'
+      + '.dig-lightbox-seta.dig-esquerda{left:14px;}'
+      + '.dig-lightbox-seta.dig-direita{right:14px;}'
+      + '.dig-lightbox-vazio{color:#ccc;font-size:14px;text-align:center;}'
+      + '@media(max-width:640px){.dig-lightbox-palco{padding:70px 16px;}.dig-lightbox-seta{width:38px;height:38px;font-size:17px;}.dig-lightbox-seta.dig-esquerda{left:6px;}.dig-lightbox-seta.dig-direita{right:6px;}}';
+    var style = document.createElement('style');
+    style.setAttribute('data-daniel-ia', 'galeria');
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  // ======================================================
+  // Grelha de álbuns
+  // ======================================================
+  function montarGrelha(){
+    var alvo = document.getElementById('daniel-ia-galeria');
+    if (!alvo) {
+      console.error('Daniel.ia: falta uma div com id="daniel-ia-galeria" nesta página - os álbuns não têm onde aparecer.');
+      return null;
+    }
+    alvo.innerHTML = '<div id="dig-grelha" class="dig-grelha"><p class="dig-vazio">A carregar álbuns...</p></div>';
+    return document.getElementById('dig-grelha');
+  }
+
+  function renderGrelha(albuns){
+    var grelha = document.getElementById('dig-grelha');
+    if (!grelha) return;
+    if (!albuns || albuns.length === 0) {
+      grelha.innerHTML = '<p class="dig-vazio">Ainda não há álbuns aqui.</p>';
+      return;
+    }
+    grelha.innerHTML = albuns.map(function(a){
+      var capa = a.capa
+        ? '<img class="dig-album-capa" src="' + escaparAtributo(a.capa) + '" alt="' + escaparAtributo(a.titulo) + '">'
+        : '<div class="dig-album-capa dig-album-capa-vazia">Sem ficheiros</div>';
+      return ''
+        + '<div class="dig-album-card" data-id="' + a.id + '">'
+        + capa
+        + '<div class="dig-album-info">'
+        + '<div class="dig-album-titulo">' + escaparHtml(a.titulo) + '</div>'
+        + '<div class="dig-album-meta">' + a.total_media + (a.total_media === 1 ? ' ficheiro' : ' ficheiros') + '</div>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+
+    grelha.querySelectorAll('.dig-album-card').forEach(function(cartao){
+      cartao.addEventListener('click', function(){
+        abrirAlbum(cartao.getAttribute('data-id'));
+      });
+    });
+  }
+
+  // ======================================================
+  // Lightbox
+  // ======================================================
+  var lightboxEl = null;
+
+  function montarLightbox(){
+    if (lightboxEl) return lightboxEl;
+    var el = document.createElement('div');
+    el.className = 'dig-lightbox';
+    el.id = 'dig-lightbox';
+    el.innerHTML = ''
+      + '<div class="dig-lightbox-topo">'
+      + '<div><div class="dig-lightbox-titulo-album" id="dig-titulo-album"></div><div class="dig-lightbox-contador" id="dig-contador"></div></div>'
+      + '<button class="dig-lightbox-fechar" id="dig-fechar" aria-label="Fechar">&times;</button>'
+      + '</div>'
+      + '<button class="dig-lightbox-seta dig-esquerda" id="dig-anterior" aria-label="Anterior">&#8249;</button>'
+      + '<div class="dig-lightbox-palco" id="dig-palco"></div>'
+      + '<button class="dig-lightbox-seta dig-direita" id="dig-seguinte" aria-label="Seguinte">&#8250;</button>';
+    document.body.appendChild(el);
+    lightboxEl = el;
+
+    document.getElementById('dig-fechar').addEventListener('click', fecharLightbox);
+    el.addEventListener('click', function(e){
+      if (e.target === el) fecharLightbox();
+    });
+    document.getElementById('dig-anterior').addEventListener('click', function(){ navegar(-1); });
+    document.getElementById('dig-seguinte').addEventListener('click', function(){ navegar(1); });
+
+    document.addEventListener('keydown', function(e){
+      if (!lightboxEl.classList.contains('dig-aberto')) return;
+      if (e.key === 'Escape') fecharLightbox();
+      if (e.key === 'ArrowLeft') navegar(-1);
+      if (e.key === 'ArrowRight') navegar(1);
+    });
+
+    var toqueInicioX = null;
+    el.addEventListener('touchstart', function(e){
+      toqueInicioX = e.touches[0].clientX;
+    }, { passive: true });
+    el.addEventListener('touchend', function(e){
+      if (toqueInicioX == null) return;
+      var delta = e.changedTouches[0].clientX - toqueInicioX;
+      toqueInicioX = null;
+      if (Math.abs(delta) < 40) return;
+      navegar(delta > 0 ? -1 : 1);
+    }, { passive: true });
+
+    return el;
+  }
+
+  function abrirAlbum(albumId){
+    var el = montarLightbox();
+    el.classList.add('dig-aberto');
+    document.body.style.overflow = 'hidden';
+    document.getElementById('dig-titulo-album').textContent = '';
+    document.getElementById('dig-contador').textContent = '';
+    mostrarPalco('<div class="dig-lightbox-spinner"></div>', false);
+
+    fetch(CONTAINER_URL + '/galeria-album-publico', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_id: SITE_ID, album_id: albumId })
+    }).then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.status !== 'success') {
+          mostrarPalco('<p class="dig-lightbox-vazio">' + escaparHtml(r.message || 'Não foi possível abrir este álbum.') + '</p>', true);
+          return;
+        }
+        albumActual = r.response.album;
+        mediaAtual = r.response.media || [];
+        indiceAtual = 0;
+        document.getElementById('dig-titulo-album').textContent = albumActual.titulo || '';
+        if (mediaAtual.length === 0) {
+          document.getElementById('dig-contador').textContent = '';
+          mostrarPalco('<p class="dig-lightbox-vazio">Ainda não há fotos ou vídeos neste álbum.</p>', true);
+          return;
+        }
+        mostrarMediaAtual();
+      })
+      .catch(function(){
+        mostrarPalco('<p class="dig-lightbox-vazio">Não foi possível ligar ao servidor.</p>', true);
+      });
+  }
+
+  function fecharLightbox(){
+    if (!lightboxEl) return;
+    lightboxEl.classList.remove('dig-aberto');
+    document.body.style.overflow = '';
+    pararVideoActual();
+  }
+
+  function pararVideoActual(){
+    if (hlsInstancia) {
+      try { hlsInstancia.destroy(); } catch (e) {}
+      hlsInstancia = null;
+    }
+    var palco = document.getElementById('dig-palco');
+    if (palco) {
+      var video = palco.querySelector('video');
+      if (video) { try { video.pause(); } catch (e) {} }
+    }
+  }
+
+  function mostrarPalco(htmlInterno, visivelJa){
+    var palco = document.getElementById('dig-palco');
+    if (!palco) return;
+    palco.innerHTML = '<div class="dig-lightbox-conteudo' + (visivelJa ? ' dig-visivel' : '') + '" id="dig-conteudo">' + htmlInterno + '</div>';
+    if (!visivelJa) {
+      requestAnimationFrame(function(){
+        var conteudo = document.getElementById('dig-conteudo');
+        if (conteudo) conteudo.classList.add('dig-visivel');
+      });
+    }
+  }
+
+  function navegar(direcao){
+    if (mediaAtual.length === 0) return;
+    pararVideoActual();
+    indiceAtual = (indiceAtual + direcao + mediaAtual.length) % mediaAtual.length;
+    var conteudo = document.getElementById('dig-conteudo');
+    if (conteudo) conteudo.classList.remove('dig-visivel');
+    setTimeout(mostrarMediaAtual, 160);
+  }
+
+  function mostrarMediaAtual(){
+    var item = mediaAtual[indiceAtual];
+    if (!item) return;
+    document.getElementById('dig-contador').textContent = (indiceAtual + 1) + ' / ' + mediaAtual.length;
+
+    if (item.tipo === 'video') {
+      mostrarPalco(''
+        + '<video id="dig-video" controls playsinline poster="' + escaparAtributo(item.thumbnail || '') + '"></video>', false);
+      var video = document.getElementById('dig-video');
+      carregarVideo(video, item.url);
+    } else {
+      mostrarPalco('<img src="' + escaparAtributo(item.url) + '" alt="">', false);
+    }
+  }
+
+  function carregarVideo(video, url){
+    if (!video || !url) return;
+    var suportaNativo = video.canPlayType('application/vnd.apple.mpegurl');
+    if (suportaNativo) {
+      video.src = url;
+      return;
+    }
+    carregarHlsJs(function(){
+      if (!window.Hls || !window.Hls.isSupported()) {
+        video.src = url;
+        return;
+      }
+      var hls = new window.Hls();
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      hlsInstancia = hls;
+    });
+  }
+
+  var hlsScriptPedido = false;
+  function carregarHlsJs(callback){
+    if (window.Hls) { callback(); return; }
+    if (hlsScriptPedido) {
+      var tentativas = 0;
+      var esperar = setInterval(function(){
+        tentativas++;
+        if (window.Hls || tentativas > 40) {
+          clearInterval(esperar);
+          callback();
+        }
+      }, 100);
+      return;
+    }
+    hlsScriptPedido = true;
+    var script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js';
+    script.onload = callback;
+    script.onerror = function(){
+      console.error('Daniel.ia: não foi possível carregar o leitor de vídeo.');
+      callback();
+    };
+    document.head.appendChild(script);
+  }
+
+  // ======================================================
+  // Arranque
+  // ======================================================
+  function iniciar(){
+    injectarEstilos();
+    if (!montarGrelha()) return;
+
+    fetch(CONTAINER_URL + '/galeria-albuns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_id: SITE_ID })
+    }).then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.status === 'success') {
+          renderGrelha(r.response.albuns || []);
+        } else {
+          var grelha = document.getElementById('dig-grelha');
+          if (grelha) grelha.innerHTML = '<p class="dig-vazio">Não foi possível carregar os álbuns.</p>';
+        }
+      })
+      .catch(function(){
+        var grelha = document.getElementById('dig-grelha');
+        if (grelha) grelha.innerHTML = '<p class="dig-vazio">Não foi possível ligar ao servidor.</p>';
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', iniciar);
+  } else {
+    iniciar();
+  }
+})();
+`;
+
+// ======================================================
 // Rotas
 // ======================================================
 
@@ -1031,6 +1420,14 @@ app.get('/loja-cart.js', (req, res) => {
   res.set('Content-Type', 'application/javascript; charset=utf-8');
   res.set('Cache-Control', 'public, max-age=300');
   return res.send(LOJA_CART_JS);
+});
+
+// Serve o módulo fixo da Galeria (álbuns + visualizador). Mesmo princípio
+// do /loja-cart.js acima.
+app.get('/galeria-viewer.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(GALERIA_VIEWER_JS);
 });
 
 // Nota sobre os nomes dos campos nas chamadas ao Bubble: têm de ser
@@ -1882,6 +2279,53 @@ app.post('/galeria-albuns', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /galeria-albuns:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os álbuns.' });
+  }
+});
+
+// Mostra o conteúdo de UM álbum para quem visita o site (sem login,
+// usada pelo galeria-viewer.js) - só álbuns activos, e só ficheiros já
+// prontos (fotos e vídeos ainda "A processar" ou "Erro" não aparecem ao
+// público). Equivalente, para a Galeria, ao que /galeria-album-media já
+// faz para o dono.
+app.post('/galeria-album-publico', async (req, res) => {
+  try {
+    const { site_id, album_id } = req.body;
+    if (!site_id || !album_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id e album_id são obrigatórios.' });
+    }
+
+    const album = await bubbleGet('album', album_id);
+    if (!album || album['Site'] !== site_id || !album['Is Active']) {
+      return res.json({ status: 'error', message: 'Álbum não encontrado.' });
+    }
+
+    const medias = await bubbleList(
+      'media',
+      [{ key: 'Album', constraint_type: 'equals', value: album_id }],
+      'Ordem',
+      false
+    );
+
+    const lista = medias
+      .filter(m => m['Status'] === 'Pronto')
+      .map(m => ({
+        id: m._id,
+        tipo: m['Tipo'],
+        url: m['URL'] || '',
+        thumbnail: m['Thumbnail URL'] || '',
+        ordem: m['Ordem'] || 0
+      }));
+
+    return res.json({
+      status: 'success',
+      response: {
+        album: { id: album._id, titulo: album['Titulo'], descricao: album['Descricao'] || '' },
+        media: lista
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /galeria-album-publico:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar este álbum.' });
   }
 });
 
