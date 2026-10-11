@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.24.0';
+const VERSION = '1.25.1';
 
 // Remove um "http://" ou "https://" que já esteja no valor, para nunca
 // ficarmos com "https://https://..." ao montarmos o URL
@@ -224,19 +224,82 @@ async function purgeCacheBunny(url) {
   }
 }
 
+// ======================================================
+// Helpers - Controlo de espaço (armazenamento)
+// ======================================================
+// Um só medidor por conta, para tudo o que a pessoa carrega: logótipo,
+// fotos de Trabalhos/Posts/Galeria e vídeos da Galeria. Os ficheiros HTML
+// dos sites gerados pela IA não entram nesta conta - são pequenos e geridos
+// à parte pelo limite de "Sites Limit" do plano.
+
+// Verifica se a conta ainda tem espaço para mais "bytesNovos". Nunca lança
+// erro - devolve sempre { ok, message? }, para ser fácil de usar no início
+// de cada rota, tal como já fazemos com a verificação de tokens.
+async function verificarEspaco(owner, bytesNovos) {
+  const user = await bubbleGet('user', owner);
+  if (!user) return { ok: false, message: 'Utilizador não encontrado.' };
+  const planId = user['Plan'];
+  if (!planId) return { ok: false, message: 'A tua conta não tem nenhum plano atribuído.' };
+  const plano = await bubbleGet('plan', planId);
+  const usado = user['Storage Used Bytes'] || 0;
+  const limite = plano['Storage Limit Bytes'] || 0;
+  if (usado + bytesNovos > limite) {
+    return { ok: false, message: 'Atingiste o limite de espaço do teu plano. Apaga alguns ficheiros ou muda de plano para continuares a carregar.' };
+  }
+  return { ok: true };
+}
+
+// Soma bytes ao total usado pela conta - chamar só depois de um upload com
+// sucesso.
+async function somarEspacoUsado(owner, bytes) {
+  if (!bytes) return;
+  try {
+    const user = await bubbleGet('user', owner);
+    if (!user) return;
+    const usado = user['Storage Used Bytes'] || 0;
+    await bubblePatch('user', owner, { 'Storage Used Bytes': usado + bytes });
+  } catch (erro) {
+    console.error('Erro a somar espaço usado:', erro);
+  }
+}
+
+// Subtrai bytes do total usado (ficheiro apagado). Nunca deixa ficar
+// negativo. Nunca falha a operação de apagar por causa disto - só avisa.
+async function subtrairEspacoUsado(owner, bytes) {
+  if (!bytes) return;
+  try {
+    const user = await bubbleGet('user', owner);
+    if (!user) return;
+    const usado = user['Storage Used Bytes'] || 0;
+    await bubblePatch('user', owner, { 'Storage Used Bytes': Math.max(0, usado - bytes) });
+  } catch (erro) {
+    console.error('Erro a subtrair espaço usado:', erro);
+  }
+}
+
 // Extrai e sobe para o Bunny uma imagem enviada em base64 (data URL),
 // devolvendo o URL da CDN já pronto para guardar. Usado nos Trabalhos do
-// Portefólio e nos Posts do Blog, onde a pessoa carrega a imagem a sério
-// em vez de colar um link. Devolve null se o texto não for um data URL
-// de imagem válido (nesse caso quem chamou decide o que fazer).
+// Portefólio, nos Posts do Blog e nas fotos da Galeria, onde a pessoa
+// carrega a imagem a sério em vez de colar um link. Verifica sempre o
+// espaço disponível antes de subir, e soma o espaço usado depois.
+// Devolve { url, erro } - url vem vazio e erro preenchido tanto quando o
+// texto não é uma imagem base64 válida como quando não há espaço.
 async function uploadImagemBase64(pasta, owner, dataUrl) {
   const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl || '');
-  if (!match) return null;
+  if (!match) return { url: '', erro: '' };
   const mime = match[1];
   const buffer = Buffer.from(match[2], 'base64');
+
+  const espaco = await verificarEspaco(owner, buffer.length);
+  if (!espaco.ok) {
+    return { url: '', erro: espaco.message };
+  }
+
   const extensao = mime.split('/')[1].replace('+xml', '').replace('jpeg', 'jpg');
   const caminho = `${pasta}/${owner}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extensao}`;
-  return uploadParaBunny(caminho, buffer, mime);
+  const url = await uploadParaBunny(caminho, buffer, mime);
+  await somarEspacoUsado(owner, buffer.length);
+  return { url, erro: '', bytes: buffer.length };
 }
 
 // ======================================================
@@ -1047,6 +1110,10 @@ app.post('/generate', async (req, res) => {
 async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua }) {
   try {
     // ---- Logótipo (opcional) ----
+    // Esta função já corre depois de termos respondido ao pedido (ver nota
+    // sobre /generate ser assíncrono), por isso nunca falha a geração toda
+    // por causa do logótipo - se não houver espaço, segue sem logótipo (a
+    // IA usa um wordmark em texto, ver gerarComOpenAI) em vez de travar.
     let logoUrl = '';
     if (logo_data_url) {
       const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(logo_data_url);
@@ -1054,9 +1121,15 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, site
         const mime = match[1];
         const base64 = match[2];
         const buffer = Buffer.from(base64, 'base64');
-        const extensao = mime.split('/')[1].replace('+xml', '').replace('jpeg', 'jpg');
-        const caminhoLogo = `logos/${owner}-${Date.now()}.${extensao}`;
-        logoUrl = await uploadParaBunny(caminhoLogo, buffer, mime);
+        const espacoLogo = await verificarEspaco(owner, buffer.length);
+        if (espacoLogo.ok) {
+          const extensao = mime.split('/')[1].replace('+xml', '').replace('jpeg', 'jpg');
+          const caminhoLogo = `logos/${owner}-${Date.now()}.${extensao}`;
+          logoUrl = await uploadParaBunny(caminhoLogo, buffer, mime);
+          await somarEspacoUsado(owner, buffer.length);
+        } else {
+          console.error('Logótipo não enviado por falta de espaço:', espacoLogo.message);
+        }
       }
     }
 
@@ -1502,8 +1575,11 @@ app.post('/portfolio-trabalho-criar', async (req, res) => {
 
     let imagemFinal = imagem_url || '';
     if (imagem_data_url) {
-      const urlSubida = await uploadImagemBase64('trabalhos', owner, imagem_data_url);
-      if (urlSubida) imagemFinal = urlSubida;
+      const resultadoUpload = await uploadImagemBase64('trabalhos', owner, imagem_data_url);
+      if (resultadoUpload.erro) {
+        return res.json({ status: 'error', message: resultadoUpload.erro });
+      }
+      if (resultadoUpload.url) imagemFinal = resultadoUpload.url;
     }
 
     const trabalhoId = await bubbleCreate('trabalho', {
@@ -1585,8 +1661,11 @@ app.post('/portfolio-trabalho-editar', async (req, res) => {
     if (link !== undefined) dados['Link'] = link;
     if (activo !== undefined) dados['Is Active'] = !!activo;
     if (imagem_data_url) {
-      const urlSubida = await uploadImagemBase64('trabalhos', owner, imagem_data_url);
-      if (urlSubida) dados['Imagem URL'] = urlSubida;
+      const resultadoUpload = await uploadImagemBase64('trabalhos', owner, imagem_data_url);
+      if (resultadoUpload.erro) {
+        return res.json({ status: 'error', message: resultadoUpload.erro });
+      }
+      if (resultadoUpload.url) dados['Imagem URL'] = resultadoUpload.url;
     } else if (imagem_url !== undefined) {
       dados['Imagem URL'] = imagem_url;
     }
@@ -1655,8 +1734,11 @@ app.post('/blog-post-criar', async (req, res) => {
 
     let imagemFinal = imagem_url || '';
     if (imagem_data_url) {
-      const urlSubida = await uploadImagemBase64('posts', owner, imagem_data_url);
-      if (urlSubida) imagemFinal = urlSubida;
+      const resultadoUpload = await uploadImagemBase64('posts', owner, imagem_data_url);
+      if (resultadoUpload.erro) {
+        return res.json({ status: 'error', message: resultadoUpload.erro });
+      }
+      if (resultadoUpload.url) imagemFinal = resultadoUpload.url;
     }
 
     const postId = await bubbleCreate('post', {
@@ -1737,8 +1819,11 @@ app.post('/blog-post-editar', async (req, res) => {
     if (conteudo !== undefined) dados['Conteudo'] = conteudo;
     if (activo !== undefined) dados['Is Active'] = !!activo;
     if (imagem_data_url) {
-      const urlSubida = await uploadImagemBase64('posts', owner, imagem_data_url);
-      if (urlSubida) dados['Imagem URL'] = urlSubida;
+      const resultadoUpload = await uploadImagemBase64('posts', owner, imagem_data_url);
+      if (resultadoUpload.erro) {
+        return res.json({ status: 'error', message: resultadoUpload.erro });
+      }
+      if (resultadoUpload.url) dados['Imagem URL'] = resultadoUpload.url;
     } else if (imagem_url !== undefined) {
       dados['Imagem URL'] = imagem_url;
     }
@@ -1861,7 +1946,16 @@ app.post('/galeria-meus-albuns', async (req, res) => {
       });
     }
 
-    return res.json({ status: 'success', response: { albuns: lista } });
+    // Espaço usado pela conta toda (não só a Galeria - ver nota nos
+    // helpers de espaço), para mostrar um medidor nesta página.
+    const user = await bubbleGet('user', owner);
+    const plano = user && user['Plan'] ? await bubbleGet('plan', user['Plan']) : null;
+    const espaco = {
+      usado_bytes: user ? (user['Storage Used Bytes'] || 0) : 0,
+      limite_bytes: plano ? (plano['Storage Limit Bytes'] || 0) : 0
+    };
+
+    return res.json({ status: 'success', response: { albuns: lista, espaco: espaco } });
   } catch (erro) {
     console.error('Erro em /galeria-meus-albuns:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os álbuns.' });
@@ -1970,8 +2064,11 @@ app.post('/galeria-foto-adicionar', async (req, res) => {
       return res.json({ status: 'error', message: 'Não tens permissão para adicionar fotos a este álbum.' });
     }
 
-    const urlSubida = await uploadImagemBase64('galeria', owner, imagem_data_url);
-    if (!urlSubida) {
+    const resultadoUpload = await uploadImagemBase64('galeria', owner, imagem_data_url);
+    if (resultadoUpload.erro) {
+      return res.json({ status: 'error', message: resultadoUpload.erro });
+    }
+    if (!resultadoUpload.url) {
       return res.json({ status: 'error', message: 'Essa imagem não é válida.' });
     }
 
@@ -1979,9 +2076,10 @@ app.post('/galeria-foto-adicionar', async (req, res) => {
     const mediaId = await bubbleCreate('media', {
       'Album': album_id,
       'Tipo': 'foto',
-      'URL': urlSubida,
+      'URL': resultadoUpload.url,
       'Status': 'Pronto',
       'Ordem': total,
+      'Tamanho Bytes': resultadoUpload.bytes || 0,
       'Created Date': new Date().toISOString()
     });
 
@@ -2015,6 +2113,16 @@ app.post('/galeria-video-iniciar', async (req, res) => {
       return res.json({ status: 'error', message: 'Não tens permissão para adicionar vídeos a este álbum.' });
     }
 
+    // Só sabemos o tamanho real do vídeo depois do envio terminar (o
+    // ficheiro sobe directamente do browser para o Bunny, nunca passa por
+    // aqui), por isso este é só um portão: se a conta já estiver sem
+    // espaço, nem deixa começar. O espaço é mesmo somado mais tarde, em
+    // /galeria-video-estado, quando soubermos o tamanho a sério.
+    const espaco = await verificarEspaco(owner, 0);
+    if (!espaco.ok) {
+      return res.json({ status: 'error', message: espaco.message });
+    }
+
     const videoId = await criarVideoBunnyStream(titulo || album['Titulo'] || 'video');
     const expira = Math.floor(Date.now() / 1000) + 3600; // 1 hora para completar o upload
     const assinatura = assinaturaTusBunny(videoId, expira);
@@ -2044,8 +2152,7 @@ app.post('/galeria-video-iniciar', async (req, res) => {
     });
   } catch (erro) {
     console.error('Erro em /galeria-video-iniciar:', erro);
-    // DEBUG TEMPORÁRIO - remover depois de confirmarmos a causa.
-    return res.json({ status: 'error', message: 'Não foi possível iniciar o envio do vídeo.', debug: String(erro && erro.message || erro) });
+    return res.json({ status: 'error', message: 'Não foi possível iniciar o envio do vídeo.' });
   }
 });
 
@@ -2086,6 +2193,11 @@ app.post('/galeria-video-estado', async (req, res) => {
       dados['Status'] = 'Pronto';
       dados['URL'] = `https://${STREAM_CDN}/${videoId}/playlist.m3u8`;
       dados['Thumbnail URL'] = `https://${STREAM_CDN}/${videoId}/thumbnail.jpg`;
+      // Só agora sabemos o tamanho real do vídeo (o Bunny devolve-o depois
+      // de pronto) - é agora que entra na conta do espaço usado.
+      const bytesVideo = infoVideo.storageSize || 0;
+      dados['Tamanho Bytes'] = bytesVideo;
+      await somarEspacoUsado(owner, bytesVideo);
     } else if (infoVideo.status === 5 || infoVideo.status === 6) {
       novoEstado = 'Erro';
       dados['Status'] = 'Erro';
@@ -2130,6 +2242,7 @@ app.post('/galeria-media-apagar', async (req, res) => {
     if (media['Tipo'] === 'video' && media['Bunny Video ID']) {
       await apagarVideoBunnyStream(media['Bunny Video ID']);
     }
+    await subtrairEspacoUsado(owner, media['Tamanho Bytes'] || 0);
     await bubbleDelete('media', media_id);
 
     return res.json({ status: 'success' });
