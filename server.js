@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.40.1';
+const VERSION = '1.41.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -56,7 +56,13 @@ const BUNNY_API_KEY = clean(process.env.BUNNY_API_KEY);
 const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
 const OPENAI_MODEL = clean(process.env.OPENAI_MODEL) || 'gpt-5.6-sol';
 const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'low';
-const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 16000;
+// Subido de 16000 para 32000 a 12/10/2026: com a instrução "capricha
+// sempre, nunca curto" (pedida depois), o raciocínio interno do modelo
+// passou a gastar o tecto todo antes de sobrar espaço para o HTML visível,
+// voltando a dar "resposta vazia" (ver erro "A OpenAI devolveu uma
+// resposta vazia ou demasiado curta" nos logs). 32000 dá folga de sobra
+// tanto para o raciocínio como para um HTML completo e bem desenvolvido.
+const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 32000;
 
 // ---- MozPayment ----
 // Credenciais da conta MozPayment da Daniel.ia (diferente da carteira do
