@@ -843,30 +843,51 @@ app.post('/dominio-configurar', async (req, res) => {
     // a tentar outra vez) - reaproveita em vez de criar outra a mais.
     let pullZoneId = site['Dominio Pull Zone Id'];
     let hostnameCdn = site['Dominio Hostname'];
+    const nomePullZone = 'dominio-' + site_id;
 
     if (!pullZoneId) {
       const storageZoneId = await obterIdStorageZone();
-      const pullZone = await bunnyApi('POST', '/pullzone', {
-        Name: 'dominio-' + site_id,
-        OriginType: 2,
-        StorageZoneId: storageZoneId
-      });
+
+      let pullZone;
+      try {
+        pullZone = await bunnyApi('POST', '/pullzone', {
+          Name: nomePullZone,
+          OriginType: 2,
+          StorageZoneId: storageZoneId
+        });
+      } catch (erroCriar) {
+        // Já existe uma Pull Zone com este nome - provavelmente um pedido
+        // duplicado (ex: reenvio automático) chegou a criá-la mesmo agora.
+        // Em vez de falhar, vamos buscá-la e continuar a partir dela.
+        if (String(erroCriar && erroCriar.message || '').includes('name_taken')) {
+          const resultadoBusca = await bunnyApi('GET', '/pullzone?search=' + encodeURIComponent(nomePullZone) + '&perPage=20');
+          const listaZonas = (resultadoBusca && resultadoBusca.Items) || (Array.isArray(resultadoBusca) ? resultadoBusca : []);
+          pullZone = listaZonas.find(z => z.Name === nomePullZone);
+          if (!pullZone) throw erroCriar;
+        } else {
+          throw erroCriar;
+        }
+      }
+
       pullZoneId = pullZone.Id;
       hostnameCdn = (pullZone.Hostnames && pullZone.Hostnames[0] && pullZone.Hostnames[0].Value) || null;
       if (!hostnameCdn) {
         throw new Error('A Pull Zone foi criada mas a Bunny não devolveu nenhum endereço .b-cdn.net.');
       }
-
-      await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
-        ActionType: 2, // Change Origin URL
-        ActionParameter1: site['CDN URL'],
-        Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
-        TriggerMatchingType: 0,
-        Enabled: true,
-        OrderIndex: 0,
-        Description: 'Domínio personalizado - sempre este site'
-      });
     }
+
+    // Garante sempre a regra certa a apontar para este site - mesmo que a
+    // Pull Zone já existisse de uma tentativa anterior (addOrUpdate é
+    // seguro de repetir, não cria regras a mais).
+    await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
+      ActionType: 2, // Change Origin URL
+      ActionParameter1: site['CDN URL'],
+      Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
+      TriggerMatchingType: 0,
+      Enabled: true,
+      OrderIndex: 0,
+      Description: 'Domínio personalizado - sempre este site'
+    });
 
     await bubblePatch('site', site_id, {
       'Dominio Personalizado': dominioLimpo,
