@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.37.0';
+const VERSION = '1.37.1';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2744,13 +2744,26 @@ app.post('/account', async (req, res) => {
 
     let nomePlano = '';
     let tokensIncluidos = 0;
+    let planoErro = '';
     if (user['Plan']) {
-      const plano = await bubbleGet('plan', user['Plan']);
-      if (plano) {
-        nomePlano = plano['Name'] || '';
-        tokensIncluidos = plano['Tokens Incluidos'] || 0;
+      try {
+        const plano = await bubbleGet('plan', user['Plan']);
+        if (plano) {
+          nomePlano = plano['Name'] || '';
+          tokensIncluidos = plano['Tokens Incluidos'] || 0;
+        } else {
+          planoErro = 'bubbleGet do plano devolveu vazio';
+        }
+      } catch (erroPlano) {
+        console.error('Erro a ler o plano em /account:', erroPlano);
+        planoErro = String(erroPlano && erroPlano.message || erroPlano);
       }
     }
+
+    // DEBUG TEMPORÁRIO (remover depois de confirmado) — mostra exactamente
+    // o que veio do Bubble, para percebermos se falta Full Name / Plan
+    // nesta conta ou se é um problema de leitura.
+    console.log('[/account] owner=' + owner + ' userKeys=' + JSON.stringify(Object.keys(user || {})) + ' Plan=' + JSON.stringify(user['Plan']) + ' FullName=' + JSON.stringify(user['Full Name']));
 
     return res.json({
       status: 'success',
@@ -2759,6 +2772,15 @@ app.post('/account', async (req, res) => {
         plano: nomePlano,
         tokens_usados: user['Tokens Usados Mes'] || 0,
         tokens_incluidos: tokensIncluidos
+      },
+      _debug: {
+        owner: owner,
+        user_keys: Object.keys(user || {}),
+        tem_full_name: Object.prototype.hasOwnProperty.call(user, 'Full Name'),
+        valor_full_name: user['Full Name'],
+        tem_plan: Object.prototype.hasOwnProperty.call(user, 'Plan'),
+        valor_plan: user['Plan'],
+        erro_ao_ler_plano: planoErro
       }
     });
   } catch (erro) {
