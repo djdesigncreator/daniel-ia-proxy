@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.41.1';
+const VERSION = '1.42.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -772,6 +772,189 @@ app.post('/dominio-teste', async (req, res) => {
         console.error('Não consegui apagar a Pull Zone de teste ' + pullZoneId + ':', erroApagar);
       }
     }
+  }
+});
+
+// ======================================================
+// Domínio personalizado por site (definitivo)
+// ======================================================
+// Confirmado a 12/10/2026 com a rota /dominio-teste acima: uma Pull Zone
+// nova por domínio, com uma Edge Rule "Change Origin URL" a apontar sempre
+// para o endereço público da CDN do site, funciona. Esta secção é a
+// versão a sério, ligada ao Site no Bubble.
+
+// Limpa um texto de domínio escrito pela pessoa: tira espaços, "http(s)://"
+// e uma barra final, se vierem por engano.
+function limparDominio(valor) {
+  return String(valor || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/+$/, '');
+}
+
+// Só letras/números/pontos/hífens, pelo menos um ponto no meio - sem ser
+// perfeito, chega para rejeitar texto claramente errado (com espaços,
+// barras, @, etc.) antes de irmos incomodar a API da Bunny.
+function dominioParecevalido(dominio) {
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(dominio);
+}
+
+// Passo 1: a pessoa mete o domínio dela e clicamos em "Configurar". Cria a
+// Pull Zone e a regra na Bunny, grava tudo no Site, e devolve o hostname
+// .b-cdn.net para ela criar o CNAME no sítio onde comprou o domínio.
+app.post('/dominio-configurar', async (req, res) => {
+  try {
+    const { owner, site_id, dominio } = req.body;
+    if (!owner || !site_id || !dominio) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id e dominio são obrigatórios.' });
+    }
+    if (!BUNNY_API_KEY) {
+      return res.json({ status: 'error', message: 'A variável BUNNY_API_KEY não está configurada neste container.' });
+    }
+
+    const dominioLimpo = limparDominio(dominio);
+    if (!dominioParecevalido(dominioLimpo)) {
+      return res.json({ status: 'error', message: 'Esse domínio não parece válido. Exemplo do formato esperado: lojamaputo.co.mz' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site) {
+      return res.json({ status: 'error', message: 'Projecto não encontrado.' });
+    }
+    if (site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    }
+    if (site['Status'] !== 'Pronto' || !site['CDN URL']) {
+      return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
+    }
+
+    const user = await bubbleGet('user', owner);
+    if (!user) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+    const planId = await garantirPlano(owner, user);
+    const plano = planId ? await bubbleGet('plan', planId) : null;
+    if (!plano || !plano['Permite Dominio']) {
+      return res.json({ status: 'error', message: 'O teu plano actual não inclui domínio próprio. Muda de plano para usares esta funcionalidade.' });
+    }
+
+    // Já tinha uma Pull Zone configurada para este site (ex: a pessoa está
+    // a tentar outra vez) - reaproveita em vez de criar outra a mais.
+    let pullZoneId = site['Dominio Pull Zone Id'];
+    let hostnameCdn = site['Dominio Hostname'];
+
+    if (!pullZoneId) {
+      const storageZoneId = await obterIdStorageZone();
+      const pullZone = await bunnyApi('POST', '/pullzone', {
+        Name: 'dominio-' + site_id,
+        OriginType: 2,
+        StorageZoneId: storageZoneId
+      });
+      pullZoneId = pullZone.Id;
+      hostnameCdn = (pullZone.Hostnames && pullZone.Hostnames[0] && pullZone.Hostnames[0].Value) || null;
+      if (!hostnameCdn) {
+        throw new Error('A Pull Zone foi criada mas a Bunny não devolveu nenhum endereço .b-cdn.net.');
+      }
+
+      await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
+        ActionType: 2, // Change Origin URL
+        ActionParameter1: site['CDN URL'],
+        Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
+        TriggerMatchingType: 0,
+        Enabled: true,
+        OrderIndex: 0,
+        Description: 'Domínio personalizado - sempre este site'
+      });
+    }
+
+    await bubblePatch('site', site_id, {
+      'Dominio Personalizado': dominioLimpo,
+      'Dominio Pull Zone Id': pullZoneId,
+      'Dominio Hostname': hostnameCdn,
+      'Dominio Estado': 'Pendente'
+    });
+
+    return res.json({
+      status: 'success',
+      response: {
+        dominio: dominioLimpo,
+        cname_valor: hostnameCdn,
+        instrucao: 'No sítio onde geriste o domínio "' + dominioLimpo + '", cria um registo CNAME com o nome "@" (ou "www", conforme o que quiseres usar) a apontar para "' + hostnameCdn + '". Depois de guardares, volta aqui e clica em Verificar.'
+      }
+    });
+
+  } catch (erro) {
+    console.error('Erro em /dominio-configurar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível configurar o domínio. Tenta novamente.' });
+  }
+});
+
+// Passo 2: depois de ela ter criado o CNAME lá fora, clica em "Verificar".
+// Tentamos ligar o domínio à Pull Zone e activar o certificado SSL grátis -
+// isto só funciona mesmo se o CNAME já estiver a apontar correctamente
+// (a Bunny valida isso sozinha ao tentar emitir o certificado), por isso
+// esta rota pode ser chamada várias vezes sem problema, enquanto a pessoa
+// espera o DNS propagar.
+app.post('/dominio-verificar', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    if (!owner || !site_id) {
+      return res.json({ status: 'error', message: 'Falta o site_id.' });
+    }
+    if (!BUNNY_API_KEY) {
+      return res.json({ status: 'error', message: 'A variável BUNNY_API_KEY não está configurada neste container.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site) {
+      return res.json({ status: 'error', message: 'Projecto não encontrado.' });
+    }
+    if (site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    }
+    const pullZoneId = site['Dominio Pull Zone Id'];
+    const dominio = site['Dominio Personalizado'];
+    if (!pullZoneId || !dominio) {
+      return res.json({ status: 'error', message: 'Ainda não configuraste nenhum domínio para este projecto.' });
+    }
+
+    // Associar o hostname à Pull Zone - se já estiver associado de uma
+    // tentativa anterior, a Bunny não costuma reclamar por repetirmos.
+    try {
+      await bunnyApi('POST', '/pullzone/' + pullZoneId + '/addHostname', { Hostname: dominio });
+    } catch (erroHostname) {
+      console.error('Erro ao associar hostname em /dominio-verificar:', erroHostname);
+    }
+
+    // Tentar emitir o certificado SSL grátis - isto é que falha mesmo se o
+    // CNAME ainda não estiver a apontar bem, por isso é o teste real.
+    try {
+      await bunnyApi('GET', '/pullzone/loadFreeCertificate?hostname=' + encodeURIComponent(dominio));
+    } catch (erroCertificado) {
+      console.error('Certificado ainda não emitido em /dominio-verificar:', erroCertificado);
+      return res.json({
+        status: 'success',
+        response: {
+          activo: false,
+          mensagem: 'O domínio ainda não está a apontar correctamente, ou o DNS ainda não propagou. Isto pode demorar entre alguns minutos a algumas horas depois de criares o CNAME. Tenta "Verificar" outra vez daqui a pouco.'
+        }
+      });
+    }
+
+    await bubblePatch('site', site_id, { 'Dominio Estado': 'Activo' });
+
+    return res.json({
+      status: 'success',
+      response: {
+        activo: true,
+        mensagem: 'O domínio "' + dominio + '" já está ligado e com HTTPS activo.'
+      }
+    });
+
+  } catch (erro) {
+    console.error('Erro em /dominio-verificar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível verificar o domínio. Tenta novamente.' });
   }
 });
 
