@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.42.0';
+const VERSION = '1.42.1';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -3146,7 +3146,10 @@ app.post('/meus-sites', async (req, res) => {
       tipo: s['Tipo'],
       estado: s['Status'],
       cdn_url: s['CDN URL'] || '',
-      criado: s['Created Date']
+      criado: s['Created Date'],
+      dominio: s['Dominio Personalizado'] || '',
+      dominio_estado: s['Dominio Estado'] || '',
+      dominio_hostname: s['Dominio Hostname'] || ''
     }));
 
     return res.json({ status: 'success', response: { sites: lista } });
