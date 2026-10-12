@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.38.0';
+const VERSION = '1.39.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -605,6 +605,130 @@ async function uploadParaBunny(caminho, buffer, contentType) {
   // (confirmado a testar: só funcionou com /daniel-ia/ no meio do URL).
   return `https://${CDN_HOST}/${STORAGE_ZONE}/${caminho}`;
 }
+
+// ======================================================
+// TESTE TEMPORÁRIO - domínios personalizados dos clientes
+// ======================================================
+// Isto não é uma funcionalidade definitiva - é só para confirmar, com um
+// teste real na conta Bunny da Daniel.ia, se a técnica que queremos usar
+// para domínios personalizados (uma Pull Zone nova por domínio, com uma
+// regra que faz qualquer pedido ir sempre buscar o mesmo ficheiro) sequer
+// funciona. Cria uma Pull Zone de teste, tenta a regra, testa-a a sério
+// pedindo um caminho ao calhas, e no fim apaga sempre a Pull Zone de teste
+// - não fica nada a mais na conta Bunny, nem a funcionar nem a falhar.
+// Depois de confirmarmos que funciona, isto é substituído pela versão
+// definitiva (ligada a Site/dominio no Bubble). Remover esta rota nessa altura.
+
+let bunnyStorageZoneIdCache = null;
+
+async function bunnyApi(metodo, caminho, corpo) {
+  const res = await fetch('https://api.bunny.net' + caminho, {
+    method: metodo,
+    headers: Object.assign(
+      { AccessKey: BUNNY_API_KEY },
+      corpo ? { 'Content-Type': 'application/json' } : {}
+    ),
+    body: corpo ? JSON.stringify(corpo) : undefined
+  });
+  const texto = await res.text();
+  let json = null;
+  try { json = texto ? JSON.parse(texto) : null; } catch (e) { /* resposta vazia, ex: no delete */ }
+  if (!res.ok) {
+    throw new Error('Bunny API devolveu ' + res.status + ': ' + texto);
+  }
+  return json;
+}
+
+async function obterIdStorageZone() {
+  if (bunnyStorageZoneIdCache) return bunnyStorageZoneIdCache;
+  const zonas = await bunnyApi('GET', '/storagezone');
+  const zona = (zonas || []).find(z => z.Name === STORAGE_ZONE);
+  if (!zona) throw new Error('Não encontrei nenhuma storage zone chamada "' + STORAGE_ZONE + '" nesta conta Bunny.');
+  bunnyStorageZoneIdCache = zona.Id;
+  return zona.Id;
+}
+
+app.post('/dominio-teste', async (req, res) => {
+  const passos = [];
+  let pullZoneId = null;
+  try {
+    if (!BUNNY_API_KEY) {
+      return res.json({ status: 'error', message: 'A variável BUNNY_API_KEY não está configurada neste container.' });
+    }
+    const { site_url } = req.body;
+    if (!site_url) {
+      return res.json({ status: 'error', message: 'Falta o link do site de teste.' });
+    }
+
+    // ---- 1. Transformar o link do site no caminho dentro da storage zone ----
+    const prefixo = `https://${CDN_HOST}/${STORAGE_ZONE}/`;
+    if (!String(site_url).startsWith(prefixo)) {
+      return res.json({ status: 'error', message: 'Esse link não parece ser de um site da Daniel.ia (tinha de começar por ' + prefixo + ').' });
+    }
+    const caminhoSite = site_url.slice(prefixo.length);
+    passos.push('Site de teste: ' + caminhoSite);
+
+    // ---- 2. Descobrir o ID da storage zone ----
+    const storageZoneId = await obterIdStorageZone();
+    passos.push('Storage zone "' + STORAGE_ZONE + '" encontrada (id ' + storageZoneId + ')');
+
+    // ---- 3. Criar uma Pull Zone de teste, apontada a essa storage zone ----
+    const nomeZona = 'teste-dominio-' + Date.now();
+    const pullZone = await bunnyApi('POST', '/pullzone', {
+      Name: nomeZona,
+      OriginType: 2,
+      StorageZoneId: storageZoneId
+    });
+    pullZoneId = pullZone.Id;
+    const hostnameTeste = (pullZone.Hostnames && pullZone.Hostnames[0] && pullZone.Hostnames[0].Value) || null;
+    if (!hostnameTeste) {
+      throw new Error('A Pull Zone de teste foi criada mas a Bunny não devolveu nenhum endereço .b-cdn.net.');
+    }
+    passos.push('Pull Zone de teste criada: ' + nomeZona + ' -> ' + hostnameTeste);
+
+    // ---- 4. Criar a regra: qualquer pedido nesta zona vai sempre buscar o mesmo ficheiro ----
+    const origemFixa = 'https://' + STORAGE_HOST + '/' + STORAGE_ZONE + '/' + caminhoSite;
+    await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
+      ActionType: 2, // Change Origin URL
+      ActionParameter1: origemFixa,
+      Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
+      TriggerMatchingType: 0,
+      Enabled: true,
+      OrderIndex: 0,
+      Description: 'Teste - sempre o mesmo ficheiro'
+    });
+    passos.push('Regra criada a apontar sempre para: ' + origemFixa);
+
+    // ---- 5. Esperar a regra ficar activa e testar a sério ----
+    await new Promise(r => setTimeout(r, 5000));
+    const caminhoAoCalhas = '/isto-nao-existe-' + Math.random().toString(36).slice(2, 8);
+    const respTeste = await fetch('https://' + hostnameTeste + caminhoAoCalhas);
+    const corpoTeste = await respTeste.text();
+    const funcionou = respTeste.ok && corpoTeste.toLowerCase().includes('<html');
+    passos.push('Pedido de teste a ' + hostnameTeste + caminhoAoCalhas + ' devolveu estado ' + respTeste.status + ' (' + corpoTeste.length + ' caracteres)');
+
+    return res.json({
+      status: 'success',
+      response: {
+        funcionou: funcionou,
+        passos: passos,
+        amostra: corpoTeste.slice(0, 400)
+      }
+    });
+
+  } catch (erro) {
+    console.error('Erro em /dominio-teste:', erro);
+    return res.json({ status: 'error', message: String(erro && erro.message || erro), passos: passos });
+  } finally {
+    if (pullZoneId) {
+      try {
+        await bunnyApi('DELETE', '/pullzone/' + pullZoneId);
+      } catch (erroApagar) {
+        console.error('Não consegui apagar a Pull Zone de teste ' + pullZoneId + ':', erroApagar);
+      }
+    }
+  }
+});
 
 // Limpa a cache da CDN para um URL específico. Usado depois de editar um
 // site (reescrevemos o mesmo ficheiro no mesmo caminho) para a pessoa ver
