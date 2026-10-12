@@ -891,7 +891,7 @@ app.post('/dominio-configurar', async (req, res) => {
 
     await bubblePatch('site', site_id, {
       'Dominio Personalizado': dominioLimpo,
-      'Dominio Pull Zone Id': pullZoneId,
+      'Dominio Pull Zone Id': String(pullZoneId),
       'Dominio Hostname': hostnameCdn,
       'Dominio Estado': 'Pendente'
     });
