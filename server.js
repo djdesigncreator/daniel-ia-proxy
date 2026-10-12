@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.35.0';
+const VERSION = '1.36.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -74,6 +74,9 @@ const SELF_URL = clean(process.env.SELF_URL) || 'https://mc-8oxfde5o71.bunny.run
 // Endereço do dashboard da app Daniel.ia - usado para onde a pessoa volta
 // depois de assinar um plano (ver /assinatura-obrigado).
 const APP_URL = clean(process.env.APP_URL) || 'https://daniel-ia.pro/dashboard';
+// Endereço da página de planos - só para o botão do email de aviso de
+// expiração (ver templateEmailAvisoExpiracao). Mesma base do APP_URL.
+const PLANOS_URL = APP_URL.replace(/\/dashboard\/?$/, '/planos');
 
 // ---- Resend (email transaccional - código de confirmação do cadastro) ----
 const RESEND_KEY = clean(process.env.RESEND_KEY);
@@ -510,6 +513,66 @@ ${linhasItens}
 <tr>
 <td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
 <p style="margin:0;color:#B5B2C4;font-size:11.5px;">Enviado via Daniel.ia · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Email formatado (HTML com estilos inline) - avisa que um plano pago
+// está prestes a expirar, para a pessoa renovar antes de perder acesso.
+function templateEmailAvisoExpiracao(nome, nomePlano, dataExpira, diasRestantes) {
+  const primeiroNome = escaparHtml(String(nome || '').trim().split(' ')[0] || '');
+  const saudacao = primeiroNome ? `Olá, ${primeiroNome}.` : 'Olá.';
+  const plano = escaparHtml(nomePlano || 'o teu plano');
+  const dataFormatada = escaparHtml(formatarDataPt(dataExpira));
+  const fraseDias = diasRestantes <= 0
+    ? 'expira hoje'
+    : diasRestantes === 1
+      ? 'expira amanhã'
+      : `expira daqui a ${diasRestantes} dias`;
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>O teu plano está a expirar - Daniel.ia</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<tr>
+<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
+<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">O teu plano <strong>${plano}</strong> ${fraseDias}. Renova antes dessa data para não perderes o acesso às funcionalidades pagas.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFF8EB;border:1px solid #F2DFAF;border-radius:12px;">
+<tr>
+<td style="padding:18px 20px;">
+<span style="display:block;color:#A66A00;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Data de expiração</span>
+<span style="display:block;color:#7A4E00;font-size:16px;font-weight:700;">${dataFormatada}</span>
+</td>
+</tr>
+</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+<tr><td align="center">
+<a href="${PLANOS_URL}" style="display:inline-block;background:linear-gradient(135deg,#A855F7,#6366F1);color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:13px 28px;border-radius:10px;">Renovar agora</a>
+</td></tr>
+</table>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
+<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -4168,7 +4231,8 @@ app.post('/assinatura-iniciar', async (req, res) => {
       await bubblePatch('user', owner, {
         'Plan': plano_id,
         'Plan Started': agora.toISOString(),
-        'Plan Expires': expira.toISOString()
+        'Plan Expires': expira.toISOString(),
+        'Aviso Enviado': false
       });
       return res.json({ status: 'success', response: { gratis: true, nome_plano: plano['Name'] } });
     }
@@ -4541,7 +4605,8 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
       'Plan': assinatura['Plano'],
       'Plan Started': agora.toISOString(),
       'Plan Expires': expira.toISOString(),
-      'Tokens Usados Mes': 0
+      'Tokens Usados Mes': 0,
+      'Aviso Enviado': false
     });
 
     console.log('Assinatura paga e plano actualizado:', assinatura._id);
@@ -4666,6 +4731,80 @@ app.post('/verify-code', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /verify-code:', erro);
     return res.json({ status: 'error', message: 'Não foi possível confirmar o código. Tenta novamente.' });
+  }
+});
+
+// ======================================================
+// Aviso de expiração de plano
+// ======================================================
+// Em vez de depender de um workflow agendado no Bubble (o que obrigaria a
+// instalar o plugin API Connector só para isto), o próprio container
+// verifica sozinho quem tem um plano PAGO a expirar em breve e manda o
+// aviso por Resend. Idempotente - o campo "Aviso Enviado" no User impede
+// avisos repetidos; só é limpo de novo quando a assinatura é renovada
+// (ver /wh-assinatura-dk7x2mq9pw).
+//
+// Campo novo no Bubble antes disto funcionar: tipo User, campo
+// "Aviso Enviado" (yes/no).
+const DIAS_AVISO_EXPIRACAO = 3;
+
+async function verificarAvisosExpiracao() {
+  try {
+    const agora = new Date();
+    const limite = new Date(agora.getTime() + DIAS_AVISO_EXPIRACAO * 24 * 60 * 60 * 1000);
+
+    const utilizadores = await bubbleList('user', [
+      { key: 'Plan Expires', constraint_type: 'greater than', value: agora.toISOString() },
+      { key: 'Plan Expires', constraint_type: 'less than', value: limite.toISOString() },
+      { key: 'Aviso Enviado', constraint_type: 'not equal', value: true }
+    ]);
+
+    console.log(`Verificação de avisos de expiração: ${utilizadores.length} conta(s) dentro da janela de ${DIAS_AVISO_EXPIRACAO} dias.`);
+
+    for (const usuario of utilizadores) {
+      try {
+        const emailDestino =
+          usuario.email ||
+          (usuario.authentication && usuario.authentication.email && usuario.authentication.email.email) ||
+          '';
+        if (!emailDestino || !usuario['Plan']) continue;
+
+        const plano = await bubbleGet('plan', usuario['Plan']);
+        if (!plano || !(plano['Price MZN'] > 0)) continue; // plano grátis - nunca avisa
+
+        const dataExpira = new Date(usuario['Plan Expires']);
+        const diasRestantes = Math.max(0, Math.ceil((dataExpira.getTime() - agora.getTime()) / (24 * 60 * 60 * 1000)));
+
+        await enviarEmail(
+          emailDestino,
+          'O teu plano está prestes a expirar - Daniel.ia',
+          templateEmailAvisoExpiracao(usuario['Full Name'], plano['Name'], dataExpira, diasRestantes)
+        );
+        await bubblePatch('user', usuario._id, { 'Aviso Enviado': true });
+        console.log('Aviso de expiração enviado:', usuario._id);
+      } catch (erroUsuario) {
+        console.error('Falhou o aviso de expiração para', usuario._id, erroUsuario);
+      }
+    }
+  } catch (erro) {
+    console.error('Erro ao verificar avisos de expiração:', erro);
+  }
+}
+
+// Corre pouco depois do arranque (dá tempo às variáveis de ambiente
+// ficarem disponíveis) e depois repete a cada 24 horas, sozinho.
+setTimeout(verificarAvisosExpiracao, 60 * 1000);
+setInterval(verificarAvisosExpiracao, 24 * 60 * 60 * 1000);
+
+// Rota para testares a verificação na hora, sem esperar pelo ciclo
+// automático - endereço pouco óbvio de propósito, mesmo padrão dos
+// webhooks. Devolve quantas contas foram avisadas desta vez.
+app.post('/plan-warnings-teste-7hq2fx', async (req, res) => {
+  try {
+    await verificarAvisosExpiracao();
+    return res.json({ status: 'success', message: 'Verificação feita - ver os logs do container para detalhes.' });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Falhou: ' + erro.message });
   }
 });
 
