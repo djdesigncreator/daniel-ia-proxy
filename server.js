@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.32.0';
+const VERSION = '1.34.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -73,7 +73,13 @@ const SELF_URL = clean(process.env.SELF_URL) || 'https://mc-8oxfde5o71.bunny.run
 
 // Endereço do dashboard da app Daniel.ia - usado para onde a pessoa volta
 // depois de assinar um plano (ver /assinatura-obrigado).
-const APP_URL = clean(process.env.APP_URL) || 'https://daniel-ia.com/dashboard';
+const APP_URL = clean(process.env.APP_URL) || 'https://daniel-ia.pro/dashboard';
+
+// ---- Resend (email transaccional - código de confirmação do cadastro) ----
+const RESEND_KEY = clean(process.env.RESEND_KEY);
+// MAIL_FROM pode vir só como endereço ("naoresponder@daniel-ia.pro") ou já
+// formatado ("Daniel.ia <naoresponder@daniel-ia.pro>") - aceitamos os dois.
+const MAIL_FROM = clean(process.env.MAIL_FROM) || 'naoresponder@daniel-ia.pro';
 
 // ---- Bunny Stream (vídeo da Galeria) ----
 // Video Library própria da conta Bunny do Daniel.ia, separada da storage
@@ -183,6 +189,163 @@ async function bubbleDelete(tipo, id) {
     const json = await res.json().catch(() => ({}));
     throw new Error('bubbleDelete falhou: ' + JSON.stringify(json));
   }
+}
+
+// ======================================================
+// Helpers - Email (Resend) e código de confirmação
+// ======================================================
+
+// Código de 8 caracteres (0-9, A-F) - fácil de ler e de escrever no
+// telemóvel, com espaço suficiente para não haver colisões práticas.
+function gerarCodigo() {
+  return crypto.randomBytes(6).toString('hex').toUpperCase().slice(0, 8);
+}
+
+// Formata uma data em português (ex: "12 de Novembro de 2026") sem
+// depender do Node ter o pacote completo de ICU instalado (ao contrário
+// de toLocaleDateString, que no servidor nem sempre está disponível).
+function formatarDataPt(data) {
+  var meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  return data.getDate() + ' de ' + meses[data.getMonth()] + ' de ' + data.getFullYear();
+}
+
+// Envia um email pelo Resend, usando o domínio verificado daniel-ia.pro.
+async function enviarEmail(destinatario, assunto, html) {
+  if (!RESEND_KEY) throw new Error('Falta a variável RESEND_KEY no container.');
+  const remetente = MAIL_FROM.includes('<') ? MAIL_FROM : `Daniel.ia <${MAIL_FROM}>`;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: remetente,
+      to: [destinatario],
+      subject: assunto,
+      html
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error('enviarEmail falhou: ' + JSON.stringify(json));
+  return json;
+}
+
+// Email formatado (HTML com estilos inline, compatível com Gmail/Outlook)
+// para o código de confirmação do cadastro - mesma identidade visual do
+// resto do Daniel.ia (gradiente roxo->índigo, cartão claro).
+function templateEmailCodigo(nome, codigo) {
+  const primeiroNome = escaparHtml(String(nome || '').trim().split(' ')[0] || '');
+  const saudacao = primeiroNome ? `Olá, ${primeiroNome}.` : 'Olá.';
+  const codigoEspacado = escaparHtml(String(codigo).split('').join(' '));
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>O teu código - Daniel.ia</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<tr>
+<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
+<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 28px 0;color:#6B6880;font-size:14px;line-height:1.6;">Usa o código abaixo para confirmares o teu email e activares a tua conta no Daniel.ia. Este código expira em 15 minutos.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<tr><td align="center" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;padding:20px;">
+<span style="font-family:'Courier New',Courier,monospace;font-size:28px;font-weight:700;letter-spacing:6px;color:#14121F;">${codigoEspacado}</span>
+</td></tr>
+</table>
+<p style="margin:24px 0 0 0;color:#9B98AE;font-size:12.5px;line-height:1.6;">Se não pediste esta conta, ignora este email - ninguém mais consegue entrar sem este código.</p>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
+<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Email formatado (HTML com estilos inline) para confirmar que uma
+// assinatura de plano foi paga e aplicada - mesma identidade visual do
+// email do código de confirmação.
+function templateEmailAssinatura(nome, nomePlano, valorMzn, expiraEm) {
+  const primeiroNome = escaparHtml(String(nome || '').trim().split(' ')[0] || '');
+  const saudacao = primeiroNome ? `Olá, ${primeiroNome}.` : 'Olá.';
+  const plano = escaparHtml(nomePlano || '');
+  const valorFormatado = escaparHtml(Number(valorMzn || 0).toLocaleString('pt-PT') + ' MZN');
+  const dataFormatada = escaparHtml(formatarDataPt(expiraEm));
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Assinatura confirmada - Daniel.ia</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<tr>
+<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
+<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">O teu pagamento foi confirmado e a tua assinatura já está activa. Obrigado por confiares no Daniel.ia.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;">
+<tr>
+<td style="padding:18px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Plano</span>
+<span style="display:block;color:#14121F;font-size:16px;font-weight:700;">${plano}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Valor pago</span>
+<span style="display:block;color:#14121F;font-size:16px;font-weight:700;">${valorFormatado}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 20px;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Válido até</span>
+<span style="display:block;color:#14121F;font-size:16px;font-weight:700;">${dataFormatada}</span>
+</td>
+</tr>
+</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+<tr><td align="center">
+<a href="${APP_URL}" style="display:inline-block;background:linear-gradient(135deg,#A855F7,#6366F1);color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:13px 28px;border-radius:10px;">Ir para o dashboard</a>
+</td></tr>
+</table>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
+<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
 }
 
 // ======================================================
@@ -4177,8 +4340,114 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
     });
 
     console.log('Assinatura paga e plano actualizado:', assinatura._id);
+
+    // ---- Email de confirmação (não deixa o webhook falhar se o email falhar) ----
+    try {
+      const usuario = await bubbleGet('user', assinatura['User']);
+      const emailDestino =
+        usuario.email ||
+        (usuario.authentication && usuario.authentication.email && usuario.authentication.email.email) ||
+        '';
+      const plano = await bubbleGet('plan', assinatura['Plano']);
+      if (emailDestino) {
+        await enviarEmail(
+          emailDestino,
+          'Assinatura confirmada - Daniel.ia',
+          templateEmailAssinatura(usuario['Full Name'], plano ? plano['Name'] : assinatura['Plano'], assinatura['Valor MZN'], expira)
+        );
+      }
+    } catch (erroEmail) {
+      console.error('Assinatura aplicada, mas o email de confirmação falhou:', erroEmail);
+    }
   } catch (erro) {
     console.error('Erro ao processar webhook da assinatura:', erro);
+  }
+});
+
+// ======================================================
+// Confirmação de email por código (cadastro)
+// ======================================================
+
+// Gera um código novo, grava-o no User e envia-o por email (Resend).
+// Chamado pelo backend workflow `signup` do Bubble logo a seguir a criar
+// a conta, e também pelo botão "Reenviar código" do ecrã de confirmação.
+app.post('/signup-code', async (req, res) => {
+  try {
+    const { owner } = req.body;
+    if (!owner) {
+      return res.json({ status: 'error', message: 'Falta o owner.' });
+    }
+
+    const usuario = await bubbleGet('user', owner);
+    if (!usuario) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+
+    const emailDestino =
+      usuario.email ||
+      (usuario.authentication && usuario.authentication.email && usuario.authentication.email.email) ||
+      '';
+    if (!emailDestino) {
+      return res.json({ status: 'error', message: 'Esta conta não tem email associado.' });
+    }
+
+    const codigo = gerarCodigo();
+    const expira = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos
+
+    await bubblePatch('user', owner, {
+      'Token': codigo,
+      'Token Confirmado': false,
+      'Token Expires': expira.toISOString()
+    });
+
+    await enviarEmail(
+      emailDestino,
+      'O teu código de confirmação - Daniel.ia',
+      templateEmailCodigo(usuario['Full Name'], codigo)
+    );
+
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /signup-code:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível enviar o código. Tenta novamente.' });
+  }
+});
+
+// Confirma o código que a pessoa escreveu contra o que está gravado no
+// User. Marca "Token Confirmado" a true se bater certo e ainda não tiver
+// expirado.
+app.post('/verify-code', async (req, res) => {
+  try {
+    const { owner, code } = req.body;
+    if (!owner || !code) {
+      return res.json({ status: 'error', message: 'Falta o owner ou o código.' });
+    }
+
+    const usuario = await bubbleGet('user', owner);
+    if (!usuario) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+
+    if (usuario['Token Confirmado']) {
+      return res.json({ status: 'success' }); // já estava confirmado antes, sem mal nenhum
+    }
+
+    const codigoCerto = String(usuario['Token'] || '').trim().toUpperCase();
+    const codigoRecebido = String(code || '').trim().toUpperCase();
+    if (!codigoCerto || codigoRecebido !== codigoCerto) {
+      return res.json({ status: 'error', message: 'Código incorrecto.' });
+    }
+
+    const expiraEm = usuario['Token Expires'] ? new Date(usuario['Token Expires']) : null;
+    if (!expiraEm || isNaN(expiraEm.getTime()) || expiraEm.getTime() < Date.now()) {
+      return res.json({ status: 'error', message: 'Este código expirou. Pede um novo.' });
+    }
+
+    await bubblePatch('user', owner, { 'Token Confirmado': true });
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /verify-code:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível confirmar o código. Tenta novamente.' });
   }
 });
 
