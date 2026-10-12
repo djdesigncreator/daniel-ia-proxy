@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.41.0';
+const VERSION = '1.41.1';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -728,7 +728,11 @@ app.post('/dominio-teste', async (req, res) => {
     passos.push('Pull Zone de teste criada: ' + nomeZona + ' -> ' + hostnameTeste);
 
     // ---- 4. Criar a regra: qualquer pedido nesta zona vai sempre buscar o mesmo ficheiro ----
-    const origemFixa = 'https://' + STORAGE_HOST + '/' + STORAGE_ZONE + '/' + caminhoSite;
+    // Aponta para o endereço PÚBLICO da CDN (o mesmo que já usamos para
+    // mostrar os sites hoje), não para o endereço "cru" da Storage - esse
+    // pede autenticação (AccessKey) e dá 401 Unauthorized, como confirmado
+    // no primeiro teste.
+    const origemFixa = 'https://' + CDN_HOST + '/' + STORAGE_ZONE + '/' + caminhoSite;
     await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
       ActionType: 2, // Change Origin URL
       ActionParameter1: origemFixa,
