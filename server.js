@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.39.0';
+const VERSION = '1.40.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -192,6 +192,38 @@ async function bubbleDelete(tipo, id) {
     const json = await res.json().catch(() => ({}));
     throw new Error('bubbleDelete falhou: ' + JSON.stringify(json));
   }
+}
+
+// ======================================================
+// Helper - garantir que a conta tem um plano
+// ======================================================
+// Contas que ficaram sem Plan atribuído (ex: registaram-se antes de os
+// Planos terem sido criados na base Live) já não ficam bloqueadas para
+// sempre com o erro "A tua conta não tem nenhum plano atribuído" - esta
+// função atribui o plano Free automaticamente da primeira vez que
+// encontrar isso, em vez de a pessoa ter de ser corrigida à mão no Bubble.
+// Devolve o id do plano (o que já estava, ou o Free atribuído agora), ou
+// null se mesmo assim não houver nenhum plano Free activo na base de dados
+// (caso que o chamador deve tratar como erro real).
+async function garantirPlano(owner, user) {
+  if (user['Plan']) return user['Plan'];
+
+  const planosFree = await bubbleList('plan', [
+    { key: 'Name', constraint_type: 'text contains', value: 'Free' },
+    { key: 'Is Active', constraint_type: 'equals', value: true }
+  ]);
+  const planoFree = planosFree[0];
+  if (!planoFree) {
+    console.error('garantirPlano: não encontrei nenhum plano "Free" activo para atribuir a ' + owner);
+    return null;
+  }
+
+  await bubblePatch('user', owner, {
+    'Plan': planoFree._id,
+    'Plan Started': new Date().toISOString()
+  });
+  console.log('garantirPlano: conta ' + owner + ' não tinha plano - atribuí o Free (' + planoFree._id + ') automaticamente.');
+  return planoFree._id;
 }
 
 // ======================================================
@@ -769,8 +801,8 @@ async function purgeCacheBunny(url) {
 async function verificarEspaco(owner, bytesNovos) {
   const user = await bubbleGet('user', owner);
   if (!user) return { ok: false, message: 'Utilizador não encontrado.' };
-  const planId = user['Plan'];
-  if (!planId) return { ok: false, message: 'A tua conta não tem nenhum plano atribuído.' };
+  const planId = await garantirPlano(owner, user);
+  if (!planId) return { ok: false, message: 'A tua conta não tem nenhum plano atribuído, e não encontrei nenhum plano Free para atribuir automaticamente.' };
   const plano = await bubbleGet('plan', planId);
   const usado = user['Storage Used Bytes'] || 0;
   const limite = plano['Storage Limit Bytes'] || 0;
@@ -2528,9 +2560,9 @@ app.post('/generate', async (req, res) => {
       return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
     }
 
-    const planId = user['Plan'];
+    const planId = await garantirPlano(owner, user);
     if (!planId) {
-      return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
+      return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído, e não encontrei nenhum plano Free para atribuir automaticamente.' });
     }
     const plano = await bubbleGet('plan', planId);
     const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
@@ -2702,9 +2734,9 @@ app.post('/editar', async (req, res) => {
     if (!user) {
       return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
     }
-    const planId = user['Plan'];
+    const planId = await garantirPlano(owner, user);
     if (!planId) {
-      return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
+      return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído, e não encontrei nenhum plano Free para atribuir automaticamente.' });
     }
     const plano = await bubbleGet('plan', planId);
 
@@ -2868,9 +2900,10 @@ app.post('/account', async (req, res) => {
 
     let nomePlano = '';
     let tokensIncluidos = 0;
-    if (user['Plan']) {
+    const planIdConta = await garantirPlano(owner, user);
+    if (planIdConta) {
       try {
-        const plano = await bubbleGet('plan', user['Plan']);
+        const plano = await bubbleGet('plan', planIdConta);
         if (plano) {
           nomePlano = plano['Name'] || '';
           tokensIncluidos = plano['Tokens Incluidos'] || 0;
