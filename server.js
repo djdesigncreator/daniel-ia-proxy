@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.36.0';
+const VERSION = '1.37.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2718,6 +2718,52 @@ app.post('/generate-status', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /generate-status:', erro);
     return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
+  }
+});
+
+// Dados da conta para o dashboard (nome, plano, tokens usados/incluídos).
+// Antes, o dashboard chamava um backend workflow do Bubble ("account")
+// que lia o Current User - mas essa página corre dentro de uma iframe
+// isolada, e a sessão do Bubble nem sempre fica disponível aí (confirmado
+// a 12/10/2026: "/account" falhava com "Não foi possível carregar os
+// dados da conta", mesmo com o login a funcionar e o /meus-sites, que já
+// recebe o owner explícito, a funcionar bem). Esta rota resolve o mesmo
+// problema da mesma forma que todas as outras - recebe o owner
+// directamente, sem depender de nenhuma sessão.
+app.post('/account', async (req, res) => {
+  try {
+    const { owner } = req.body;
+    if (!owner) {
+      return res.json({ status: 'error', message: 'Falta o owner.' });
+    }
+
+    const user = await bubbleGet('user', owner);
+    if (!user) {
+      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    }
+
+    let nomePlano = '';
+    let tokensIncluidos = 0;
+    if (user['Plan']) {
+      const plano = await bubbleGet('plan', user['Plan']);
+      if (plano) {
+        nomePlano = plano['Name'] || '';
+        tokensIncluidos = plano['Tokens Incluidos'] || 0;
+      }
+    }
+
+    return res.json({
+      status: 'success',
+      response: {
+        nome: user['Full Name'] || '',
+        plano: nomePlano,
+        tokens_usados: user['Tokens Usados Mes'] || 0,
+        tokens_incluidos: tokensIncluidos
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /account:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os dados da conta.' });
   }
 });
 
