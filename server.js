@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.34.0';
+const VERSION = '1.35.0';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -339,6 +339,177 @@ function templateEmailAssinatura(nome, nomePlano, valorMzn, expiraEm) {
 <tr>
 <td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
 <p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Nome amigável do método de pagamento, para mostrar nos recibos.
+function formatarMetodoPagamento(metodo) {
+  const mapa = { mpesa: 'M-Pesa', emola: 'e-Mola', cartao: 'Cartão (Visa/Mastercard)' };
+  return mapa[String(metodo || '').toLowerCase()] || (metodo || '-');
+}
+
+// Email formatado (HTML com estilos inline) - recibo de pagamento da
+// assinatura de um plano da própria Daniel.ia. Diferente do
+// templateEmailAssinatura (que dá as boas-vindas ao plano novo): este é
+// só o comprovativo do pagamento em si, com referência e método.
+function templateEmailReciboAssinatura(nome, nomePlano, valorMzn, metodo, referencia, dataPagamento) {
+  const primeiroNome = escaparHtml(String(nome || '').trim().split(' ')[0] || '');
+  const saudacao = primeiroNome ? `Olá, ${primeiroNome}.` : 'Olá.';
+  const plano = escaparHtml(nomePlano || '');
+  const valorFormatado = escaparHtml(Number(valorMzn || 0).toLocaleString('pt-PT') + ' MZN');
+  const metodoFormatado = escaparHtml(formatarMetodoPagamento(metodo));
+  const referenciaFormatada = escaparHtml(String(referencia || '-'));
+  const dataFormatada = escaparHtml(formatarDataPt(dataPagamento));
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recibo de pagamento - Daniel.ia</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<tr>
+<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
+<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">Aqui está o recibo do teu pagamento. Guarda este email para a tua referência.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;">
+<tr>
+<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Plano</span>
+<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${plano}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Valor pago</span>
+<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${valorFormatado}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Método</span>
+<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${metodoFormatado}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Referência</span>
+<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${referenciaFormatada}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:16px 20px;">
+<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Data do pagamento</span>
+<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${dataFormatada}</span>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
+<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Email formatado (HTML com estilos inline) - recibo de pagamento de uma
+// compra numa loja gerada pela Daniel.ia (E-commerce/Checkout de um
+// cliente). Enviado ao comprador final, não ao dono da loja. "itens" é a
+// lista já calculada (nome, preco_unitario, quantidade) guardada em
+// "Produtos Json" na Encomenda.
+function templateEmailReciboLoja(nomeCliente, nomeLoja, itens, valorTotal, metodo, referencia, dataPagamento) {
+  const primeiroNome = escaparHtml(String(nomeCliente || '').trim().split(' ')[0] || '');
+  const saudacao = primeiroNome ? `Olá, ${primeiroNome}.` : 'Olá.';
+  const loja = escaparHtml(nomeLoja || 'a loja');
+  const valorFormatado = escaparHtml(Number(valorTotal || 0).toLocaleString('pt-PT') + ' MZN');
+  const metodoFormatado = escaparHtml(formatarMetodoPagamento(metodo));
+  const referenciaFormatada = escaparHtml(String(referencia || '-'));
+  const dataFormatada = escaparHtml(formatarDataPt(dataPagamento));
+
+  const linhasItens = (Array.isArray(itens) ? itens : []).map(item => {
+    const nomeItem = escaparHtml(item.nome || '');
+    const qtd = Number(item.quantidade || 1);
+    const precoUnit = Number(item.preco_unitario || 0);
+    const subtotal = escaparHtml((precoUnit * qtd).toLocaleString('pt-PT') + ' MZN');
+    return `<tr>
+<td style="padding:10px 0;border-bottom:1px solid #E6E4F0;color:#14121F;font-size:13.5px;">${nomeItem} <span style="color:#9B98AE;">x${qtd}</span></td>
+<td style="padding:10px 0;border-bottom:1px solid #E6E4F0;color:#14121F;font-size:13.5px;font-weight:700;text-align:right;">${subtotal}</td>
+</tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recibo de compra - ${loja}</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<tr>
+<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<span style="display:inline-block;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">${loja}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">Obrigado pela tua compra. Aqui está o recibo, para a tua referência.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:18px;">
+${linhasItens}
+<tr>
+<td style="padding:14px 0 0 0;color:#14121F;font-size:15px;font-weight:800;">Total</td>
+<td style="padding:14px 0 0 0;color:#14121F;font-size:15px;font-weight:800;text-align:right;">${valorFormatado}</td>
+</tr>
+</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;">
+<tr>
+<td style="padding:14px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Método</span>
+<span style="display:block;color:#14121F;font-size:14px;font-weight:700;">${metodoFormatado}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:14px 20px;border-bottom:1px solid #E6E4F0;">
+<span style="display:block;color:#9B98AE;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Referência</span>
+<span style="display:block;color:#14121F;font-size:14px;font-weight:700;">${referenciaFormatada}</span>
+</td>
+</tr>
+<tr>
+<td style="padding:14px 20px;">
+<span style="display:block;color:#9B98AE;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Data</span>
+<span style="display:block;color:#14121F;font-size:14px;font-weight:700;">${dataFormatada}</span>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
+<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Enviado via Daniel.ia · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -1194,6 +1365,7 @@ const LOJA_CART_JS = `/*
       + '<div id="dia-checkout-form">'
       + '<div class="dia-campo"><label>O teu nome</label><input type="text" id="dia-cliente-nome" maxlength="100"></div>'
       + '<div class="dia-campo"><label>Telefone</label><input type="text" id="dia-cliente-telefone" maxlength="20" placeholder="84xxxxxxx"></div>'
+      + '<div class="dia-campo"><label>Email (opcional, para receberes o recibo)</label><input type="email" id="dia-cliente-email" maxlength="150" placeholder="teu@email.com"></div>'
       + '<div class="dia-campo"><label>Método de pagamento</label>'
       + '<div class="dia-metodos">'
       + '<div class="dia-metodo" data-metodo="mpesa">M-Pesa</div>'
@@ -1229,11 +1401,13 @@ const LOJA_CART_JS = `/*
   function iniciarPagamento(overlay, itens){
     var nome = document.getElementById('dia-cliente-nome').value.trim();
     var telefone = document.getElementById('dia-cliente-telefone').value.trim();
+    var email = document.getElementById('dia-cliente-email').value.trim();
     var elErro = document.getElementById('dia-checkout-erro');
     elErro.textContent = '';
 
     if (!nome) { elErro.textContent = 'Escreve o teu nome.'; return; }
     if (!telefone) { elErro.textContent = 'Escreve o teu telefone.'; return; }
+    if (email && !/\S+@\S+\.\S+/.test(email)) { elErro.textContent = 'Esse email não parece válido - podes deixar em branco se preferires.'; return; }
     if (!metodoSeleccionado) { elErro.textContent = 'Escolhe um método de pagamento.'; return; }
 
     var btnPagar = document.getElementById('dia-btn-pagar');
@@ -1251,6 +1425,7 @@ const LOJA_CART_JS = `/*
         site_id: SITE_ID,
         cliente_nome: nome,
         cliente_telefone: telefone,
+        cliente_email: email,
         itens: itensParaEnviar
       })
     }).then(function(r){ return r.json(); })
@@ -3459,11 +3634,14 @@ app.post('/galeria-media-apagar', async (req, res) => {
 // ninguém consegue alterar o preço antes de pagar.
 app.post('/loja-encomenda', async (req, res) => {
   try {
-    const { site_id, cliente_nome, cliente_telefone, itens } = req.body;
+    const { site_id, cliente_nome, cliente_telefone, cliente_email, itens } = req.body;
 
     if (!site_id || !cliente_nome || !cliente_telefone || !Array.isArray(itens) || itens.length === 0) {
       return res.json({ status: 'error', message: 'Faltam dados: site_id, cliente_nome, cliente_telefone e itens são obrigatórios.' });
     }
+    // Email é opcional - só serve para mandar o recibo, se a pessoa o
+    // der. Validação simples, nunca bloqueia a compra por causa disto.
+    const emailValido = cliente_email && /\S+@\S+\.\S+/.test(String(cliente_email).trim());
 
     // Buscar os produtos realmente activos desta loja - a fonte da verdade
     // para os preços é sempre esta, nunca o que vier do pedido.
@@ -3504,6 +3682,7 @@ app.post('/loja-encomenda', async (req, res) => {
       'Produtos Json': JSON.stringify(itensCalculados),
       'Cliente Nome': cliente_nome,
       'Cliente Telefone': cliente_telefone,
+      'Cliente Email': emailValido ? String(cliente_email).trim() : '',
       'Valor Total': valorTotal,
       'Metodo': '',
       'ID Pagamento': '',
@@ -3892,6 +4071,32 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     });
 
     console.log('Encomenda marcada como paga:', encomenda._id);
+
+    // ---- Recibo por email ao comprador (não bloqueia nem desfaz nada se falhar) ----
+    try {
+      const emailCliente = encomenda['Cliente Email'];
+      if (emailCliente) {
+        const site = encomenda['Site'] ? await bubbleGet('site', encomenda['Site']) : null;
+        const nomeLoja = (site && site['Nome']) || 'a tua loja';
+        let itens = [];
+        try { itens = JSON.parse(encomenda['Produtos Json'] || '[]'); } catch (e) { itens = []; }
+        await enviarEmail(
+          emailCliente,
+          `O teu recibo - ${nomeLoja}`,
+          templateEmailReciboLoja(
+            encomenda['Cliente Nome'],
+            nomeLoja,
+            itens,
+            encomenda['Valor Total'],
+            encomenda['Metodo'],
+            identificador,
+            new Date()
+          )
+        );
+      }
+    } catch (erroEmail) {
+      console.error('Encomenda paga, mas o email de recibo falhou:', erroEmail);
+    }
   } catch (erro) {
     console.error('Erro ao processar webhook da loja:', erro);
   }
@@ -4350,14 +4555,27 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
         '';
       const plano = await bubbleGet('plan', assinatura['Plano']);
       if (emailDestino) {
+        const nomePlano = plano ? plano['Name'] : assinatura['Plano'];
         await enviarEmail(
           emailDestino,
           'Assinatura confirmada - Daniel.ia',
-          templateEmailAssinatura(usuario['Full Name'], plano ? plano['Name'] : assinatura['Plano'], assinatura['Valor MZN'], expira)
+          templateEmailAssinatura(usuario['Full Name'], nomePlano, assinatura['Valor MZN'], expira)
+        );
+        await enviarEmail(
+          emailDestino,
+          'O teu recibo - Daniel.ia',
+          templateEmailReciboAssinatura(
+            usuario['Full Name'],
+            nomePlano,
+            assinatura['Valor MZN'],
+            assinatura['Metodo'],
+            identificador,
+            agora
+          )
         );
       }
     } catch (erroEmail) {
-      console.error('Assinatura aplicada, mas o email de confirmação falhou:', erroEmail);
+      console.error('Assinatura aplicada, mas o email de confirmação/recibo falhou:', erroEmail);
     }
   } catch (erro) {
     console.error('Erro ao processar webhook da assinatura:', erro);
