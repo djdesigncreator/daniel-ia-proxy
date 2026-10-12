@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.40.0';
+const VERSION = '1.40.1';
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -208,13 +208,16 @@ async function bubbleDelete(tipo, id) {
 async function garantirPlano(owner, user) {
   if (user['Plan']) return user['Plan'];
 
-  const planosFree = await bubbleList('plan', [
-    { key: 'Name', constraint_type: 'text contains', value: 'Free' },
+  // Busca todos os planos activos e procura o "Free" aqui no código (em vez
+  // de pedir ao Bubble para filtrar pelo nome) - é a mesma comparação que já
+  // usamos noutros sítios (ex: para decidir a marca de água), por isso
+  // sabemos que esta forma de identificar o Free funciona.
+  const planosActivos = await bubbleList('plan', [
     { key: 'Is Active', constraint_type: 'equals', value: true }
   ]);
-  const planoFree = planosFree[0];
+  const planoFree = planosActivos.find(p => String(p['Name'] || '').trim().toLowerCase() === 'free');
   if (!planoFree) {
-    console.error('garantirPlano: não encontrei nenhum plano "Free" activo para atribuir a ' + owner);
+    console.error('garantirPlano: não encontrei nenhum plano "Free" activo para atribuir a ' + owner + ' (planos activos encontrados: ' + planosActivos.map(p => p['Name']).join(', ') + ')');
     return null;
   }
 
