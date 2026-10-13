@@ -254,21 +254,26 @@ function formatarDataPt(data) {
 }
 
 // Envia um email pelo Resend, usando o domínio verificado daniel-ia.pro.
-async function enviarEmail(destinatario, assunto, html) {
+// replyTo é opcional - usado pelo formulário de contacto, para o dono do
+// site conseguir responder directamente à pessoa que escreveu, sem o
+// Daniel.ia ficar no meio da conversa.
+async function enviarEmail(destinatario, assunto, html, replyTo) {
   if (!RESEND_KEY) throw new Error('Falta a variável RESEND_KEY no container.');
   const remetente = MAIL_FROM.includes('<') ? MAIL_FROM : `Daniel.ia <${MAIL_FROM}>`;
+  const corpo = {
+    from: remetente,
+    to: [destinatario],
+    subject: assunto,
+    html
+  };
+  if (replyTo) corpo.reply_to = replyTo;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${RESEND_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      from: remetente,
-      to: [destinatario],
-      subject: assunto,
-      html
-    })
+    body: JSON.stringify(corpo)
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error('enviarEmail falhou: ' + JSON.stringify(json));
@@ -309,6 +314,58 @@ function templateEmailCodigo(nome, codigo) {
 </td></tr>
 </table>
 <p style="margin:24px 0 0 0;color:#9B98AE;font-size:12.5px;line-height:1.6;">Se não pediste esta conta, ignora este email - ninguém mais consegue entrar sem este código.</p>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
+<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Email formatado (HTML com estilos inline) para avisar o dono de um site
+// que alguém escreveu pelo formulário de contacto do site. Mesma
+// identidade visual dos outros emails - a diferença é que o "Responder"
+// num cliente de email normal vai direito para a pessoa que escreveu
+// (ver reply_to em enviarEmail), nunca para o Daniel.ia.
+function templateEmailContacto(nomeSite, nomeRemetente, emailRemetente, mensagem) {
+  const nomeSiteEsc = escaparHtml(String(nomeSite || 'o teu site').trim());
+  const nomeRemetenteEsc = escaparHtml(String(nomeRemetente || '').trim());
+  const emailRemetenteEsc = escaparHtml(String(emailRemetente || '').trim());
+  const mensagemEsc = escaparHtml(String(mensagem || '').trim()).replace(/\n/g, '<br>');
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nova mensagem de contacto - Daniel.ia</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<tr>
+<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
+<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">Nova mensagem de contacto</p>
+<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">Alguém escreveu pelo formulário de contacto de <strong>${nomeSiteEsc}</strong>. Para responder, basta usar o botão "Responder" do teu email - vai directo para esta pessoa.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<tr><td style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;padding:18px 20px;">
+<p style="margin:0 0 10px 0;color:#14121F;font-size:14px;"><strong>Nome:</strong> ${nomeRemetenteEsc}</p>
+<p style="margin:0 0 14px 0;color:#14121F;font-size:14px;"><strong>Email:</strong> ${emailRemetenteEsc}</p>
+<p style="margin:0;color:#3A374A;font-size:14px;line-height:1.6;">${mensagemEsc}</p>
+</td></tr>
+</table>
 </td>
 </tr>
 <tr>
@@ -1272,12 +1329,18 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
     ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-blog"></div> - é ali que os artigos a sério vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum artigo falso - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Artigos" ou "Blog").`
     : '';
 
+  // Para TODOS os tipos de site (não só alguns): a IA nunca escreve o
+  // formulário de contacto a sério - isso é sempre o mesmo módulo testado
+  // por nós (CONTACTO_FORM_JS), injectado depois, que manda a mensagem
+  // por email para o endereço que o dono do site escolher.
+  const instrucaoContacto = `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-contacto"></div> - é ali que o formulário de contacto a sério (nome, email, mensagem, já ligado para enviar a mensagem ao dono do site) vai aparecer sozinho, gerido por um sistema à parte. Não escrevas tu nenhum formulário, nem campos de nome/email/mensagem, nem botão de enviar - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Contacto" ou "Fala connosco").`;
+
   const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
 IMPORTANTE: o site tem de ficar completo e bem desenvolvido - nunca curto, vazio ou com ar de esqueleto. Capricha mesmo em todas as secções: textos bem escritos e com substância (não só uma frase solta), várias secções relevantes para o tipo de negócio, boa quantidade de conteúdo coerente. Isto aplica-se a todos os tipos, incluindo os mais simples como Portefólio ou Blog - não te limites ao mínimo só porque o tipo parece simples.
-${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}`;
+${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -1334,6 +1397,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
+  html = injectarContactoSeNecessario(html, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -1460,6 +1524,31 @@ function injectarBlogSeNecessario(html, ehBlog, siteId) {
   return html;
 }
 
+// Para o Contacto: ao contrário dos outros, aplica-se a TODOS os sites,
+// seja qual for o tipo - garante a div do formulário (defesa, caso a IA
+// se tenha esquecido dela) e injecta sempre o módulo fixo antes de
+// </body>. Mesmo princípio de injectarLojaSeNecessario, só que sem
+// nenhuma condição de tipo e para "daniel-ia-contacto" e
+// "contacto-form.js".
+function injectarContactoSeNecessario(html, siteId) {
+  if (!/id=["']daniel-ia-contacto["']/.test(html)) {
+    html = html.replace(
+      /<\/body>/i,
+      '<div id="daniel-ia-contacto" style="max-width:700px;margin:40px auto;padding:0 20px;"></div>\n</body>'
+    );
+  }
+
+  if (!/contacto-form\.js/.test(html)) {
+    const scriptContacto = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/contacto-form.js"></script>\n`;
+    if (/<\/body>/i.test(html)) {
+      html = html.replace(/<\/body>/i, scriptContacto + '</body>');
+    } else {
+      html += scriptContacto;
+    }
+  }
+  return html;
+}
+
 // Pede à OpenAI para aplicar uma alteração a um site já gerado, em vez de
 // criar um site do zero. Recebe o HTML actual completo e devolve o HTML
 // completo já alterado - a IA tem de reescrever o ficheiro todo (nunca um
@@ -1495,13 +1584,16 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
     ? `\nATENÇÃO: esta página é um blog. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-blog"></div> e os dois <script> antes de </body> que carregam o módulo do blog (window.DANIEL_IA_SITE_ID e blog-viewer.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu artigos a sério - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
+  // Aplica-se a TODOS os sites, seja qual for o tipo.
+  const instrucaoContacto = `\nATENÇÃO: esta página tem de continuar a ter, exactamente como está, a div <div id="daniel-ia-contacto"></div> e os dois <script> antes de </body> que carregam o módulo de contacto (window.DANIEL_IA_SITE_ID e contacto-form.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu nenhum formulário de contacto a sério - isso continua a ser tratado à parte, automaticamente.`;
+
   const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel.ia"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
 
   const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
-IMPORTANTE: o site tem de continuar completo e bem desenvolvido depois da alteração - nunca o deixes curto, vazio ou com ar de esqueleto. Se a alteração pedida implicar reescrever ou ampliar alguma secção, capricha nela (textos com substância, boa quantidade de conteúdo), mesmo em tipos mais simples como Portefólio ou Blog.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoMarca}`;
+IMPORTANTE: o site tem de continuar completo e bem desenvolvido depois da alteração - nunca o deixes curto, vazio ou com ar de esqueleto. Se a alteração pedida implicar reescrever ou ampliar alguma secção, capricha nela (textos com substância, boa quantidade de conteúdo), mesmo em tipos mais simples como Portefólio ou Blog.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -1553,6 +1645,7 @@ ${htmlAtual}`;
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
+  html = injectarContactoSeNecessario(html, siteId);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -2713,6 +2806,166 @@ const BLOG_VIEWER_JS = `/*
 })();
 `;
 
+// Módulo fixo do Formulário de Contacto - ao contrário dos outros
+// módulos (loja/galeria/portefólio/blog), este é injectado em TODOS os
+// sites gerados, seja qual for o tipo (ver injectarContactoSeNecessario
+// mais acima). A IA nunca escreve este formulário - só deixa a div
+// com id="daniel-ia-contacto" onde este módulo o desenha a sério.
+const CONTACTO_FORM_JS = `/*
+  Daniel.ia - módulo fixo do Formulário de Contacto
+  ---------------------------------------------------------------------
+  Este ficheiro é servido pelo próprio container em /contacto-form.js e
+  é carregado por TODOS os sites gerados pela IA, seja qual for o tipo.
+  A IA nunca escreve este formulário - só deixa uma div com
+  id="daniel-ia-contacto" onde este módulo desenha o formulário a sério
+  e trata do envio.
+
+  Cada página gerada define, antes de carregar este ficheiro:
+    window.DANIEL_IA_SITE_ID = 'xxxxx';
+*/
+(function(){
+  'use strict';
+
+  var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
+  var SITE_ID = window.DANIEL_IA_SITE_ID || '';
+
+  if (!SITE_ID) {
+    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o formulário de contacto não pode arrancar.');
+    return;
+  }
+
+  function injectarEstilos(){
+    var css = ''
+      + '.dic-caixa{background:#15151b;border-radius:14px;padding:28px;font-family:inherit;}'
+      + '.dic-titulo{font-weight:700;font-size:20px;color:#fff;margin:0 0 6px 0;}'
+      + '.dic-sub{font-size:13px;color:#b9b9c2;margin:0 0 20px 0;line-height:1.5;}'
+      + '.dic-campo{margin-bottom:14px;}'
+      + '.dic-label{display:block;font-size:12.5px;color:#b9b9c2;margin-bottom:6px;}'
+      + '.dic-input,.dic-textarea{width:100%;box-sizing:border-box;background:#1f1f27;border:1px solid #2c2c36;border-radius:10px;padding:11px 13px;color:#fff;font-size:14px;font-family:inherit;outline:none;}'
+      + '.dic-input:focus,.dic-textarea:focus{border-color:#6366F1;}'
+      + '.dic-textarea{resize:vertical;min-height:100px;}'
+      + '.dic-botao{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#6366F1;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;}'
+      + '.dic-botao:hover{background:#4f52d6;}'
+      + '.dic-botao:disabled{opacity:.6;cursor:default;}'
+      + '.dic-msg{font-size:13.5px;margin-top:14px;padding:11px 13px;border-radius:10px;display:none;}'
+      + '.dic-msg.dic-sucesso{display:block;background:rgba(122,196,35,.12);color:#9fdb5a;}'
+      + '.dic-msg.dic-erro{display:block;background:rgba(192,57,43,.12);color:#ff8a7a;}';
+    var style = document.createElement('style');
+    style.setAttribute('data-daniel-ia', 'contacto');
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  function montarFormulario(){
+    var alvo = document.getElementById('daniel-ia-contacto');
+    if (!alvo) {
+      console.error('Daniel.ia: falta uma div com id="daniel-ia-contacto" nesta página - o formulário não tem onde aparecer.');
+      return null;
+    }
+    alvo.innerHTML = ''
+      + '<div class="dic-caixa">'
+      + '<p class="dic-titulo">Fale connosco</p>'
+      + '<p class="dic-sub">Preenche o formulário e entraremos em contacto.</p>'
+      + '<form id="dic-form">'
+      + '<div class="dic-campo">'
+      + '<label class="dic-label" for="dic-nome">Nome</label>'
+      + '<input class="dic-input" id="dic-nome" name="nome" type="text" required maxlength="120">'
+      + '</div>'
+      + '<div class="dic-campo">'
+      + '<label class="dic-label" for="dic-email">Email</label>'
+      + '<input class="dic-input" id="dic-email" name="email" type="email" required maxlength="160">'
+      + '</div>'
+      + '<div class="dic-campo">'
+      + '<label class="dic-label" for="dic-mensagem">Mensagem</label>'
+      + '<textarea class="dic-textarea" id="dic-mensagem" name="mensagem" required maxlength="2000"></textarea>'
+      + '</div>'
+      + '<button class="dic-botao" id="dic-enviar" type="submit">Enviar mensagem</button>'
+      + '<div class="dic-msg" id="dic-msg"></div>'
+      + '</form>'
+      + '</div>';
+    return document.getElementById('dic-form');
+  }
+
+  function mostrarMensagem(tipo, texto){
+    var msg = document.getElementById('dic-msg');
+    if (!msg) return;
+    if (!tipo) {
+      msg.style.display = 'none';
+      msg.className = 'dic-msg';
+      return;
+    }
+    msg.className = 'dic-msg dic-' + tipo;
+    msg.textContent = texto;
+    msg.style.display = 'block';
+  }
+
+  // Validação simples sem expressões regulares (mais fácil de confirmar
+  // que está correcta à vista): tem de haver um "@" que não seja o
+  // primeiro carácter, e depois dele um "." mais à frente, sem espaços.
+  function validarEmail(email){
+    if (!email || email.indexOf(' ') !== -1) return false;
+    var pos = email.indexOf('@');
+    if (pos < 1 || pos !== email.lastIndexOf('@')) return false;
+    var resto = email.slice(pos + 1);
+    return resto.indexOf('.') > 0 && resto.lastIndexOf('.') < resto.length - 1;
+  }
+
+  function iniciar(){
+    injectarEstilos();
+    var form = montarFormulario();
+    if (!form) return;
+
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      var nome = document.getElementById('dic-nome').value.trim();
+      var email = document.getElementById('dic-email').value.trim();
+      var mensagem = document.getElementById('dic-mensagem').value.trim();
+      var botao = document.getElementById('dic-enviar');
+
+      if (!nome || !email || !mensagem) {
+        mostrarMensagem('erro', 'Preenche todos os campos.');
+        return;
+      }
+      if (!validarEmail(email)) {
+        mostrarMensagem('erro', 'Introduz um email válido.');
+        return;
+      }
+
+      botao.disabled = true;
+      botao.textContent = 'A enviar...';
+      mostrarMensagem('', '');
+
+      fetch(CONTAINER_URL + '/contacto-enviar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: SITE_ID, nome: nome, email_remetente: email, mensagem: mensagem })
+      }).then(function(r){ return r.json(); })
+        .then(function(r){
+          botao.disabled = false;
+          botao.textContent = 'Enviar mensagem';
+          if (r.status === 'success') {
+            mostrarMensagem('sucesso', 'Mensagem enviada. Entraremos em contacto em breve.');
+            form.reset();
+          } else {
+            mostrarMensagem('erro', (r.message || 'Não foi possível enviar a mensagem.'));
+          }
+        })
+        .catch(function(){
+          botao.disabled = false;
+          botao.textContent = 'Enviar mensagem';
+          mostrarMensagem('erro', 'Não foi possível ligar ao servidor.');
+        });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', iniciar);
+  } else {
+    iniciar();
+  }
+})();
+`;
+
 // ======================================================
 // Rotas
 // ======================================================
@@ -2757,6 +3010,14 @@ app.get('/blog-viewer.js', (req, res) => {
   res.set('Content-Type', 'application/javascript; charset=utf-8');
   res.set('Cache-Control', 'public, max-age=300');
   return res.send(BLOG_VIEWER_JS);
+});
+
+// Serve o módulo fixo do Formulário de Contacto. Ao contrário dos outros,
+// este carrega em TODOS os sites gerados (ver injectarContactoSeNecessario).
+app.get('/contacto-form.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(CONTACTO_FORM_JS);
 });
 
 // Nota sobre os nomes dos campos nas chamadas ao Bubble: têm de ser
@@ -3170,7 +3431,8 @@ app.post('/meus-sites', async (req, res) => {
       criado: s['Created Date'],
       dominio: s['Dominio Personalizado'] || '',
       dominio_estado: s['Dominio Estado'] || '',
-      dominio_hostname: s['Dominio Hostname'] || ''
+      dominio_hostname: s['Dominio Hostname'] || '',
+      email_contacto: s['Email Contacto'] || ''
     }));
 
     return res.json({ status: 'success', response: { sites: lista } });
@@ -3654,6 +3916,93 @@ app.post('/blog-post-editar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /blog-post-editar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível actualizar o artigo.' });
+  }
+});
+
+// ======================================================
+// Formulário de Contacto - aplica-se a TODOS os sites gerados, seja
+// qual for o tipo (ver injectarContactoSeNecessario mais acima)
+// ======================================================
+
+// Rota PÚBLICA - chamada pelo contacto-form.js de dentro do site gerado,
+// sem login nenhum (quem escreve é um visitante do site, não um
+// utilizador do Daniel.ia). Descobre para que email mandar: primeiro o
+// "Email Contacto" configurado no projecto, senão o email da conta do
+// dono do site.
+app.post('/contacto-enviar', async (req, res) => {
+  try {
+    const { site_id, nome, email_remetente, mensagem } = req.body;
+
+    if (!site_id || !nome || !email_remetente || !mensagem) {
+      return res.json({ status: 'error', message: 'Faltam dados: nome, email e mensagem são obrigatórios.' });
+    }
+    if (String(nome).length > 120 || String(email_remetente).length > 160 || String(mensagem).length > 2000) {
+      return res.json({ status: 'error', message: 'Um dos campos é demasiado longo.' });
+    }
+    if (email_remetente.indexOf('@') < 1) {
+      return res.json({ status: 'error', message: 'O email não é válido.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site) {
+      return res.json({ status: 'error', message: 'Projecto não encontrado.' });
+    }
+
+    let emailDestino = site['Email Contacto'] || '';
+    if (!emailDestino) {
+      const dono = await bubbleGet('user', site['Owner']);
+      emailDestino =
+        (dono && dono.email) ||
+        (dono && dono.authentication && dono.authentication.email && dono.authentication.email.email) ||
+        '';
+    }
+
+    if (!emailDestino) {
+      console.error('Erro em /contacto-enviar: site sem Email Contacto e sem email de conta (site ' + site_id + ').');
+      return res.json({ status: 'error', message: 'Este site ainda não tem um email de contacto configurado.' });
+    }
+
+    const nomeSite = site['Nome'] || 'o teu site';
+    await enviarEmail(
+      emailDestino,
+      'Nova mensagem de ' + nome + ' - ' + nomeSite,
+      templateEmailContacto(nomeSite, nome, email_remetente, mensagem),
+      email_remetente
+    );
+
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /contacto-enviar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível enviar a mensagem.' });
+  }
+});
+
+// Rota AUTENTICADA (owner) - chamada do dashboard, para o dono do
+// projecto configurar/alterar para que email quer receber as mensagens
+// de contacto deste site. Enviar email_contacto: '' limpa o campo
+// (passa a usar o email da conta como fallback, ver /contacto-enviar).
+app.post('/contacto-guardar', async (req, res) => {
+  try {
+    const { owner, site_id, email_contacto } = req.body;
+    if (!owner || !site_id) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id é obrigatório.' });
+    }
+
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para alterar este projecto.' });
+    }
+
+    const emailLimpo = String(email_contacto || '').trim();
+    if (emailLimpo && emailLimpo.indexOf('@') < 1) {
+      return res.json({ status: 'error', message: 'O email não é válido.' });
+    }
+
+    await bubblePatch('site', site_id, { 'Email Contacto': emailLimpo });
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /contacto-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar o email de contacto.' });
   }
 });
 
