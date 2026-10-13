@@ -857,6 +857,153 @@ function dominioParecevalido(dominio) {
   return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(dominio);
 }
 
+// Confere se o site existe, pertence a este owner, já está pronto, e se o
+// plano actual permite domínio próprio. Partilhado por /dominio-configurar
+// e /dominio-cloudflare-auto, que fazem exactamente as mesmas verificações
+// antes de mexerem em Pull Zones. Devolve { erro } ou { site }.
+async function validarSiteParaDominio(owner, site_id) {
+  const site = await bubbleGet('site', site_id);
+  if (!site) {
+    return { erro: 'Projecto não encontrado.' };
+  }
+  if (site['Owner'] !== owner) {
+    return { erro: 'Este projecto não te pertence.' };
+  }
+  if (site['Status'] !== 'Pronto' || !site['CDN URL']) {
+    return { erro: 'Este projecto ainda não está pronto.' };
+  }
+
+  const user = await bubbleGet('user', owner);
+  if (!user) {
+    return { erro: 'Utilizador não encontrado.' };
+  }
+  const planId = await garantirPlano(owner, user);
+  const plano = planId ? await bubbleGet('plan', planId) : null;
+  if (!plano || !plano['Permite Dominio']) {
+    return { erro: 'O teu plano actual não inclui domínio próprio. Muda de plano para usares esta funcionalidade.' };
+  }
+
+  return { site };
+}
+
+// Cria (ou reaproveita) a Pull Zone deste site na Bunny, garante a regra de
+// origem certa, e grava tudo no Site. Partilhado por /dominio-configurar e
+// /dominio-cloudflare-auto - a única diferença entre as duas rotas é COMO
+// o CNAME é criado depois (à mão vs. automaticamente pela Cloudflare).
+async function prepararPullZoneDominio(site, site_id, dominioLimpo) {
+  // Já tinha uma Pull Zone configurada para este site (ex: a pessoa está
+  // a tentar outra vez) - reaproveita em vez de criar outra a mais.
+  let pullZoneId = site['Dominio Pull Zone Id'];
+  let hostnameCdn = site['Dominio Hostname'];
+  const nomePullZone = 'dominio-' + site_id;
+
+  if (!pullZoneId) {
+    const storageZoneId = await obterIdStorageZone();
+
+    let pullZone;
+    try {
+      pullZone = await bunnyApi('POST', '/pullzone', {
+        Name: nomePullZone,
+        OriginType: 2,
+        StorageZoneId: storageZoneId
+      });
+    } catch (erroCriar) {
+      // Já existe uma Pull Zone com este nome - provavelmente um pedido
+      // duplicado (ex: reenvio automático) chegou a criá-la mesmo agora.
+      // Em vez de falhar, vamos buscá-la e continuar a partir dela.
+      if (String(erroCriar && erroCriar.message || '').includes('name_taken')) {
+        const resultadoBusca = await bunnyApi('GET', '/pullzone?search=' + encodeURIComponent(nomePullZone) + '&perPage=20');
+        const listaZonas = (resultadoBusca && resultadoBusca.Items) || (Array.isArray(resultadoBusca) ? resultadoBusca : []);
+        pullZone = listaZonas.find(z => z.Name === nomePullZone);
+        if (!pullZone) throw erroCriar;
+      } else {
+        throw erroCriar;
+      }
+    }
+
+    pullZoneId = pullZone.Id;
+    hostnameCdn = (pullZone.Hostnames && pullZone.Hostnames[0] && pullZone.Hostnames[0].Value) || null;
+    if (!hostnameCdn) {
+      throw new Error('A Pull Zone foi criada mas a Bunny não devolveu nenhum endereço .b-cdn.net.');
+    }
+  }
+
+  // Garante sempre a regra certa a apontar para este site - mesmo que a
+  // Pull Zone já existisse de uma tentativa anterior (addOrUpdate é
+  // seguro de repetir, não cria regras a mais).
+  await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
+    ActionType: 2, // Change Origin URL
+    ActionParameter1: site['CDN URL'],
+    Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
+    TriggerMatchingType: 0,
+    Enabled: true,
+    OrderIndex: 0,
+    Description: 'Domínio personalizado - sempre este site'
+  });
+
+  await bubblePatch('site', site_id, {
+    'Dominio Personalizado': dominioLimpo,
+    'Dominio Pull Zone Id': String(pullZoneId),
+    'Dominio Hostname': hostnameCdn,
+    'Dominio Estado': 'Pendente'
+  });
+
+  return { pullZoneId, hostnameCdn };
+}
+
+// Chamada mínima à API da Cloudflare, no mesmo espírito do bunnyApi acima -
+// o token nunca é guardado em lado nenhum, só é usado nesta chamada e
+// descartado logo a seguir.
+async function cloudflareApi(metodo, caminho, token, corpo) {
+  const res = await fetch('https://api.cloudflare.com/client/v4' + caminho, {
+    method: metodo,
+    headers: Object.assign(
+      { Authorization: 'Bearer ' + token },
+      corpo ? { 'Content-Type': 'application/json' } : {}
+    ),
+    body: corpo ? JSON.stringify(corpo) : undefined
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.success === false) {
+    const mensagens = ((json.errors || []).map(e => e.message).join('; ')) || ('Cloudflare API devolveu ' + res.status);
+    throw new Error(mensagens);
+  }
+  return json.result;
+}
+
+// Encontra, de entre as zonas a que este token tem acesso, a que corresponde
+// ao domínio indicado - tenta o domínio completo primeiro e vai encurtando
+// (ex: "loja.exemplo.com" -> "exemplo.com" -> "com"), porque não sabemos à
+// partida onde acaba o domínio registável (ex: ".co.mz" é só um sufixo,
+// nunca o domínio todo de ninguém).
+async function encontrarZonaCloudflare(token, dominioLimpo) {
+  const zonas = await cloudflareApi('GET', '/zones?per_page=50', token);
+  const partes = dominioLimpo.split('.');
+  for (let i = 0; i < partes.length - 1; i++) {
+    const candidato = partes.slice(i).join('.');
+    const zona = (zonas || []).find(z => z.name === candidato);
+    if (zona) return zona;
+  }
+  return null;
+}
+
+// Cria o registo CNAME na Cloudflare - ou, se já existir um com este nome,
+// actualiza-o em vez de duplicar. "proxied: false" é propositado: queremos
+// DNS apontado directo para a Bunny, nunca a passar pelo proxy da
+// Cloudflare (senão o certificado SSL grátis da Bunny deixa de bater certo).
+async function criarOuActualizarCnameCloudflare(token, zonaId, nomeRegisto, valorCname) {
+  const existentes = await cloudflareApi(
+    'GET',
+    '/zones/' + zonaId + '/dns_records?type=CNAME&name=' + encodeURIComponent(nomeRegisto),
+    token
+  );
+  const corpo = { type: 'CNAME', name: nomeRegisto, content: valorCname, ttl: 1, proxied: false };
+  if (existentes && existentes.length > 0) {
+    return await cloudflareApi('PUT', '/zones/' + zonaId + '/dns_records/' + existentes[0].id, token, corpo);
+  }
+  return await cloudflareApi('POST', '/zones/' + zonaId + '/dns_records', token, corpo);
+}
+
 // Passo 1: a pessoa mete o domínio dela e clicamos em "Configurar". Cria a
 // Pull Zone e a regra na Bunny, grava tudo no Site, e devolve o hostname
 // .b-cdn.net para ela criar o CNAME no sítio onde comprou o domínio.
@@ -875,83 +1022,12 @@ app.post('/dominio-configurar', async (req, res) => {
       return res.json({ status: 'error', message: 'Esse domínio não parece válido. Exemplo do formato esperado: lojamaputo.co.mz' });
     }
 
-    const site = await bubbleGet('site', site_id);
-    if (!site) {
-      return res.json({ status: 'error', message: 'Projecto não encontrado.' });
-    }
-    if (site['Owner'] !== owner) {
-      return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
-    }
-    if (site['Status'] !== 'Pronto' || !site['CDN URL']) {
-      return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
+    const validacao = await validarSiteParaDominio(owner, site_id);
+    if (validacao.erro) {
+      return res.json({ status: 'error', message: validacao.erro });
     }
 
-    const user = await bubbleGet('user', owner);
-    if (!user) {
-      return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
-    }
-    const planId = await garantirPlano(owner, user);
-    const plano = planId ? await bubbleGet('plan', planId) : null;
-    if (!plano || !plano['Permite Dominio']) {
-      return res.json({ status: 'error', message: 'O teu plano actual não inclui domínio próprio. Muda de plano para usares esta funcionalidade.' });
-    }
-
-    // Já tinha uma Pull Zone configurada para este site (ex: a pessoa está
-    // a tentar outra vez) - reaproveita em vez de criar outra a mais.
-    let pullZoneId = site['Dominio Pull Zone Id'];
-    let hostnameCdn = site['Dominio Hostname'];
-    const nomePullZone = 'dominio-' + site_id;
-
-    if (!pullZoneId) {
-      const storageZoneId = await obterIdStorageZone();
-
-      let pullZone;
-      try {
-        pullZone = await bunnyApi('POST', '/pullzone', {
-          Name: nomePullZone,
-          OriginType: 2,
-          StorageZoneId: storageZoneId
-        });
-      } catch (erroCriar) {
-        // Já existe uma Pull Zone com este nome - provavelmente um pedido
-        // duplicado (ex: reenvio automático) chegou a criá-la mesmo agora.
-        // Em vez de falhar, vamos buscá-la e continuar a partir dela.
-        if (String(erroCriar && erroCriar.message || '').includes('name_taken')) {
-          const resultadoBusca = await bunnyApi('GET', '/pullzone?search=' + encodeURIComponent(nomePullZone) + '&perPage=20');
-          const listaZonas = (resultadoBusca && resultadoBusca.Items) || (Array.isArray(resultadoBusca) ? resultadoBusca : []);
-          pullZone = listaZonas.find(z => z.Name === nomePullZone);
-          if (!pullZone) throw erroCriar;
-        } else {
-          throw erroCriar;
-        }
-      }
-
-      pullZoneId = pullZone.Id;
-      hostnameCdn = (pullZone.Hostnames && pullZone.Hostnames[0] && pullZone.Hostnames[0].Value) || null;
-      if (!hostnameCdn) {
-        throw new Error('A Pull Zone foi criada mas a Bunny não devolveu nenhum endereço .b-cdn.net.');
-      }
-    }
-
-    // Garante sempre a regra certa a apontar para este site - mesmo que a
-    // Pull Zone já existisse de uma tentativa anterior (addOrUpdate é
-    // seguro de repetir, não cria regras a mais).
-    await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
-      ActionType: 2, // Change Origin URL
-      ActionParameter1: site['CDN URL'],
-      Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
-      TriggerMatchingType: 0,
-      Enabled: true,
-      OrderIndex: 0,
-      Description: 'Domínio personalizado - sempre este site'
-    });
-
-    await bubblePatch('site', site_id, {
-      'Dominio Personalizado': dominioLimpo,
-      'Dominio Pull Zone Id': String(pullZoneId),
-      'Dominio Hostname': hostnameCdn,
-      'Dominio Estado': 'Pendente'
-    });
+    const { hostnameCdn } = await prepararPullZoneDominio(validacao.site, site_id, dominioLimpo);
 
     return res.json({
       status: 'success',
@@ -965,6 +1041,92 @@ app.post('/dominio-configurar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /dominio-configurar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível configurar o domínio. Tenta novamente.' });
+  }
+});
+
+// Igual ao /dominio-configurar acima, mas em vez de pedir à pessoa para
+// criar o CNAME à mão, usa um token de API da Cloudflare (que ela cola no
+// dashboard, "Edit zone DNS", só para essa zona) para criar o registo
+// sozinha, e já tenta activar o domínio logo a seguir. O token nunca é
+// guardado - só passa por esta chamada e é descartado.
+app.post('/dominio-cloudflare-auto', async (req, res) => {
+  try {
+    const { owner, site_id, dominio, cloudflare_token } = req.body;
+    if (!owner || !site_id || !dominio || !cloudflare_token) {
+      return res.json({ status: 'error', message: 'Faltam dados: site_id, dominio e o token da Cloudflare são obrigatórios.' });
+    }
+    if (!BUNNY_API_KEY) {
+      return res.json({ status: 'error', message: 'A variável BUNNY_API_KEY não está configurada neste container.' });
+    }
+
+    const dominioLimpo = limparDominio(dominio);
+    if (!dominioParecevalido(dominioLimpo)) {
+      return res.json({ status: 'error', message: 'Esse domínio não parece válido. Exemplo do formato esperado: lojamaputo.co.mz' });
+    }
+
+    const validacao = await validarSiteParaDominio(owner, site_id);
+    if (validacao.erro) {
+      return res.json({ status: 'error', message: validacao.erro });
+    }
+
+    const { pullZoneId, hostnameCdn } = await prepararPullZoneDominio(validacao.site, site_id, dominioLimpo);
+
+    let zona;
+    try {
+      zona = await encontrarZonaCloudflare(cloudflare_token, dominioLimpo);
+    } catch (erroZonas) {
+      console.error('Erro a listar zonas Cloudflare:', erroZonas);
+      return res.json({ status: 'error', message: 'Não consegui ligar à Cloudflare com esse token. Confirma que o copiaste correctamente e que ainda não expirou.' });
+    }
+    if (!zona) {
+      return res.json({ status: 'error', message: 'Não encontrei, nessa conta Cloudflare, nenhuma zona que corresponda a "' + dominioLimpo + '". Confirma que o domínio já está adicionado na Cloudflare e que o token tem acesso a essa zona.' });
+    }
+
+    try {
+      await criarOuActualizarCnameCloudflare(cloudflare_token, zona.id, dominioLimpo, hostnameCdn);
+    } catch (erroRegisto) {
+      console.error('Erro a criar registo CNAME na Cloudflare:', erroRegisto);
+      return res.json({ status: 'error', message: 'A Cloudflare recusou criar o registo DNS: ' + String(erroRegisto && erroRegisto.message || erroRegisto) });
+    }
+
+    // Associar o hostname à Pull Zone e tentar emitir o certificado logo -
+    // o DNS da Cloudflare costuma ficar disponível quase de imediato, mas
+    // se ainda não tiver propagado isto falha e dizemos para tentar
+    // "Verificar" daqui a pouco, exactamente como no fluxo manual.
+    try {
+      await bunnyApi('POST', '/pullzone/' + pullZoneId + '/addHostname', { Hostname: dominioLimpo });
+    } catch (erroHostname) {
+      console.error('Erro ao associar hostname em /dominio-cloudflare-auto:', erroHostname);
+    }
+
+    try {
+      await bunnyApi('GET', '/pullzone/loadFreeCertificate?hostname=' + encodeURIComponent(dominioLimpo));
+      await bubblePatch('site', site_id, { 'Dominio Estado': 'Activo' });
+      return res.json({
+        status: 'success',
+        response: {
+          dominio: dominioLimpo,
+          cname_valor: hostnameCdn,
+          activo: true,
+          mensagem: 'O domínio "' + dominioLimpo + '" foi ligado automaticamente pela Cloudflare e já está com HTTPS activo.'
+        }
+      });
+    } catch (erroCertificado) {
+      console.error('Certificado ainda não emitido em /dominio-cloudflare-auto:', erroCertificado);
+      return res.json({
+        status: 'success',
+        response: {
+          dominio: dominioLimpo,
+          cname_valor: hostnameCdn,
+          activo: false,
+          mensagem: 'O registo DNS foi criado na Cloudflare automaticamente. Pode demorar uns minutos a propagar - tenta "Verificar" daqui a pouco.'
+        }
+      });
+    }
+
+  } catch (erro) {
+    console.error('Erro em /dominio-cloudflare-auto:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível configurar automaticamente. Tenta novamente, ou usa o CNAME manual abaixo.' });
   }
 });
 
