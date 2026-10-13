@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.42.1';
+const VERSION = '1.43.0'; // 14/10/2026 - rota /sessao-criar + autenticação de sessão
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -83,6 +83,12 @@ const APP_URL = clean(process.env.APP_URL) || 'https://daniel-ia.pro/dashboard';
 // Endereço da página de planos - só para o botão do email de aviso de
 // expiração (ver templateEmailAvisoExpiracao). Mesma base do APP_URL.
 const PLANOS_URL = APP_URL.replace(/\/dashboard\/?$/, '/planos');
+
+// ---- Chave para as rotas administrativas/de debug (ex: disparar os avisos
+// de expiração na hora, fora do ciclo automático) - nunca exposta ao
+// dashboard, só para chamadas manuais tuas. Define-a nas variáveis de
+// ambiente do container antes de usares essas rotas.
+const ADMIN_SECRET = clean(process.env.ADMIN_SECRET);
 
 // ---- Resend (email transaccional - código de confirmação do cadastro) ----
 const RESEND_KEY = clean(process.env.RESEND_KEY);
@@ -705,17 +711,8 @@ async function uploadParaBunny(caminho, buffer, contentType) {
 }
 
 // ======================================================
-// TESTE TEMPORÁRIO - domínios personalizados dos clientes
+// Helpers - API da Bunny (usados pela secção de domínio personalizado abaixo)
 // ======================================================
-// Isto não é uma funcionalidade definitiva - é só para confirmar, com um
-// teste real na conta Bunny da Daniel.ia, se a técnica que queremos usar
-// para domínios personalizados (uma Pull Zone nova por domínio, com uma
-// regra que faz qualquer pedido ir sempre buscar o mesmo ficheiro) sequer
-// funciona. Cria uma Pull Zone de teste, tenta a regra, testa-a a sério
-// pedindo um caminho ao calhas, e no fim apaga sempre a Pull Zone de teste
-// - não fica nada a mais na conta Bunny, nem a funcionar nem a falhar.
-// Depois de confirmarmos que funciona, isto é substituído pela versão
-// definitiva (ligada a Site/dominio no Bubble). Remover esta rota nessa altura.
 
 let bunnyStorageZoneIdCache = null;
 
@@ -746,99 +743,12 @@ async function obterIdStorageZone() {
   return zona.Id;
 }
 
-app.post('/dominio-teste', async (req, res) => {
-  const passos = [];
-  let pullZoneId = null;
-  try {
-    if (!BUNNY_API_KEY) {
-      return res.json({ status: 'error', message: 'A variável BUNNY_API_KEY não está configurada neste container.' });
-    }
-    const { site_url } = req.body;
-    if (!site_url) {
-      return res.json({ status: 'error', message: 'Falta o link do site de teste.' });
-    }
-
-    // ---- 1. Transformar o link do site no caminho dentro da storage zone ----
-    const prefixo = `https://${CDN_HOST}/${STORAGE_ZONE}/`;
-    if (!String(site_url).startsWith(prefixo)) {
-      return res.json({ status: 'error', message: 'Esse link não parece ser de um site da Daniel.ia (tinha de começar por ' + prefixo + ').' });
-    }
-    const caminhoSite = site_url.slice(prefixo.length);
-    passos.push('Site de teste: ' + caminhoSite);
-
-    // ---- 2. Descobrir o ID da storage zone ----
-    const storageZoneId = await obterIdStorageZone();
-    passos.push('Storage zone "' + STORAGE_ZONE + '" encontrada (id ' + storageZoneId + ')');
-
-    // ---- 3. Criar uma Pull Zone de teste, apontada a essa storage zone ----
-    const nomeZona = 'teste-dominio-' + Date.now();
-    const pullZone = await bunnyApi('POST', '/pullzone', {
-      Name: nomeZona,
-      OriginType: 2,
-      StorageZoneId: storageZoneId
-    });
-    pullZoneId = pullZone.Id;
-    const hostnameTeste = (pullZone.Hostnames && pullZone.Hostnames[0] && pullZone.Hostnames[0].Value) || null;
-    if (!hostnameTeste) {
-      throw new Error('A Pull Zone de teste foi criada mas a Bunny não devolveu nenhum endereço .b-cdn.net.');
-    }
-    passos.push('Pull Zone de teste criada: ' + nomeZona + ' -> ' + hostnameTeste);
-
-    // ---- 4. Criar a regra: qualquer pedido nesta zona vai sempre buscar o mesmo ficheiro ----
-    // Aponta para o endereço PÚBLICO da CDN (o mesmo que já usamos para
-    // mostrar os sites hoje), não para o endereço "cru" da Storage - esse
-    // pede autenticação (AccessKey) e dá 401 Unauthorized, como confirmado
-    // no primeiro teste.
-    const origemFixa = 'https://' + CDN_HOST + '/' + STORAGE_ZONE + '/' + caminhoSite;
-    await bunnyApi('POST', '/pullzone/' + pullZoneId + '/edgerules/addOrUpdate', {
-      ActionType: 2, // Change Origin URL
-      ActionParameter1: origemFixa,
-      Triggers: [{ Type: 0, PatternMatches: ['*'], PatternMatchingType: 0 }],
-      TriggerMatchingType: 0,
-      Enabled: true,
-      OrderIndex: 0,
-      Description: 'Teste - sempre o mesmo ficheiro'
-    });
-    passos.push('Regra criada a apontar sempre para: ' + origemFixa);
-
-    // ---- 5. Esperar a regra ficar activa e testar a sério ----
-    await new Promise(r => setTimeout(r, 5000));
-    const caminhoAoCalhas = '/isto-nao-existe-' + Math.random().toString(36).slice(2, 8);
-    const respTeste = await fetch('https://' + hostnameTeste + caminhoAoCalhas);
-    const corpoTeste = await respTeste.text();
-    const funcionou = respTeste.ok && corpoTeste.toLowerCase().includes('<html');
-    passos.push('Pedido de teste a ' + hostnameTeste + caminhoAoCalhas + ' devolveu estado ' + respTeste.status + ' (' + corpoTeste.length + ' caracteres)');
-
-    return res.json({
-      status: 'success',
-      response: {
-        funcionou: funcionou,
-        passos: passos,
-        amostra: corpoTeste.slice(0, 400)
-      }
-    });
-
-  } catch (erro) {
-    console.error('Erro em /dominio-teste:', erro);
-    return res.json({ status: 'error', message: String(erro && erro.message || erro), passos: passos });
-  } finally {
-    if (pullZoneId) {
-      try {
-        await bunnyApi('DELETE', '/pullzone/' + pullZoneId);
-      } catch (erroApagar) {
-        console.error('Não consegui apagar a Pull Zone de teste ' + pullZoneId + ':', erroApagar);
-      }
-    }
-  }
-});
-
 // ======================================================
-// Domínio personalizado por site (definitivo)
+// Domínio personalizado por site
 // ======================================================
-// Confirmado a 12/10/2026 com a rota /dominio-teste acima: uma Pull Zone
-// nova por domínio, com uma Edge Rule "Change Origin URL" a apontar sempre
-// para o endereço público da CDN do site, funciona. Esta secção é a
-// versão a sério, ligada ao Site no Bubble.
+// Uma Pull Zone nova por domínio, com uma Edge Rule "Change Origin URL" a
+// apontar sempre para o endereço público da CDN do site, ligada ao Site
+// no Bubble.
 
 // Limpa um texto de domínio escrito pela pessoa: tira espaços, "http(s)://"
 // e uma barra final, se vierem por engano.
@@ -1574,7 +1484,7 @@ function aplicarMarcaDeAgua(html, mostrar) {
   html = html.replace(/\s*<a[^>]*id=["']daniel-ia-marca-dagua["'][^>]*>[\s\S]*?<\/a>/i, '');
   if (!mostrar) return html;
 
-  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.com" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:6px;background:#0A0A12;color:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:500;padding:8px 14px;border-radius:999px;text-decoration:none;box-shadow:0 4px 16px rgba(0,0,0,0.25);">⚡ Feito com <strong>Daniel.ia</strong></a>\n`;
+  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.pro" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:6px;background:#0A0A12;color:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:500;padding:8px 14px;border-radius:999px;text-decoration:none;box-shadow:0 4px 16px rgba(0,0,0,0.25);">⚡ Feito com <strong>Daniel.ia</strong></a>\n`;
   if (/<\/body>/i.test(html)) {
     return html.replace(/<\/body>/i, selo + '</body>');
   }
@@ -5652,7 +5562,11 @@ app.post('/verify-code', async (req, res) => {
     }
 
     if (usuario['Token Confirmado']) {
-      return res.json({ status: 'success' }); // já estava confirmado antes, sem mal nenhum
+      // já estava confirmado antes, sem mal nenhum - mas ainda assim dá-lhe
+      // uma sessão nova, para o caso de ter chegado aqui sem token (ex:
+      // clicou duas vezes seguidas no botão de confirmar).
+      const tokenExistente = await criarTokenSessao(owner).catch(() => null);
+      return res.json({ status: 'success', token: tokenExistente });
     }
 
     const codigoCerto = String(usuario['Token'] || '').trim().toUpperCase();
@@ -5667,12 +5581,110 @@ app.post('/verify-code', async (req, res) => {
     }
 
     await bubblePatch('user', owner, { 'Token Confirmado': true });
-    return res.json({ status: 'success' });
+
+    // A confirmação do código é o momento em que a conta passa a estar
+    // "entrada" a sério - por isso já lhe damos aqui um token de sessão
+    // verdadeiro, em vez de mandar a pessoa fazer login outra vez a
+    // seguir. O dashboard vai usar este token em todos os pedidos
+    // seguintes (ver /sessao-criar, mais abaixo, para o mesmo mecanismo
+    // usado pelo login feito no Bubble).
+    const token = await criarTokenSessao(owner).catch((erro) => {
+      console.error('Não foi possível criar sessão após /verify-code:', erro);
+      return null;
+    });
+
+    return res.json({ status: 'success', token: token });
   } catch (erro) {
     console.error('Erro em /verify-code:', erro);
     return res.json({ status: 'error', message: 'Não foi possível confirmar o código. Tenta novamente.' });
   }
 });
+
+// ======================================================
+// Sessão (autenticação a sério)
+// ======================================================
+// Até aqui, qualquer rota que recebesse um "owner" confiava nele sem mais
+// nada - bastava alguém saber o unique id de outra conta para se fazer
+// passar por ela. Esta secção resolve isso: dá a cada login/confirmação
+// um token de sessão aleatório (64 caracteres, nunca adivinhável), grava-o
+// no User, e cada rota que mexe em dados de uma conta passa a exigir esse
+// token em vez de confiar só no owner.
+//
+// Campos novos no Bubble antes disto funcionar: tipo User, campo
+// "Token Sessao" (text) e "Token Sessao Expira" (date).
+//
+// Esta rota só pode ser chamada pelo próprio Bubble (workflows de login,
+// signup e verify-code), nunca directamente pelo browser - por isso exige
+// a mesma ADMIN_SECRET usada no /plan-warnings-teste-7hq2fx. Define essa
+// chave também no API Connector do Bubble, como um "Private key" do
+// corpo do pedido (nunca Private no cabeçalho, para não ires parar à
+// mesma armadilha de outra vez).
+const SESSAO_DIAS_VALIDADE = 90;
+
+// Gera um token de sessão novo para este owner e grava-o no Bubble. Partilhada
+// por duas chamadoras: a rota /sessao-criar (chamada de fora, pelo Bubble, por
+// isso protegida por ADMIN_SECRET) e /verify-code (chamada aqui dentro do
+// próprio servidor, já depois de confirmar que o owner é quem diz ser - não
+// precisa de chave outra vez). Lança erro se o owner não existir; quem chama
+// decide o que fazer com isso.
+async function criarTokenSessao(owner) {
+  const usuario = await bubbleGet('user', owner);
+  if (!usuario) {
+    throw new Error('Utilizador não encontrado.');
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expira = new Date(Date.now() + SESSAO_DIAS_VALIDADE * 24 * 60 * 60 * 1000);
+
+  await bubblePatch('user', owner, {
+    'Token Sessao': token,
+    'Token Sessao Expira': expira.toISOString()
+  });
+
+  return token;
+}
+
+app.post('/sessao-criar', async (req, res) => {
+  try {
+    const { owner, key } = req.body;
+    if (!ADMIN_SECRET || key !== ADMIN_SECRET) {
+      return res.json({ status: 'error', message: 'Não autorizado.' });
+    }
+    if (!owner) {
+      return res.json({ status: 'error', message: 'Falta o owner.' });
+    }
+
+    const token = await criarTokenSessao(owner);
+    return res.json({ status: 'success', token: token });
+  } catch (erro) {
+    console.error('Erro em /sessao-criar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar a sessão. Tenta novamente.' });
+  }
+});
+
+// Confere se um par owner+token corresponde a uma sessão válida e ainda
+// dentro do prazo. Devolve o utilizador (já carregado, para não teres de
+// o voltar a pedir à Data API) quando está tudo certo, ou null quando não
+// está - a rota que chamar isto decide o que responder ao browser nesse
+// caso (ver exemplo de uso mais abaixo).
+async function validarSessao(owner, token) {
+  try {
+    if (!owner || !token) return null;
+    const usuario = await bubbleGet('user', owner);
+    if (!usuario) return null;
+
+    const tokenCerto = usuario['Token Sessao'];
+    if (!tokenCerto || tokenCerto !== token) return null;
+
+    const expiraEm = usuario['Token Sessao Expira'] ? new Date(usuario['Token Sessao Expira']) : null;
+    if (!expiraEm || isNaN(expiraEm.getTime()) || expiraEm.getTime() < Date.now()) return null;
+
+    return usuario;
+  } catch (erro) {
+    console.error('Erro em validarSessao:', erro);
+    return null;
+  }
+}
 
 // ======================================================
 // Aviso de expiração de plano
@@ -5738,9 +5750,15 @@ setInterval(verificarAvisosExpiracao, 24 * 60 * 60 * 1000);
 
 // Rota para testares a verificação na hora, sem esperar pelo ciclo
 // automático - endereço pouco óbvio de propósito, mesmo padrão dos
-// webhooks. Devolve quantas contas foram avisadas desta vez.
+// webhooks, MAS agora também exige a ADMIN_SECRET (antes não exigia nada,
+// e qualquer pessoa que descobrisse o endereço conseguia disparar avisos
+// de expiração para todos os utilizadores à vontade). Devolve quantas
+// contas foram avisadas desta vez.
 app.post('/plan-warnings-teste-7hq2fx', async (req, res) => {
   try {
+    if (!ADMIN_SECRET || req.body.key !== ADMIN_SECRET) {
+      return res.json({ status: 'error', message: 'Não autorizado.' });
+    }
     await verificarAvisosExpiracao();
     return res.json({ status: 'success', message: 'Verificação feita - ver os logs do container para detalhes.' });
   } catch (erro) {
