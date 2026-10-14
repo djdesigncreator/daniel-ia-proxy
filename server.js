@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.43.0'; // 14/10/2026 - rota /sessao-criar + autenticação de sessão
+const VERSION = '1.45.0'; // 14/10/2026 - KYC (selfie + B.I. pela câmara, aprovação manual em /admin-kyc)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -65,7 +65,7 @@ const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'l
 const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 32000;
 
 // ---- MozPayment ----
-// Credenciais da conta MozPayment da Daniel.ia (diferente da carteira do
+// Credenciais da conta MozPayment da Daniel IA (diferente da carteira do
 // projecto Bag Security). Nunca aparecem em nenhum HTML gerado nem são
 // devolvidas a nenhuma página - ficam só aqui no container.
 const MOZPAYMENT_EMAIL = clean(process.env.MOZPAYMENT_EMAIL);
@@ -77,7 +77,7 @@ const MOZPAYMENT_WALLET = clean(process.env.MOZPAYMENT_WALLET);
 // depois de pagar).
 const SELF_URL = clean(process.env.SELF_URL) || 'https://mc-8oxfde5o71.bunny.run';
 
-// Endereço do dashboard da app Daniel.ia - usado para onde a pessoa volta
+// Endereço do dashboard da app Daniel IA - usado para onde a pessoa volta
 // depois de assinar um plano (ver /assinatura-obrigado).
 const APP_URL = clean(process.env.APP_URL) || 'https://daniel-ia.pro/dashboard';
 // Endereço da página de planos - só para o botão do email de aviso de
@@ -93,11 +93,11 @@ const ADMIN_SECRET = clean(process.env.ADMIN_SECRET);
 // ---- Resend (email transaccional - código de confirmação do cadastro) ----
 const RESEND_KEY = clean(process.env.RESEND_KEY);
 // MAIL_FROM pode vir só como endereço ("naoresponder@daniel-ia.pro") ou já
-// formatado ("Daniel.ia <naoresponder@daniel-ia.pro>") - aceitamos os dois.
+// formatado ("Daniel IA <naoresponder@daniel-ia.pro>") - aceitamos os dois.
 const MAIL_FROM = clean(process.env.MAIL_FROM) || 'naoresponder@daniel-ia.pro';
 
 // ---- Bunny Stream (vídeo da Galeria) ----
-// Video Library própria da conta Bunny do Daniel.ia, separada da storage
+// Video Library própria da conta Bunny do Daniel IA, separada da storage
 // zone/pull zone usadas para fotos e ficheiros dos sites. Vídeo não sobe
 // em base64 (ficaria grande demais) - sobe directamente do browser para o
 // Bunny Stream por TUS (upload com retoma), e este container só autoriza
@@ -262,10 +262,10 @@ function formatarDataPt(data) {
 // Envia um email pelo Resend, usando o domínio verificado daniel-ia.pro.
 // replyTo é opcional - usado pelo formulário de contacto, para o dono do
 // site conseguir responder directamente à pessoa que escreveu, sem o
-// Daniel.ia ficar no meio da conversa.
+// Daniel IA ficar no meio da conversa.
 async function enviarEmail(destinatario, assunto, html, replyTo) {
   if (!RESEND_KEY) throw new Error('Falta a variável RESEND_KEY no container.');
-  const remetente = MAIL_FROM.includes('<') ? MAIL_FROM : `Daniel.ia <${MAIL_FROM}>`;
+  const remetente = MAIL_FROM.includes('<') ? MAIL_FROM : `Daniel IA <${MAIL_FROM}>`;
   const corpo = {
     from: remetente,
     to: [destinatario],
@@ -288,7 +288,7 @@ async function enviarEmail(destinatario, assunto, html, replyTo) {
 
 // Email formatado (HTML com estilos inline, compatível com Gmail/Outlook)
 // para o código de confirmação do cadastro - mesma identidade visual do
-// resto do Daniel.ia (gradiente roxo->índigo, cartão claro).
+// resto do Daniel IA (gradiente roxo->índigo, cartão claro).
 function templateEmailCodigo(nome, codigo) {
   const primeiroNome = escaparHtml(String(nome || '').trim().split(' ')[0] || '');
   const saudacao = primeiroNome ? `Olá, ${primeiroNome}.` : 'Olá.';
@@ -298,33 +298,32 @@ function templateEmailCodigo(nome, codigo) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>O teu código - Daniel.ia</title>
+<title>O teu código - Daniel IA</title>
 </head>
-<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
 <tr><td align="center">
-<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
 <tr>
-<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
-<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
-<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
 </td>
 </tr>
 <tr>
 <td style="padding:36px 32px 28px 32px;">
-<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
-<p style="margin:0 0 28px 0;color:#6B6880;font-size:14px;line-height:1.6;">Usa o código abaixo para confirmares o teu email e activares a tua conta no Daniel.ia. Este código expira em 15 minutos.</p>
+<p style="margin:0 0 4px 0;color:#1A0A27;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 28px 0;color:#6F5E81;font-size:14px;line-height:1.6;">Usa o código abaixo para confirmares o teu email e activares a tua conta no Daniel IA. Este código expira em 15 minutos.</p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-<tr><td align="center" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;padding:20px;">
-<span style="font-family:'Courier New',Courier,monospace;font-size:28px;font-weight:700;letter-spacing:6px;color:#14121F;">${codigoEspacado}</span>
+<tr><td align="center" style="background:#F7F2FB;border:1px solid #EAE2F2;border-radius:12px;padding:20px;">
+<span style="font-family:'Courier New',Courier,monospace;font-size:28px;font-weight:700;letter-spacing:6px;color:#430960;">${codigoEspacado}</span>
 </td></tr>
 </table>
-<p style="margin:24px 0 0 0;color:#9B98AE;font-size:12.5px;line-height:1.6;">Se não pediste esta conta, ignora este email - ninguém mais consegue entrar sem este código.</p>
+<p style="margin:24px 0 0 0;color:#9A8CAB;font-size:12.5px;line-height:1.6;">Se não pediste esta conta, ignora este email - ninguém mais consegue entrar sem este código.</p>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
-<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Daniel IA · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -338,7 +337,7 @@ function templateEmailCodigo(nome, codigo) {
 // que alguém escreveu pelo formulário de contacto do site. Mesma
 // identidade visual dos outros emails - a diferença é que o "Responder"
 // num cliente de email normal vai direito para a pessoa que escreveu
-// (ver reply_to em enviarEmail), nunca para o Daniel.ia.
+// (ver reply_to em enviarEmail), nunca para o Daniel IA.
 function templateEmailContacto(nomeSite, nomeRemetente, emailRemetente, mensagem) {
   const nomeSiteEsc = escaparHtml(String(nomeSite || 'o teu site').trim());
   const nomeRemetenteEsc = escaparHtml(String(nomeRemetente || '').trim());
@@ -349,34 +348,33 @@ function templateEmailContacto(nomeSite, nomeRemetente, emailRemetente, mensagem
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nova mensagem de contacto - Daniel.ia</title>
+<title>Nova mensagem de contacto - Daniel IA</title>
 </head>
-<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
 <tr><td align="center">
-<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
 <tr>
-<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
-<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
-<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
 </td>
 </tr>
 <tr>
 <td style="padding:36px 32px 28px 32px;">
-<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">Nova mensagem de contacto</p>
-<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">Alguém escreveu pelo formulário de contacto de <strong>${nomeSiteEsc}</strong>. Para responder, basta usar o botão "Responder" do teu email - vai directo para esta pessoa.</p>
+<p style="margin:0 0 4px 0;color:#1A0A27;font-size:18px;font-weight:700;">Nova mensagem de contacto</p>
+<p style="margin:0 0 24px 0;color:#6F5E81;font-size:14px;line-height:1.6;">Alguém escreveu pelo formulário de contacto de <strong>${nomeSiteEsc}</strong>. Para responder, basta usar o botão "Responder" do teu email - vai directo para esta pessoa.</p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-<tr><td style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;padding:18px 20px;">
-<p style="margin:0 0 10px 0;color:#14121F;font-size:14px;"><strong>Nome:</strong> ${nomeRemetenteEsc}</p>
-<p style="margin:0 0 14px 0;color:#14121F;font-size:14px;"><strong>Email:</strong> ${emailRemetenteEsc}</p>
-<p style="margin:0;color:#3A374A;font-size:14px;line-height:1.6;">${mensagemEsc}</p>
+<tr><td style="background:#F7F2FB;border:1px solid #EAE2F2;border-radius:12px;padding:18px 20px;">
+<p style="margin:0 0 10px 0;color:#1A0A27;font-size:14px;"><strong>Nome:</strong> ${nomeRemetenteEsc}</p>
+<p style="margin:0 0 14px 0;color:#1A0A27;font-size:14px;"><strong>Email:</strong> ${emailRemetenteEsc}</p>
+<p style="margin:0;color:#3B2C4A;font-size:14px;line-height:1.6;">${mensagemEsc}</p>
 </td></tr>
 </table>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
-<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Daniel IA · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -400,52 +398,51 @@ function templateEmailAssinatura(nome, nomePlano, valorMzn, expiraEm) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Assinatura confirmada - Daniel.ia</title>
+<title>Assinatura confirmada - Daniel IA</title>
 </head>
-<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
 <tr><td align="center">
-<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
 <tr>
-<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
-<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
-<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
 </td>
 </tr>
 <tr>
 <td style="padding:36px 32px 28px 32px;">
-<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
-<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">O teu pagamento foi confirmado e a tua assinatura já está activa. Obrigado por confiares no Daniel.ia.</p>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;">
+<p style="margin:0 0 4px 0;color:#1A0A27;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6F5E81;font-size:14px;line-height:1.6;">O teu pagamento foi confirmado e a tua assinatura já está activa. Obrigado por confiares no Daniel IA.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F2FB;border:1px solid #EAE2F2;border-radius:12px;">
 <tr>
-<td style="padding:18px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Plano</span>
-<span style="display:block;color:#14121F;font-size:16px;font-weight:700;">${plano}</span>
+<td style="padding:18px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Plano</span>
+<span style="display:block;color:#1A0A27;font-size:16px;font-weight:700;">${plano}</span>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Valor pago</span>
-<span style="display:block;color:#14121F;font-size:16px;font-weight:700;">${valorFormatado}</span>
+<td style="padding:18px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Valor pago</span>
+<span style="display:block;color:#1A0A27;font-size:16px;font-weight:700;">${valorFormatado}</span>
 </td>
 </tr>
 <tr>
 <td style="padding:18px 20px;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Válido até</span>
-<span style="display:block;color:#14121F;font-size:16px;font-weight:700;">${dataFormatada}</span>
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Válido até</span>
+<span style="display:block;color:#1A0A27;font-size:16px;font-weight:700;">${dataFormatada}</span>
 </td>
 </tr>
 </table>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
 <tr><td align="center">
-<a href="${APP_URL}" style="display:inline-block;background:linear-gradient(135deg,#A855F7,#6366F1);color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:13px 28px;border-radius:10px;">Ir para o dashboard</a>
+<a href="${APP_URL}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:14px;font-weight:600;padding:13px 28px;border-radius:10px;">Ir para o dashboard</a>
 </td></tr>
 </table>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
-<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Daniel IA · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -462,7 +459,7 @@ function formatarMetodoPagamento(metodo) {
 }
 
 // Email formatado (HTML com estilos inline) - recibo de pagamento da
-// assinatura de um plano da própria Daniel.ia. Diferente do
+// assinatura de um plano da própria Daniel IA. Diferente do
 // templateEmailAssinatura (que dá as boas-vindas ao plano novo): este é
 // só o comprovativo do pagamento em si, com referência e método.
 function templateEmailReciboAssinatura(nome, nomePlano, valorMzn, metodo, referencia, dataPagamento) {
@@ -478,59 +475,58 @@ function templateEmailReciboAssinatura(nome, nomePlano, valorMzn, metodo, refere
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Recibo de pagamento - Daniel.ia</title>
+<title>Recibo de pagamento - Daniel IA</title>
 </head>
-<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
 <tr><td align="center">
-<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
 <tr>
-<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
-<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
-<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
 </td>
 </tr>
 <tr>
 <td style="padding:36px 32px 28px 32px;">
-<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
-<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">Aqui está o recibo do teu pagamento. Guarda este email para a tua referência.</p>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;">
+<p style="margin:0 0 4px 0;color:#1A0A27;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6F5E81;font-size:14px;line-height:1.6;">Aqui está o recibo do teu pagamento. Guarda este email para a tua referência.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F2FB;border:1px solid #EAE2F2;border-radius:12px;">
 <tr>
-<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Plano</span>
-<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${plano}</span>
+<td style="padding:16px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Plano</span>
+<span style="display:block;color:#1A0A27;font-size:15px;font-weight:700;">${plano}</span>
 </td>
 </tr>
 <tr>
-<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Valor pago</span>
-<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${valorFormatado}</span>
+<td style="padding:16px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Valor pago</span>
+<span style="display:block;color:#1A0A27;font-size:15px;font-weight:700;">${valorFormatado}</span>
 </td>
 </tr>
 <tr>
-<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Método</span>
-<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${metodoFormatado}</span>
+<td style="padding:16px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Método</span>
+<span style="display:block;color:#1A0A27;font-size:15px;font-weight:700;">${metodoFormatado}</span>
 </td>
 </tr>
 <tr>
-<td style="padding:16px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Referência</span>
-<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${referenciaFormatada}</span>
+<td style="padding:16px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Referência</span>
+<span style="display:block;color:#1A0A27;font-size:15px;font-weight:700;">${referenciaFormatada}</span>
 </td>
 </tr>
 <tr>
 <td style="padding:16px 20px;">
-<span style="display:block;color:#9B98AE;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Data do pagamento</span>
-<span style="display:block;color:#14121F;font-size:15px;font-weight:700;">${dataFormatada}</span>
+<span style="display:block;color:#9A8CAB;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">Data do pagamento</span>
+<span style="display:block;color:#1A0A27;font-size:15px;font-weight:700;">${dataFormatada}</span>
 </td>
 </tr>
 </table>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
-<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Daniel IA · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -541,7 +537,7 @@ function templateEmailReciboAssinatura(nome, nomePlano, valorMzn, metodo, refere
 }
 
 // Email formatado (HTML com estilos inline) - recibo de pagamento de uma
-// compra numa loja gerada pela Daniel.ia (E-commerce/Checkout de um
+// compra numa loja gerada pela Daniel IA (E-commerce/Checkout de um
 // cliente). Enviado ao comprador final, não ao dono da loja. "itens" é a
 // lista já calculada (nome, preco_unitario, quantidade) guardada em
 // "Produtos Json" na Encomenda.
@@ -560,8 +556,8 @@ function templateEmailReciboLoja(nomeCliente, nomeLoja, itens, valorTotal, metod
     const precoUnit = Number(item.preco_unitario || 0);
     const subtotal = escaparHtml((precoUnit * qtd).toLocaleString('pt-PT') + ' MZN');
     return `<tr>
-<td style="padding:10px 0;border-bottom:1px solid #E6E4F0;color:#14121F;font-size:13.5px;">${nomeItem} <span style="color:#9B98AE;">x${qtd}</span></td>
-<td style="padding:10px 0;border-bottom:1px solid #E6E4F0;color:#14121F;font-size:13.5px;font-weight:700;text-align:right;">${subtotal}</td>
+<td style="padding:10px 0;border-bottom:1px solid #EAE2F2;color:#1A0A27;font-size:13.5px;">${nomeItem} <span style="color:#9A8CAB;">x${qtd}</span></td>
+<td style="padding:10px 0;border-bottom:1px solid #EAE2F2;color:#1A0A27;font-size:13.5px;font-weight:700;text-align:right;">${subtotal}</td>
 </tr>`;
   }).join('');
 
@@ -572,51 +568,51 @@ function templateEmailReciboLoja(nomeCliente, nomeLoja, itens, valorTotal, metod
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Recibo de compra - ${loja}</title>
 </head>
-<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
 <tr><td align="center">
-<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
 <tr>
-<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
 <span style="display:inline-block;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">${loja}</span>
 </td>
 </tr>
 <tr>
 <td style="padding:36px 32px 28px 32px;">
-<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
-<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">Obrigado pela tua compra. Aqui está o recibo, para a tua referência.</p>
+<p style="margin:0 0 4px 0;color:#1A0A27;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6F5E81;font-size:14px;line-height:1.6;">Obrigado pela tua compra. Aqui está o recibo, para a tua referência.</p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:18px;">
 ${linhasItens}
 <tr>
-<td style="padding:14px 0 0 0;color:#14121F;font-size:15px;font-weight:800;">Total</td>
-<td style="padding:14px 0 0 0;color:#14121F;font-size:15px;font-weight:800;text-align:right;">${valorFormatado}</td>
+<td style="padding:14px 0 0 0;color:#1A0A27;font-size:15px;font-weight:800;">Total</td>
+<td style="padding:14px 0 0 0;color:#1A0A27;font-size:15px;font-weight:800;text-align:right;">${valorFormatado}</td>
 </tr>
 </table>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F5FC;border:1px solid #E6E4F0;border-radius:12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F2FB;border:1px solid #EAE2F2;border-radius:12px;">
 <tr>
-<td style="padding:14px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Método</span>
-<span style="display:block;color:#14121F;font-size:14px;font-weight:700;">${metodoFormatado}</span>
+<td style="padding:14px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Método</span>
+<span style="display:block;color:#1A0A27;font-size:14px;font-weight:700;">${metodoFormatado}</span>
 </td>
 </tr>
 <tr>
-<td style="padding:14px 20px;border-bottom:1px solid #E6E4F0;">
-<span style="display:block;color:#9B98AE;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Referência</span>
-<span style="display:block;color:#14121F;font-size:14px;font-weight:700;">${referenciaFormatada}</span>
+<td style="padding:14px 20px;border-bottom:1px solid #EAE2F2;">
+<span style="display:block;color:#9A8CAB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Referência</span>
+<span style="display:block;color:#1A0A27;font-size:14px;font-weight:700;">${referenciaFormatada}</span>
 </td>
 </tr>
 <tr>
 <td style="padding:14px 20px;">
-<span style="display:block;color:#9B98AE;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Data</span>
-<span style="display:block;color:#14121F;font-size:14px;font-weight:700;">${dataFormatada}</span>
+<span style="display:block;color:#9A8CAB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Data</span>
+<span style="display:block;color:#1A0A27;font-size:14px;font-weight:700;">${dataFormatada}</span>
 </td>
 </tr>
 </table>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
-<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Enviado via Daniel.ia · daniel-ia.pro</p>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Enviado via Daniel IA · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -643,22 +639,21 @@ function templateEmailAvisoExpiracao(nome, nomePlano, dataExpira, diasRestantes)
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>O teu plano está a expirar - Daniel.ia</title>
+<title>O teu plano está a expirar - Daniel IA</title>
 </head>
-<body style="margin:0;padding:0;background:#F4F4F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F4F8;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
 <tr><td align="center">
-<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E6E4F0;">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
 <tr>
-<td style="background:linear-gradient(135deg,#A855F7,#6366F1);padding:28px 32px;text-align:center;">
-<span style="display:inline-block;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.18);vertical-align:middle;line-height:38px;color:#ffffff;font-weight:700;font-size:18px;">D</span>
-<span style="display:inline-block;vertical-align:middle;margin-left:10px;color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-0.02em;">Daniel<span style="opacity:.85;"> IA</span></span>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
 </td>
 </tr>
 <tr>
 <td style="padding:36px 32px 28px 32px;">
-<p style="margin:0 0 4px 0;color:#14121F;font-size:18px;font-weight:700;">${saudacao}</p>
-<p style="margin:0 0 24px 0;color:#6B6880;font-size:14px;line-height:1.6;">O teu plano <strong>${plano}</strong> ${fraseDias}. Renova antes dessa data para não perderes o acesso às funcionalidades pagas.</p>
+<p style="margin:0 0 4px 0;color:#1A0A27;font-size:18px;font-weight:700;">${saudacao}</p>
+<p style="margin:0 0 24px 0;color:#6F5E81;font-size:14px;line-height:1.6;">O teu plano <strong>${plano}</strong> ${fraseDias}. Renova antes dessa data para não perderes o acesso às funcionalidades pagas.</p>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFF8EB;border:1px solid #F2DFAF;border-radius:12px;">
 <tr>
 <td style="padding:18px 20px;">
@@ -669,14 +664,14 @@ function templateEmailAvisoExpiracao(nome, nomePlano, dataExpira, diasRestantes)
 </table>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
 <tr><td align="center">
-<a href="${PLANOS_URL}" style="display:inline-block;background:linear-gradient(135deg,#A855F7,#6366F1);color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:13px 28px;border-radius:10px;">Renovar agora</a>
+<a href="${PLANOS_URL}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:14px;font-weight:600;padding:13px 28px;border-radius:10px;">Renovar agora</a>
 </td></tr>
 </table>
 </td>
 </tr>
 <tr>
-<td style="padding:18px 32px;background:#FAFAFC;border-top:1px solid #E6E4F0;text-align:center;">
-<p style="margin:0;color:#B5B2C4;font-size:11.5px;">Daniel.ia · daniel-ia.pro</p>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Daniel IA · daniel-ia.pro</p>
 </td>
 </tr>
 </table>
@@ -1407,7 +1402,7 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
   // por email para o endereço que o dono do site escolher.
   const instrucaoContacto = `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-contacto"></div> - é ali que o formulário de contacto a sério (nome, email, mensagem, já ligado para enviar a mensagem ao dono do site) vai aparecer sozinho, gerido por um sistema à parte. Não escrevas tu nenhum formulário, nem campos de nome/email/mensagem, nem botão de enviar - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Contacto" ou "Fala connosco").`;
 
-  const systemPrompt = `Você é o motor de geração de sites da Daniel.ia, uma plataforma moçambicana.
+  const systemPrompt = `Você é o motor de geração de sites da Daniel IA, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
@@ -1475,7 +1470,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   return { html, tokens };
 }
 
-// Mostra ou remove o selo "Feito com Daniel.ia" no canto do site, segundo o
+// Mostra ou remove o selo "Feito com Daniel IA" no canto do site, segundo o
 // plano do dono (só o Free tem marca de água). Remove sempre primeiro
 // qualquer selo que já exista e só volta a pô-lo se for preciso - assim,
 // se a pessoa subir de plano e depois editar o site, o selo desaparece
@@ -1484,7 +1479,7 @@ function aplicarMarcaDeAgua(html, mostrar) {
   html = html.replace(/\s*<a[^>]*id=["']daniel-ia-marca-dagua["'][^>]*>[\s\S]*?<\/a>/i, '');
   if (!mostrar) return html;
 
-  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.pro" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:6px;background:#0A0A12;color:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:500;padding:8px 14px;border-radius:999px;text-decoration:none;box-shadow:0 4px 16px rgba(0,0,0,0.25);">⚡ Feito com <strong>Daniel.ia</strong></a>\n`;
+  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.pro" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:8px;background:rgba(15,5,24,0.92);color:#F6F2FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:500;line-height:1;padding:8px 14px 8px 10px;border-radius:999px;text-decoration:none;border:1px solid rgba(137,200,4,0.35);box-shadow:0 8px 24px rgba(67,9,96,0.45);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);"><svg viewBox="111 492.5 250 250" width="16" height="16" aria-hidden="true" style="display:block;flex-shrink:0;"><path fill="#FFFFFF" d="M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z"/><circle fill="#89C804" cx="149.1" cy="612.7" r="29.7"/></svg><span>Feito com <strong style="font-weight:800;color:#FFFFFF;">Daniel <span style="color:#89C804;">IA</span></strong></span></a>\n`;
   if (/<\/body>/i.test(html)) {
     return html.replace(/<\/body>/i, selo + '</body>');
   }
@@ -1659,9 +1654,9 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
   // Aplica-se a TODOS os sites, seja qual for o tipo.
   const instrucaoContacto = `\nATENÇÃO: esta página tem de continuar a ter, exactamente como está, a div <div id="daniel-ia-contacto"></div> e os dois <script> antes de </body> que carregam o módulo de contacto (window.DANIEL_IA_SITE_ID e contacto-form.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu nenhum formulário de contacto a sério - isso continua a ser tratado à parte, automaticamente.`;
 
-  const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel.ia"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
+  const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel IA"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
 
-  const systemPrompt = `Você é o motor de edição de sites da Daniel.ia, uma plataforma moçambicana.
+  const systemPrompt = `Você é o motor de edição de sites da Daniel IA, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
@@ -1730,7 +1725,7 @@ ${htmlAtual}`;
 // ficheiro que todos os sites de E-commerce/Checkout gerados carregam -
 // nunca é a IA a escrever esta lógica.
 const LOJA_CART_JS = `/*
-  Daniel.ia - módulo fixo de loja (produtos, carrinho e checkout real)
+  Daniel IA - módulo fixo de loja (produtos, carrinho e checkout real)
   ---------------------------------------------------------------------
   Este ficheiro é servido pelo próprio container em /loja-cart.js e é
   carregado por TODOS os sites de E-commerce/Checkout gerados pela IA.
@@ -1748,7 +1743,7 @@ const LOJA_CART_JS = `/*
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
 
   if (!SITE_ID) {
-    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o módulo da loja não pode arrancar.');
+    console.error('Daniel IA: falta window.DANIEL_IA_SITE_ID nesta página - o módulo da loja não pode arrancar.');
     return;
   }
 
@@ -1837,7 +1832,7 @@ const LOJA_CART_JS = `/*
   function montarUI(){
     var alvo = document.getElementById('daniel-ia-produtos');
     if (!alvo) {
-      console.error('Daniel.ia: falta uma div com id="daniel-ia-produtos" nesta página - os produtos não têm onde aparecer.');
+      console.error('Daniel IA: falta uma div com id="daniel-ia-produtos" nesta página - os produtos não têm onde aparecer.');
       return;
     }
     alvo.innerHTML = '<div id="dia-grelha" class="dia-grelha"><p class="dia-vazio">A carregar produtos...</p></div>';
@@ -2157,7 +2152,7 @@ const LOJA_CART_JS = `/*
 // vídeos de cada álbum, com transições suaves e vídeo por HLS (hls.js,
 // carregado só se for mesmo preciso).
 const GALERIA_VIEWER_JS = `/*
-  Daniel.ia - módulo fixo da Galeria (álbuns + visualizador)
+  Daniel IA - módulo fixo da Galeria (álbuns + visualizador)
   ---------------------------------------------------------------------
   Este ficheiro é servido pelo próprio container em /galeria-viewer.js e
   é carregado por TODOS os sites de Galeria gerados pela IA. A IA nunca
@@ -2174,7 +2169,7 @@ const GALERIA_VIEWER_JS = `/*
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
 
   if (!SITE_ID) {
-    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o visualizador da galeria não pode arrancar.');
+    console.error('Daniel IA: falta window.DANIEL_IA_SITE_ID nesta página - o visualizador da galeria não pode arrancar.');
     return;
   }
 
@@ -2241,7 +2236,7 @@ const GALERIA_VIEWER_JS = `/*
   function montarGrelha(){
     var alvo = document.getElementById('daniel-ia-galeria');
     if (!alvo) {
-      console.error('Daniel.ia: falta uma div com id="daniel-ia-galeria" nesta página - os álbuns não têm onde aparecer.');
+      console.error('Daniel IA: falta uma div com id="daniel-ia-galeria" nesta página - os álbuns não têm onde aparecer.');
       return null;
     }
     alvo.innerHTML = '<div id="dig-grelha" class="dig-grelha"><p class="dig-vazio">A carregar álbuns...</p></div>';
@@ -2453,7 +2448,7 @@ const GALERIA_VIEWER_JS = `/*
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js';
     script.onload = callback;
     script.onerror = function(){
-      console.error('Daniel.ia: não foi possível carregar o leitor de vídeo.');
+      console.error('Daniel IA: não foi possível carregar o leitor de vídeo.');
       callback();
     };
     document.head.appendChild(script);
@@ -2502,7 +2497,7 @@ const GALERIA_VIEWER_JS = `/*
 // álbuns dentro de álbuns, só uma grelha de trabalhos, e um modal com a
 // descrição completa (e um link "Ver projecto", se o dono tiver posto um).
 const PORTFOLIO_VIEWER_JS = `/*
-  Daniel.ia - módulo fixo do Portefólio (grelha de trabalhos)
+  Daniel IA - módulo fixo do Portefólio (grelha de trabalhos)
   ---------------------------------------------------------------------
   Este ficheiro é servido pelo próprio container em /portfolio-viewer.js
   e é carregado por TODOS os sites de Portefólio gerados pela IA. A IA
@@ -2520,7 +2515,7 @@ const PORTFOLIO_VIEWER_JS = `/*
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
 
   if (!SITE_ID) {
-    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o portefólio não pode arrancar.');
+    console.error('Daniel IA: falta window.DANIEL_IA_SITE_ID nesta página - o portefólio não pode arrancar.');
     return;
   }
 
@@ -2566,7 +2561,7 @@ const PORTFOLIO_VIEWER_JS = `/*
   function montarGrelha(){
     var alvo = document.getElementById('daniel-ia-portfolio');
     if (!alvo) {
-      console.error('Daniel.ia: falta uma div com id="daniel-ia-portfolio" nesta página - os trabalhos não têm onde aparecer.');
+      console.error('Daniel IA: falta uma div com id="daniel-ia-portfolio" nesta página - os trabalhos não têm onde aparecer.');
       return null;
     }
     alvo.innerHTML = '<div id="dip-grelha" class="dip-grelha"><p class="dip-vazio">A carregar trabalhos...</p></div>';
@@ -2690,7 +2685,7 @@ const PORTFOLIO_VIEWER_JS = `/*
 // (imagem, data, título, resumo) e, ao clicar, um "artigo" num overlay
 // com a imagem grande e o conteúdo completo.
 const BLOG_VIEWER_JS = `/*
-  Daniel.ia - módulo fixo do Blog (grelha de artigos)
+  Daniel IA - módulo fixo do Blog (grelha de artigos)
   ---------------------------------------------------------------------
   Este ficheiro é servido pelo próprio container em /blog-viewer.js e é
   carregado por TODOS os sites de Blog gerados pela IA. A IA nunca
@@ -2707,7 +2702,7 @@ const BLOG_VIEWER_JS = `/*
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
 
   if (!SITE_ID) {
-    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o blog não pode arrancar.');
+    console.error('Daniel IA: falta window.DANIEL_IA_SITE_ID nesta página - o blog não pode arrancar.');
     return;
   }
 
@@ -2762,7 +2757,7 @@ const BLOG_VIEWER_JS = `/*
   function montarGrelha(){
     var alvo = document.getElementById('daniel-ia-blog');
     if (!alvo) {
-      console.error('Daniel.ia: falta uma div com id="daniel-ia-blog" nesta página - os artigos não têm onde aparecer.');
+      console.error('Daniel IA: falta uma div com id="daniel-ia-blog" nesta página - os artigos não têm onde aparecer.');
       return null;
     }
     alvo.innerHTML = '<div id="dib-grelha" class="dib-grelha"><p class="dib-vazio">A carregar artigos...</p></div>';
@@ -2884,7 +2879,7 @@ const BLOG_VIEWER_JS = `/*
 // mais acima). A IA nunca escreve este formulário - só deixa a div
 // com id="daniel-ia-contacto" onde este módulo o desenha a sério.
 const CONTACTO_FORM_JS = `/*
-  Daniel.ia - módulo fixo do Formulário de Contacto
+  Daniel IA - módulo fixo do Formulário de Contacto
   ---------------------------------------------------------------------
   Este ficheiro é servido pelo próprio container em /contacto-form.js e
   é carregado por TODOS os sites gerados pela IA, seja qual for o tipo.
@@ -2902,7 +2897,7 @@ const CONTACTO_FORM_JS = `/*
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
 
   if (!SITE_ID) {
-    console.error('Daniel.ia: falta window.DANIEL_IA_SITE_ID nesta página - o formulário de contacto não pode arrancar.');
+    console.error('Daniel IA: falta window.DANIEL_IA_SITE_ID nesta página - o formulário de contacto não pode arrancar.');
     return;
   }
 
@@ -2931,7 +2926,7 @@ const CONTACTO_FORM_JS = `/*
   function montarFormulario(){
     var alvo = document.getElementById('daniel-ia-contacto');
     if (!alvo) {
-      console.error('Daniel.ia: falta uma div com id="daniel-ia-contacto" nesta página - o formulário não tem onde aparecer.');
+      console.error('Daniel IA: falta uma div com id="daniel-ia-contacto" nesta página - o formulário não tem onde aparecer.');
       return null;
     }
     alvo.innerHTML = ''
@@ -3998,7 +3993,7 @@ app.post('/blog-post-editar', async (req, res) => {
 
 // Rota PÚBLICA - chamada pelo contacto-form.js de dentro do site gerado,
 // sem login nenhum (quem escreve é um visitante do site, não um
-// utilizador do Daniel.ia). Descobre para que email mandar: primeiro o
+// utilizador do Daniel IA). Descobre para que email mandar: primeiro o
 // "Email Contacto" configurado no projecto, senão o email da conta do
 // dono do site.
 app.post('/contacto-enviar', async (req, res) => {
@@ -4682,7 +4677,7 @@ app.post('/loja-pagar', async (req, res) => {
         valor: String(valor),
         nome_cliente: nome,
         carteira: MOZPAYMENT_WALLET,
-        nome_producto: 'Encomenda Daniel.ia',
+        nome_producto: 'Encomenda Daniel IA',
         return_url: returnUrl
       })
     });
@@ -4780,16 +4775,17 @@ app.get('/loja-obrigado', async (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Obrigado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Sora:wght@700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0A0A12;
-    --card:#14141F;
-    --border:#24243A;
-    --text:#F5F5F7;
-    --text-dim:#9699B0;
-    --accent-1:#A855F7;
-    --accent-2:#6366F1;
-    --success:#22C55E;
+    --bg:#07030C;
+    --card:#110A1B;
+    --border:#2A1B3D;
+    --text:#F6F2FB;
+    --text-dim:#A89BBA;
+    --accent-1:#B4F02B;
+    --accent-2:#89C804;
+    --success:#89C804;
     --error:#FF5C7A;
     --warning:#F5A623;
   }
@@ -4800,8 +4796,8 @@ app.get('/loja-obrigado', async (req, res) => {
     display:flex;
     align-items:center;
     justify-content:center;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    background:var(--bg);
+    font-family:"Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(900px 520px at 15% -12%, rgba(67,9,96,0.9), rgba(67,9,96,0) 62%),radial-gradient(700px 420px at 105% 105%, rgba(137,200,4,0.10), rgba(137,200,4,0) 60%),var(--bg);
     color:var(--text);
     padding:24px;
   }
@@ -4821,7 +4817,7 @@ app.get('/loja-obrigado', async (req, res) => {
     margin:0 auto 20px auto;
   }
   .icone.a-confirmar{background:rgba(245,166,35,0.14);}
-  .icone.pago{background:rgba(34,197,94,0.14);}
+  .icone.pago{background:rgba(137,200,4,0.14);}
   .icone.erro{background:rgba(255,92,122,0.14);}
   .spinner{
     width:24px;height:24px;
@@ -4831,12 +4827,13 @@ app.get('/loja-obrigado', async (req, res) => {
     animation:girar .8s linear infinite;
   }
   @keyframes girar{to{transform:rotate(360deg);}}
-  h1{font-size:18px;margin:0 0 8px 0;}
+  h1{font-size:18px;margin:0 0 8px 0;font-family:"Sora","Manrope",sans-serif;letter-spacing:-0.02em;}
   p{font-size:13px;color:var(--text-dim);margin:0 0 24px 0;line-height:1.5;}
   .btn{
     display:inline-block;
-    background:linear-gradient(135deg,var(--accent-1),var(--accent-2));
-    color:#fff;
+    background:linear-gradient(135deg,#C8F84A 0%,#89C804 100%);
+    color:#140620;
+    box-shadow:0 8px 24px rgba(137,200,4,0.30);
     border:none;
     border-radius:10px;
     padding:11px 22px;
@@ -4920,7 +4917,7 @@ verificar();
   return res.send(html);
 });
 
-// ---- Webhook da MozPayment (loja/checkout da Daniel.ia) ----
+// ---- Webhook da MozPayment (loja/checkout da Daniel IA) ----
 // Endereço secreto (em vez de assinatura, que a MozPayment não confirmou
 // se envia) - só quem souber este URL exacto pode chamá-lo.
 //
@@ -5016,11 +5013,11 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
 });
 
 // ======================================================
-// Assinatura de planos pagos da própria Daniel.ia
+// Assinatura de planos pagos da própria Daniel IA
 // ======================================================
 // Mesmo padrão exacto do pagamento das lojas (/loja-pagar, /loja-estado,
 // /loja-obrigado, webhook) - só que aqui quem paga é o próprio dono da
-// conta Daniel.ia, para subir de plano, e no fim quem é actualizado é o
+// conta Daniel IA, para subir de plano, e no fim quem é actualizado é o
 // seu User (campo Plan), não um Site.
 //
 // Data type nova no Bubble, "Assinatura": User, Plano, Valor MZN, Metodo,
@@ -5112,7 +5109,7 @@ app.post('/assinatura-iniciar', async (req, res) => {
 // Inicia o pagamento de uma assinatura já criada - M-Pesa, e-Mola ou
 // Cartão. Espelha /loja-pagar quase campo a campo; a única diferença é
 // que o M-Pesa/e-Mola precisam de um número de telefone que aqui vem do
-// corpo do pedido (a conta Daniel.ia não tem necessariamente um
+// corpo do pedido (a conta Daniel IA não tem necessariamente um
 // telefone guardado), em vez de vir de um formulário de cliente anónimo.
 app.post('/assinatura-pagar', async (req, res) => {
   try {
@@ -5143,7 +5140,7 @@ app.post('/assinatura-pagar', async (req, res) => {
     }
 
     const valor = assinatura['Valor MZN'];
-    const nome = user['Full Name'] || 'Cliente Daniel.ia';
+    const nome = user['Full Name'] || 'Cliente Daniel IA';
     const token = await mozpaymentToken();
 
     // ---- M-Pesa / e-Mola ----
@@ -5186,7 +5183,7 @@ app.post('/assinatura-pagar', async (req, res) => {
         valor: String(valor),
         nome_cliente: nome,
         carteira: MOZPAYMENT_WALLET,
-        nome_producto: 'Assinatura Daniel.ia',
+        nome_producto: 'Assinatura Daniel IA',
         return_url: returnUrl
       })
     });
@@ -5248,7 +5245,7 @@ app.post('/assinatura-estado', async (req, res) => {
 // Página de "obrigado" para onde a pessoa volta depois de pagar a
 // assinatura com cartão (é o "return_url" que damos à MozPayment em
 // /assinatura-pagar). Espelha /loja-obrigado - só que no fim volta para
-// o dashboard da Daniel.ia, não para um site.
+// o dashboard da Daniel IA, não para um site.
 app.get('/assinatura-obrigado', async (req, res) => {
   const assinaturaId = String(req.query.assinatura_id || '');
 
@@ -5258,16 +5255,18 @@ app.get('/assinatura-obrigado', async (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Obrigado</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2216%22%20fill%3D%22%23430960%22%2F%3E%3Cg%20transform%3D%22translate%2811.52%2011.52%29%20scale%280.16384%29%20translate%28-111%20-492.5%29%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M148.0%20738.1C142.7%20737.4%20139.2%20736.1%20135.6%20733.7C128.3%20728.8%20123.9%20721.8%20122.6%20713.1C122.1%20709.4%20122.1%20707.5%20122.7%20704.0C123.8%20697.6%20126.3%20692.6%20130.6%20688.3C133.2%20685.6%20136.0%20683.8%20141.9%20680.7C150.6%20676.1%20156.0%20672.8%20160.9%20669.2C172.2%20660.9%20180.7%20651.9%20187.8%20640.6C188.3%20639.9%20188.8%20639.4%20189.0%20639.4C189.4%20639.4%20189.5%20702.5%20189.0%20705.6C187.7%20714.1%20184.5%20720.7%20178.6%20726.7C172.9%20732.7%20168.0%20735.6%20160.8%20737.5C158.3%20738.2%20157.3%20738.3%20154.1%20738.4C151.7%20738.4%20149.5%20738.4%20148.0%20738.1ZM183.5%20737.9C183.5%20737.7%20184.1%20737.1%20184.9%20736.6C189.2%20733.9%20194.3%20728.3%20197.4%20723.0C202.1%20715.1%20203.7%20708.5%20203.7%20698.0C203.7%20694.3%20203.8%20692.7%20204.1%20692.4C204.3%20692.1%20206.1%20692.0%20222.0%20691.9C238.3%20691.8%20239.9%20691.8%20243.0%20691.3C254.0%20689.6%20263.9%20685.6%20273.4%20679.0C281.6%20673.4%20288.9%20665.8%20294.0%20657.5C298.3%20650.5%20301.7%20642.5%20303.3%20635.4C306.8%20619.6%20305.5%20604.6%20299.3%20589.3C296.5%20582.2%20293.0%20576.6%20286.9%20569.6C282.9%20564.8%20279.8%20562.0%20274.4%20558.1C264.1%20550.6%20251.7%20545.8%20240.8%20545.0C238.8%20544.8%20228.4%20544.8%20215.6%20544.8L193.8%20544.9L192.7%20545.6C191.4%20546.5%20190.1%20548.2%20189.7%20549.4C189.5%20550.1%20189.4%20555.5%20189.4%20571.2C189.4%20582.6%20189.3%20592.1%20189.2%20592.2C188.9%20592.4%20188.0%20591.4%20188.0%20590.9C188.0%20590.0%20185.1%20584.4%20182.5%20580.6C179.3%20575.7%20171.4%20568.0%20165.1%20563.7C161.4%20561.2%20152.2%20556.2%20143.4%20551.9C134.1%20547.4%20130.6%20544.8%20127.0%20540.0C124.6%20536.8%20123.4%20533.6%20122.6%20529.1C122.2%20526.2%20122.2%20523.9%20122.6%20520.6C123.1%20517.2%20123.8%20514.9%20125.2%20512.1C128.5%20505.5%20134.2%20500.8%20141.6%20498.7C146.7%20497.2%20146.0%20497.2%20196.5%20497.3C246.4%20497.4%20244.5%20497.4%20253.4%20498.8C268.8%20501.2%20287.7%20509.1%20301.3%20518.9C312.8%20527.0%20323.6%20538.1%20330.9%20549.1C335.2%20555.5%20337.8%20560.2%20340.5%20566.0C344.7%20575.1%20347.2%20582.3%20349.5%20592.4C351.4%20600.7%20352.0%20605.8%20352.2%20615.9C352.4%20628.3%20351.3%20638.6%20348.6%20648.9C345.6%20660.5%20339.4%20674.8%20333.6%20684.0C323.4%20700.1%20309.0%20713.7%20292.2%20723.3C282.4%20728.9%20271.5%20733.1%20261.5%20735.3C248.6%20738.2%20247.4%20738.2%20211.8%20738.2C186.7%20738.2%20183.5%20738.2%20183.5%20737.9Z%22%2F%3E%3Ccircle%20fill%3D%22%2389C804%22%20cx%3D%22149.1%22%20cy%3D%22612.7%22%20r%3D%2229.7%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Sora:wght@700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0A0A12;
-    --card:#14141F;
-    --border:#24243A;
-    --text:#F5F5F7;
-    --text-dim:#9699B0;
-    --accent-1:#A855F7;
-    --accent-2:#6366F1;
-    --success:#22C55E;
+    --bg:#07030C;
+    --card:#110A1B;
+    --border:#2A1B3D;
+    --text:#F6F2FB;
+    --text-dim:#A89BBA;
+    --accent-1:#B4F02B;
+    --accent-2:#89C804;
+    --success:#89C804;
     --error:#FF5C7A;
     --warning:#F5A623;
   }
@@ -5278,8 +5277,8 @@ app.get('/assinatura-obrigado', async (req, res) => {
     display:flex;
     align-items:center;
     justify-content:center;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    background:var(--bg);
+    font-family:"Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(900px 520px at 15% -12%, rgba(67,9,96,0.9), rgba(67,9,96,0) 62%),radial-gradient(700px 420px at 105% 105%, rgba(137,200,4,0.10), rgba(137,200,4,0) 60%),var(--bg);
     color:var(--text);
     padding:24px;
   }
@@ -5299,7 +5298,7 @@ app.get('/assinatura-obrigado', async (req, res) => {
     margin:0 auto 20px auto;
   }
   .icone.a-confirmar{background:rgba(245,166,35,0.14);}
-  .icone.pago{background:rgba(34,197,94,0.14);}
+  .icone.pago{background:rgba(137,200,4,0.14);}
   .icone.erro{background:rgba(255,92,122,0.14);}
   .spinner{
     width:24px;height:24px;
@@ -5309,12 +5308,13 @@ app.get('/assinatura-obrigado', async (req, res) => {
     animation:girar .8s linear infinite;
   }
   @keyframes girar{to{transform:rotate(360deg);}}
-  h1{font-size:18px;margin:0 0 8px 0;}
+  h1{font-size:18px;margin:0 0 8px 0;font-family:"Sora","Manrope",sans-serif;letter-spacing:-0.02em;}
   p{font-size:13px;color:var(--text-dim);margin:0 0 24px 0;line-height:1.5;}
   .btn{
     display:inline-block;
-    background:linear-gradient(135deg,var(--accent-1),var(--accent-2));
-    color:#fff;
+    background:linear-gradient(135deg,#C8F84A 0%,#89C804 100%);
+    color:#140620;
+    box-shadow:0 8px 24px rgba(137,200,4,0.30);
     border:none;
     border-radius:10px;
     padding:11px 22px;
@@ -5326,6 +5326,7 @@ app.get('/assinatura-obrigado', async (req, res) => {
 </style>
 </head>
 <body>
+  <svg viewBox="112 489 1060 257" role="img" aria-label="Daniel IA" style="position:fixed;top:28px;left:50%;transform:translateX(-50%);height:28px;width:auto;"><path fill="#FFFFFF" d="M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z"/><circle fill="#89C804" cx="149.1" cy="612.7" r="29.7"/><path fill="#FFFFFF" d="M583.7 695.1C577.0 694.2 572.3 692.2 567.6 688.5C561.0 683.2 557.4 673.0 558.6 663.1C559.4 656.8 561.1 652.6 564.5 648.3C567.6 644.6 571.5 642.0 577.4 639.7C580.8 638.4 581.6 638.1 585.4 637.3C591.0 636.0 596.6 635.5 608.5 635.3C614.7 635.2 619.0 635.1 619.2 634.9C619.4 634.8 619.5 633.9 619.5 632.5C619.5 625.7 617.7 621.5 613.8 618.7C610.5 616.5 606.0 615.2 601.4 615.2C598.3 615.2 596.0 615.8 593.1 617.1C589.4 618.9 587.1 621.5 585.5 625.7C584.8 627.6 584.5 627.8 583.1 627.7C581.5 627.5 576.4 626.8 574.1 626.5C572.5 626.2 566.0 625.3 564.0 625.1C562.2 624.9 562.0 624.8 562.0 624.1C562.0 623.1 563.0 619.4 563.8 617.0C565.5 612.6 568.3 608.5 571.9 605.4C573.6 603.9 576.3 602.0 576.7 602.0C576.8 602.0 577.0 601.8 577.2 601.7C578.0 600.9 581.6 599.2 584.1 598.4C590.2 596.3 595.4 595.5 602.5 595.5C616.5 595.5 627.3 599.3 635.0 607.0C639.5 611.5 641.5 615.3 643.3 622.5L643.9 624.9L643.9 659.2L643.9 693.6L632.7 693.7C622.5 693.7 621.5 693.7 621.0 693.3C620.5 692.9 620.5 692.6 620.5 687.1C620.4 684.0 620.4 681.2 620.3 681.1C620.1 680.4 619.5 680.8 617.7 683.1C615.1 686.3 614.3 687.2 612.5 688.6C609.1 691.3 605.3 693.1 600.4 694.5C596.9 695.4 588.4 695.8 583.7 695.1ZM853.4 695.1C849.2 694.6 845.0 693.5 840.4 691.6C832.6 688.3 826.5 683.4 822.1 676.7C820.0 673.5 817.6 669.2 816.8 667.1C815.3 663.1 814.4 659.3 813.7 654.6C813.3 651.3 813.2 650.1 813.3 644.1C813.4 637.0 813.6 635.6 814.9 630.6C815.5 628.4 816.9 624.2 817.5 622.9C820.4 616.5 823.3 612.2 827.7 608.0C833.0 602.8 839.6 599.2 847.5 597.1C859.0 594.2 871.8 595.1 881.2 599.7C889.1 603.5 895.4 609.2 899.6 616.4C902.9 622.0 905.4 630.2 906.0 637.2C906.1 638.8 906.2 642.6 906.2 645.5C906.2 650.1 906.2 651.0 905.9 651.3C905.6 651.5 899.0 651.6 872.4 651.5C840.3 651.5 839.3 651.5 838.9 652.0C838.5 652.4 838.5 652.7 838.8 654.9C839.2 658.9 840.9 663.5 842.9 666.3C846.2 670.7 852.0 674.2 858.0 675.3C860.2 675.7 864.7 675.6 867.0 675.2C871.8 674.1 876.0 671.7 878.7 668.4C879.7 667.1 881.3 664.3 881.6 663.3C881.8 662.2 882.1 662.2 889.6 664.2C900.7 667.0 903.5 667.8 903.8 668.3C904.2 668.9 902.1 673.8 899.8 677.4C897.5 681.0 892.8 685.8 889.1 688.2C885.3 690.7 879.8 693.0 874.4 694.2C869.4 695.4 859.5 695.8 853.4 695.1ZM430.3 693.3C429.9 692.5 429.9 561.5 430.3 561.1C430.7 560.7 482.3 560.6 487.3 561.0C492.7 561.4 498.2 562.6 505.7 565.2C508.2 566.0 513.4 568.4 514.9 569.4C515.3 569.7 516.6 570.5 517.8 571.3C526.0 576.6 531.8 583.4 536.7 593.1C540.0 599.7 541.8 605.0 543.2 612.9C545.1 623.1 544.8 638.6 542.4 647.9C539.5 659.3 533.8 669.5 526.3 676.8C522.2 680.7 521.1 681.7 517.5 683.8C510.6 687.9 504.6 690.3 496.7 692.0C488.9 693.6 489.4 693.6 458.6 693.7C430.8 693.8 430.5 693.8 430.3 693.3ZM663.9 693.4C663.4 693.1 663.4 692.2 663.4 645.6C663.4 598.5 663.4 598.2 663.9 597.8C664.3 597.5 666.0 597.5 675.9 597.5C683.0 597.6 687.5 597.7 687.7 597.9C687.9 598.1 688.0 599.4 688.1 604.2C688.2 611.5 688.2 611.5 690.3 608.6C695.1 601.8 703.7 596.8 712.4 595.8C715.6 595.4 720.8 595.4 723.9 595.9C732.9 597.2 741.5 602.4 746.0 609.2C748.5 613.0 749.9 616.2 751.1 621.0C752.6 626.6 752.5 625.9 752.6 660.7C752.7 692.0 752.7 692.8 752.3 693.2C751.8 693.7 751.2 693.7 740.0 693.7C729.3 693.8 728.1 693.7 727.7 693.3C727.3 692.9 727.2 691.9 727.2 664.8C727.2 646.1 727.2 635.7 727.0 633.8C726.4 627.8 724.1 623.2 720.6 620.7C717.2 618.4 713.5 617.2 709.0 617.2C703.2 617.2 698.2 619.4 694.2 623.7C691.3 626.8 689.4 631.5 688.8 637.3C688.6 638.9 688.5 648.8 688.5 666.5C688.5 681.6 688.4 693.3 688.3 693.4C688.2 693.4 682.7 693.6 676.2 693.6C666.2 693.8 664.3 693.7 663.9 693.4ZM772.1 693.3C771.8 693.0 771.8 687.9 771.8 645.5C771.8 603.7 771.8 598.0 772.1 597.8C772.4 597.5 775.2 597.5 784.5 597.5C795.8 597.6 796.6 597.7 796.9 598.1C797.2 598.5 797.2 606.7 797.2 645.8C797.3 688.7 797.2 693.0 796.9 693.4C796.5 693.7 795.1 693.8 784.5 693.7C774.1 693.7 772.5 693.7 772.1 693.3ZM922.8 693.4C922.4 693.0 922.2 561.6 922.6 561.1C922.8 560.8 924.9 560.8 935.1 560.7C943.9 560.7 947.4 560.8 947.6 561.0C948.2 561.4 948.1 692.4 947.6 693.2L947.2 693.8L935.1 693.8C925.6 693.8 923.0 693.7 922.8 693.4ZM604.4 675.8C608.3 674.7 611.3 672.9 614.3 669.8C617.0 667.0 618.6 663.7 619.2 660.0C619.6 657.4 619.7 652.3 619.3 652.0C618.4 651.5 604.6 651.6 600.2 652.1C597.6 652.5 593.5 653.3 592.1 653.8C587.7 655.3 584.6 657.9 583.5 661.2C582.7 663.4 582.9 668.0 583.7 669.9C584.9 672.5 587.0 674.4 590.1 675.5C592.5 676.3 593.8 676.5 598.2 676.4C601.5 676.3 602.8 676.2 604.4 675.8ZM486.9 670.3C495.8 668.6 501.6 665.8 506.8 660.4C510.0 657.1 513.1 652.2 514.4 648.1C515.5 645.1 516.7 639.3 517.1 635.6C517.6 631.5 517.5 622.1 517.0 618.5C514.5 601.5 506.4 590.5 492.7 586.0C487.4 584.3 485.4 584.0 474.9 583.7C462.7 583.4 456.6 583.5 456.2 584.0C456.1 584.2 456.0 600.8 456.0 627.4C456.0 661.5 456.1 670.5 456.3 670.7C456.6 671.0 459.5 671.0 470.4 670.9C482.9 670.8 484.4 670.8 486.9 670.3ZM882.0 634.8C882.3 634.3 882.1 633.0 881.4 630.3C880.3 626.3 877.5 622.1 874.0 619.4C868.1 614.8 858.4 613.9 851.3 617.2C847.5 619.0 844.6 621.6 842.4 625.0C841.1 627.0 840.5 628.3 839.6 631.1C838.9 633.4 838.8 634.9 839.3 635.1C839.5 635.2 849.1 635.2 860.7 635.2C881.2 635.2 881.7 635.2 882.0 634.8ZM782.2 583.2C778.2 582.6 774.0 579.9 771.9 576.5C769.8 573.2 769.3 567.7 770.6 563.1C773.2 554.3 784.5 550.4 792.5 555.5C795.7 557.6 798.2 561.2 799.0 564.8C799.5 566.9 799.2 571.7 798.5 573.6C797.3 576.9 794.3 580.4 791.2 581.8C788.5 583.1 785.0 583.7 782.2 583.2Z"/><path fill="#89C804" d="M999.8 693.4C999.4 692.9 999.4 561.8 999.8 561.2C1000.1 560.8 1001.4 560.8 1012.7 560.7C1019.6 560.7 1025.3 560.8 1025.5 560.9C1025.7 561.0 1025.8 580.3 1025.8 626.8C1025.8 683.3 1025.7 692.7 1025.4 693.1C1025.1 693.6 1024.6 693.6 1012.6 693.7C1002.0 693.8 1000.0 693.7 999.8 693.4ZM1039.6 693.6C1039.4 693.5 1039.2 693.2 1039.2 693.0C1039.2 692.5 1041.1 686.8 1041.5 685.9C1041.6 685.6 1041.9 684.9 1042.1 684.2C1042.3 683.6 1043.0 681.7 1043.6 679.9C1045.8 673.7 1046.5 671.6 1047.5 668.8C1048.0 667.2 1048.9 664.6 1049.5 663.0C1050.1 661.4 1050.7 659.5 1051.0 658.8C1051.3 658.0 1051.9 656.1 1052.5 654.5C1053.5 651.9 1054.1 650.2 1056.5 643.2C1056.9 642.1 1058.0 638.9 1059.0 636.1C1061.4 629.1 1063.3 623.7 1065.6 617.1C1066.3 615.3 1067.1 612.9 1067.5 611.6C1067.9 610.4 1068.7 608.4 1069.1 607.2C1069.6 606.1 1070.3 603.9 1070.8 602.5C1071.3 601.1 1072.4 597.9 1073.2 595.5C1074.1 593.1 1075.2 590.0 1075.6 588.6C1076.1 587.2 1076.8 585.3 1077.2 584.4C1077.6 583.4 1078.2 581.6 1078.6 580.4C1079.5 577.4 1080.3 575.0 1081.1 572.9C1082.3 569.7 1082.8 568.4 1083.6 565.9C1084.6 562.9 1085.4 561.1 1085.7 560.9C1085.9 560.8 1093.2 560.7 1102.0 560.7C1116.7 560.7 1118.1 560.8 1118.5 561.2C1118.8 561.4 1119.0 561.7 1119.0 561.9C1119.0 562.1 1119.7 564.2 1120.5 566.7C1121.3 569.1 1122.1 571.5 1122.2 572.0C1122.4 572.8 1123.6 576.1 1125.3 580.8C1125.6 581.5 1126.2 583.4 1126.7 585.0C1127.3 586.6 1128.4 589.8 1129.2 592.1C1130.0 594.5 1131.2 597.8 1131.7 599.5C1132.3 601.2 1133.1 603.5 1133.5 604.5C1135.0 608.5 1138.0 617.1 1140.0 622.9C1141.1 626.2 1142.6 630.7 1143.4 632.9C1144.1 635.1 1145.8 639.9 1147.1 643.6C1148.4 647.3 1150.1 652.2 1150.9 654.4C1152.3 658.3 1154.8 665.7 1160.6 682.6C1162.2 687.3 1163.7 691.5 1163.9 692.1C1164.2 692.7 1164.2 693.1 1164.1 693.3C1163.9 693.6 1160.9 693.6 1150.4 693.7C1137.8 693.8 1137.1 693.8 1136.6 693.3C1136.2 693.0 1135.3 690.7 1133.4 684.9C1132.0 680.5 1130.2 675.2 1129.6 673.2C1128.9 671.3 1128.0 668.6 1127.6 667.4C1127.3 666.1 1126.8 664.7 1126.5 664.2L1126.1 663.4L1123.6 663.2C1122.2 663.1 1111.2 663.0 1099.1 663.0C1077.3 663.0 1077.0 663.0 1076.5 663.5C1076.2 663.8 1076.0 664.2 1076.0 664.4C1076.0 664.7 1073.0 673.9 1071.3 678.9C1070.4 681.4 1069.4 684.3 1068.9 685.8C1068.6 686.6 1068.0 688.4 1067.6 689.6C1066.7 692.7 1066.5 693.2 1066.2 693.4C1065.8 693.6 1040.1 693.8 1039.6 693.6ZM1119.4 641.6C1119.6 641.2 1118.2 636.6 1116.2 631.1C1115.4 628.6 1114.6 626.1 1112.0 618.1C1109.8 611.4 1108.3 606.4 1107.1 602.6C1106.5 600.4 1105.4 596.9 1104.7 594.9C1104.0 592.8 1103.2 590.2 1102.9 589.1C1102.5 587.6 1102.3 587.1 1101.9 587.0C1101.3 586.9 1101.0 587.4 1101.0 588.4C1101.0 588.8 1100.2 591.4 1099.2 594.3C1097.2 600.3 1092.6 613.9 1091.6 617.1C1090.7 620.0 1089.0 625.3 1086.9 631.5C1084.4 638.7 1083.6 641.5 1084.0 641.8C1084.2 641.9 1092.2 642.0 1101.8 642.0C1117.3 642.0 1119.3 642.0 1119.4 641.6Z"/></svg>
   <div class="caixa">
     <div class="icone a-confirmar" id="icone">
       <div class="spinner"></div>
@@ -5396,7 +5397,7 @@ verificar();
   return res.send(html);
 });
 
-// ---- Webhook da MozPayment (assinatura de plano da Daniel.ia) ----
+// ---- Webhook da MozPayment (assinatura de plano da Daniel IA) ----
 // Endereço secreto, mesma lógica de segurança do webhook da loja: só
 // aplica um pagamento a uma Assinatura "Pendente" que o próprio
 // container criou, com o valor a bater certo, e nunca duas vezes
@@ -5473,12 +5474,12 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
         const nomePlano = plano ? plano['Name'] : assinatura['Plano'];
         await enviarEmail(
           emailDestino,
-          'Assinatura confirmada - Daniel.ia',
+          'Assinatura confirmada - Daniel IA',
           templateEmailAssinatura(usuario['Full Name'], nomePlano, assinatura['Valor MZN'], expira)
         );
         await enviarEmail(
           emailDestino,
-          'O teu recibo - Daniel.ia',
+          'O teu recibo - Daniel IA',
           templateEmailReciboAssinatura(
             usuario['Full Name'],
             nomePlano,
@@ -5535,7 +5536,7 @@ app.post('/signup-code', async (req, res) => {
 
     await enviarEmail(
       emailDestino,
-      'O teu código de confirmação - Daniel.ia',
+      'O teu código de confirmação - Daniel IA',
       templateEmailCodigo(usuario['Full Name'], codigo)
     );
 
@@ -5729,7 +5730,7 @@ async function verificarAvisosExpiracao() {
 
         await enviarEmail(
           emailDestino,
-          'O teu plano está prestes a expirar - Daniel.ia',
+          'O teu plano está prestes a expirar - Daniel IA',
           templateEmailAvisoExpiracao(usuario['Full Name'], plano['Name'], dataExpira, diasRestantes)
         );
         await bubblePatch('user', usuario._id, { 'Aviso Enviado': true });
@@ -5765,6 +5766,384 @@ app.post('/plan-warnings-teste-7hq2fx', async (req, res) => {
     return res.json({ status: 'error', message: 'Falhou: ' + erro.message });
   }
 });
+
+// ======================================================
+// KYC - verificação de identidade (14/10/2026)
+// ======================================================
+// Quem quiser cobrar pelos meios de pagamento do Daniel IA (a nossa conta
+// MozPayment) tem de verificar a identidade primeiro: selfie tirada na
+// hora pela câmara do telemóvel + B.I. frente e verso, também pela câmara.
+// Depois aprovamos ou rejeitamos à mão, na página /admin-kyc.
+//
+// As fotos são dados pessoais sensíveis, por isso NUNCA ficam legíveis no
+// Bunny: são cifradas aqui (AES-256-GCM) antes de subir, com a chave
+// KYC_ENC_KEY que só existe nas variáveis do container. Mesmo que alguém
+// descubra o caminho do ficheiro na CDN, só encontra bytes sem sentido.
+// Só a página de admin (com a ADMIN_SECRET) consegue pedir ao container
+// para as decifrar e mostrar.
+//
+// Antes disto funcionar:
+//   - Bubble: data type "KYC" com os campos Owner, Nome Completo,
+//     Numero BI, Telefone, Estado, Selfie, BI Frente, BI Verso, Motivo
+//     (todos text) e Revisto Em (date). Exposto na Data API, SEM nenhuma
+//     permissão para "Everyone else" nas Privacy Rules.
+//   - Bunny (variáveis do container): KYC_ENC_KEY (64 caracteres
+//     hexadecimais) e, opcional, ADMIN_EMAIL (recebe um aviso a cada
+//     pedido novo).
+const KYC_ENC_KEY = clean(process.env.KYC_ENC_KEY);
+const ADMIN_EMAIL = clean(process.env.ADMIN_EMAIL);
+const KYC_ADMIN_URL = SELF_URL + '/admin-kyc';
+const KYC_APP_URL = 'https://app.daniel-ia.pro/kyc/';
+
+function chaveKyc() {
+  if (!KYC_ENC_KEY || !/^[0-9a-fA-F]{64}$/.test(KYC_ENC_KEY)) {
+    throw new Error('Falta a variável KYC_ENC_KEY no container (tem de ter 64 caracteres hexadecimais).');
+  }
+  return Buffer.from(KYC_ENC_KEY, 'hex');
+}
+
+// Formato guardado: [12 bytes IV][16 bytes tag][dados cifrados]
+function cifrarKyc(buffer) {
+  const iv = crypto.randomBytes(12);
+  const cifra = crypto.createCipheriv('aes-256-gcm', chaveKyc(), iv);
+  const cifrado = Buffer.concat([cifra.update(buffer), cifra.final()]);
+  return Buffer.concat([iv, cifra.getAuthTag(), cifrado]);
+}
+
+function decifrarKyc(buffer) {
+  const iv = buffer.subarray(0, 12);
+  const tag = buffer.subarray(12, 28);
+  const dados = buffer.subarray(28);
+  const decifra = crypto.createDecipheriv('aes-256-gcm', chaveKyc(), iv);
+  decifra.setAuthTag(tag);
+  return Buffer.concat([decifra.update(dados), decifra.final()]);
+}
+
+async function descarregarDoBunny(caminho) {
+  const res = await fetch(`https://${STORAGE_HOST}/${STORAGE_ZONE}/${caminho}`, {
+    headers: { AccessKey: STORAGE_PASSWORD }
+  });
+  if (!res.ok) throw new Error('Download do Bunny falhou: ' + res.status);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+// Só aceita JPEG em data URL, com tamanho razoável - a página do KYC
+// tira a foto da câmara e converte-a sempre para JPEG antes de enviar.
+function imagemKycDeDataUrl(dataUrl) {
+  const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) return null;
+  const buffer = Buffer.from(m[1], 'base64');
+  if (buffer.length < 15 * 1024 || buffer.length > 4 * 1024 * 1024) return null;
+  if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) return null;
+  return buffer;
+}
+
+async function guardarImagemKyc(owner, nome, buffer) {
+  const caminho = `kyc/${owner}/${Date.now()}-${crypto.randomBytes(12).toString('hex')}-${nome}.bin`;
+  await uploadParaBunny(caminho, cifrarKyc(buffer), 'application/octet-stream');
+  return caminho;
+}
+
+// O pedido mais recente desta conta (ou null se nunca pediu).
+async function kycDoOwner(owner) {
+  const lista = await bubbleList(
+    'kyc',
+    [{ key: 'Owner', constraint_type: 'equals', value: owner }],
+    'Created Date',
+    true
+  );
+  return lista[0] || null;
+}
+
+// Para usar mais tarde na loja: só quem tem KYC aprovado pode cobrar
+// pelos pagamentos do Daniel IA.
+async function kycAprovado(owner) {
+  const kyc = await kycDoOwner(owner).catch(() => null);
+  return !!(kyc && kyc['Estado'] === 'Aprovado');
+}
+
+// O KYC mexe em documentos de identidade - exige sempre sessão válida
+// (owner + token), nunca só o owner.
+async function exigirSessao(req, res) {
+  const { owner, token } = req.body || {};
+  const usuario = await validarSessao(owner, token);
+  if (!usuario) {
+    res.json({ status: 'error', codigo: 'sessao', message: 'A tua sessão expirou. Entra outra vez na tua conta.' });
+    return null;
+  }
+  return usuario;
+}
+
+function chaveAdminValida(chave) {
+  if (!ADMIN_SECRET || typeof chave !== 'string') return false;
+  const a = Buffer.from(chave);
+  const b = Buffer.from(ADMIN_SECRET);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function emailDoUsuario(usuario) {
+  return (usuario && (usuario.email ||
+    (usuario.authentication && usuario.authentication.email && usuario.authentication.email.email))) || '';
+}
+
+// Email simples na identidade Daniel IA (mesmo cabeçalho dos outros).
+function templateEmailKyc(titulo, saudacao, paragrafos, botao) {
+  const corpo = paragrafos.map(p =>
+    `<p style="margin:0 0 14px 0;color:#6F5E81;font-size:14px;line-height:1.6;">${p}</p>`).join('\n');
+  const btn = botao
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding-top:12px;">
+<a href="${escaparHtml(botao.url)}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:14px;padding:13px 28px;border-radius:10px;">${escaparHtml(botao.texto)}</a>
+</td></tr></table>`
+    : '';
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escaparHtml(titulo)} - Daniel IA</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:460px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #EAE2F2;">
+<tr>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
+</td>
+</tr>
+<tr>
+<td style="padding:36px 32px 28px 32px;">
+<p style="margin:0 0 6px 0;color:#1A0A27;font-size:18px;font-weight:700;">${saudacao}</p>
+${corpo}
+${btn}
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;">Daniel IA · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// ---- Estado do KYC da própria conta ----
+app.post('/kyc-estado', async (req, res) => {
+  try {
+    const usuario = await exigirSessao(req, res);
+    if (!usuario) return;
+    const kyc = await kycDoOwner(req.body.owner);
+    return res.json({
+      status: 'success',
+      response: {
+        estado: kyc ? (kyc['Estado'] || 'Pendente') : 'Nenhum',
+        motivo: kyc ? (kyc['Motivo'] || '') : '',
+        enviado: kyc ? kyc['Created Date'] : null
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /kyc-estado:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ver o estado da verificação.' });
+  }
+});
+
+// ---- Enviar o pedido de KYC ----
+app.post('/kyc-enviar', async (req, res) => {
+  try {
+    const usuario = await exigirSessao(req, res);
+    if (!usuario) return;
+    const owner = req.body.owner;
+
+    const nome = String(req.body.nome || '').trim().replace(/\s+/g, ' ');
+    const numeroBi = String(req.body.numero_bi || '').trim().toUpperCase().replace(/\s+/g, '');
+    const telefone = String(req.body.telefone || '').replace(/[^0-9+]/g, '');
+    if (nome.length < 5 || nome.length > 120) {
+      return res.json({ status: 'error', message: 'Escreve o teu nome completo, igual ao do B.I.' });
+    }
+    if (!/^[0-9A-Z]{8,20}$/.test(numeroBi)) {
+      return res.json({ status: 'error', message: 'O número do B.I. não parece válido.' });
+    }
+    if (!/^\+?[0-9]{9,15}$/.test(telefone)) {
+      return res.json({ status: 'error', message: 'O número de telefone não parece válido.' });
+    }
+
+    const anterior = await kycDoOwner(owner);
+    if (anterior && anterior['Estado'] === 'Pendente') {
+      return res.json({ status: 'error', message: 'Já tens um pedido em análise. Avisamos-te por email assim que for revisto.' });
+    }
+    if (anterior && anterior['Estado'] === 'Aprovado') {
+      return res.json({ status: 'error', message: 'A tua identidade já está verificada.' });
+    }
+
+    const selfie = imagemKycDeDataUrl(req.body.selfie);
+    const biFrente = imagemKycDeDataUrl(req.body.bi_frente);
+    const biVerso = imagemKycDeDataUrl(req.body.bi_verso);
+    if (!selfie || !biFrente || !biVerso) {
+      return res.json({ status: 'error', message: 'Faltam fotos ou alguma ficou inválida. Tira-as outra vez.' });
+    }
+
+    const [caminhoSelfie, caminhoFrente, caminhoVerso] = await Promise.all([
+      guardarImagemKyc(owner, 'selfie', selfie),
+      guardarImagemKyc(owner, 'bi-frente', biFrente),
+      guardarImagemKyc(owner, 'bi-verso', biVerso)
+    ]);
+
+    await bubbleCreate('kyc', {
+      'Owner': owner,
+      'Nome Completo': nome,
+      'Numero BI': numeroBi,
+      'Telefone': telefone,
+      'Estado': 'Pendente',
+      'Selfie': caminhoSelfie,
+      'BI Frente': caminhoFrente,
+      'BI Verso': caminhoVerso,
+      'Motivo': ''
+    });
+
+    const emailCliente = emailDoUsuario(usuario);
+    const primeiroNome = escaparHtml(nome.split(' ')[0]);
+    if (emailCliente) {
+      enviarEmail(emailCliente, 'Recebemos a tua verificação - Daniel IA', templateEmailKyc(
+        'Verificação recebida', `Olá, ${primeiroNome}.`,
+        ['Recebemos a tua selfie e o teu B.I. A nossa equipa vai rever os documentos e avisamos-te por email assim que estiver feito.',
+         'Normalmente demora menos de 24 horas úteis.']
+      )).catch(e => console.error('Email KYC (cliente) falhou:', e.message));
+    }
+    if (ADMIN_EMAIL) {
+      enviarEmail(ADMIN_EMAIL, 'Novo pedido de KYC - ' + nome, templateEmailKyc(
+        'Novo pedido de KYC', 'Novo pedido de verificação',
+        [`<strong>${escaparHtml(nome)}</strong> (B.I. ${escaparHtml(numeroBi)}, tel. ${escaparHtml(telefone)}) enviou os documentos.`],
+        { texto: 'Abrir painel de KYC', url: KYC_ADMIN_URL }
+      )).catch(e => console.error('Email KYC (admin) falhou:', e.message));
+    }
+
+    return res.json({ status: 'success', response: { estado: 'Pendente' } });
+  } catch (erro) {
+    console.error('Erro em /kyc-enviar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível enviar a verificação. Tenta novamente.' });
+  }
+});
+
+// ---- Admin: lista de pedidos ----
+app.post('/admin-kyc-lista', async (req, res) => {
+  try {
+    if (!chaveAdminValida(req.body.key)) {
+      return res.json({ status: 'error', message: 'Chave inválida.' });
+    }
+    const estado = ['Pendente', 'Aprovado', 'Rejeitado'].includes(req.body.estado) ? req.body.estado : 'Pendente';
+    const pedidos = await bubbleList(
+      'kyc',
+      [{ key: 'Estado', constraint_type: 'equals', value: estado }],
+      'Created Date',
+      estado !== 'Pendente' // pendentes: os mais antigos primeiro
+    );
+    const lista = await Promise.all(pedidos.map(async k => {
+      const dono = await bubbleGet('user', k['Owner']).catch(() => null);
+      return {
+        id: k._id,
+        nome: k['Nome Completo'] || '',
+        numero_bi: k['Numero BI'] || '',
+        telefone: k['Telefone'] || '',
+        email: emailDoUsuario(dono),
+        estado: k['Estado'] || '',
+        motivo: k['Motivo'] || '',
+        enviado: k['Created Date'],
+        revisto: k['Revisto Em'] || null
+      };
+    }));
+    return res.json({ status: 'success', response: { pedidos: lista } });
+  } catch (erro) {
+    console.error('Erro em /admin-kyc-lista:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os pedidos.' });
+  }
+});
+
+// ---- Admin: uma imagem decifrada ----
+app.post('/admin-kyc-imagem', async (req, res) => {
+  try {
+    if (!chaveAdminValida(req.body.key)) {
+      return res.json({ status: 'error', message: 'Chave inválida.' });
+    }
+    const campos = { selfie: 'Selfie', frente: 'BI Frente', verso: 'BI Verso' };
+    const campo = campos[req.body.tipo];
+    if (!campo || !req.body.id) {
+      return res.json({ status: 'error', message: 'Pedido inválido.' });
+    }
+    const kyc = await bubbleGet('kyc', req.body.id);
+    if (!kyc || !kyc[campo]) {
+      return res.json({ status: 'error', message: 'Imagem não encontrada.' });
+    }
+    const imagem = decifrarKyc(await descarregarDoBunny(kyc[campo]));
+    res.set('Cache-Control', 'no-store');
+    return res.json({ status: 'success', response: { data: 'data:image/jpeg;base64,' + imagem.toString('base64') } });
+  } catch (erro) {
+    console.error('Erro em /admin-kyc-imagem:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível abrir a imagem.' });
+  }
+});
+
+// ---- Admin: aprovar ou rejeitar ----
+app.post('/admin-kyc-decidir', async (req, res) => {
+  try {
+    if (!chaveAdminValida(req.body.key)) {
+      return res.json({ status: 'error', message: 'Chave inválida.' });
+    }
+    const { id, decisao } = req.body;
+    const motivo = String(req.body.motivo || '').trim().slice(0, 500);
+    if (!id || !['Aprovado', 'Rejeitado'].includes(decisao)) {
+      return res.json({ status: 'error', message: 'Pedido inválido.' });
+    }
+    if (decisao === 'Rejeitado' && motivo.length < 5) {
+      return res.json({ status: 'error', message: 'Escreve o motivo da rejeição - o cliente vai recebê-lo por email.' });
+    }
+    const kyc = await bubbleGet('kyc', id);
+    if (!kyc) return res.json({ status: 'error', message: 'Pedido não encontrado.' });
+
+    await bubblePatch('kyc', id, {
+      'Estado': decisao,
+      'Motivo': decisao === 'Rejeitado' ? motivo : '',
+      'Revisto Em': new Date().toISOString()
+    });
+
+    const dono = await bubbleGet('user', kyc['Owner']).catch(() => null);
+    const emailCliente = emailDoUsuario(dono);
+    const primeiroNome = escaparHtml(String(kyc['Nome Completo'] || '').split(' ')[0]);
+    if (emailCliente) {
+      const html = decisao === 'Aprovado'
+        ? templateEmailKyc('Identidade verificada', `Parabéns, ${primeiroNome}!`,
+            ['A tua identidade foi verificada. Já podes activar os pagamentos do Daniel IA (M-Pesa, e-Mola e cartão) nas tuas lojas.'],
+            { texto: 'Ir para o dashboard', url: APP_URL })
+        : templateEmailKyc('Verificação não aprovada', `Olá, ${primeiroNome}.`,
+            ['Não conseguimos aprovar a tua verificação de identidade.',
+             `<strong>Motivo:</strong> ${escaparHtml(motivo)}`,
+             'Podes tentar outra vez quando quiseres.'],
+            { texto: 'Tentar outra vez', url: KYC_APP_URL });
+      enviarEmail(emailCliente,
+        decisao === 'Aprovado' ? 'A tua identidade foi verificada - Daniel IA' : 'A tua verificação precisa de atenção - Daniel IA',
+        html).catch(e => console.error('Email KYC (decisão) falhou:', e.message));
+    }
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /admin-kyc-decidir:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar a decisão.' });
+  }
+});
+
+// ---- Admin: a página ----
+// Não leva dados nenhuns dentro: pede a chave, guarda-a só nesta aba
+// (sessionStorage) e vai buscar tudo por POST. A chave nunca vai no URL,
+// por isso não fica no histórico do browser nem nos logs.
+app.get('/admin-kyc', (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  return res.send(PAGINA_ADMIN_KYC);
+});
+
+const PAGINA_ADMIN_KYC = "<!DOCTYPE html>\n<html lang=\"pt\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<meta name=\"robots\" content=\"noindex, nofollow\">\n<title>KYC · Daniel IA</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2216%22%20fill%3D%22%23430960%22%2F%3E%3Cg%20transform%3D%22translate%2811.52%2011.52%29%20scale%280.16384%29%20translate%28-111%20-492.5%29%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M148.0%20738.1C142.7%20737.4%20139.2%20736.1%20135.6%20733.7C128.3%20728.8%20123.9%20721.8%20122.6%20713.1C122.1%20709.4%20122.1%20707.5%20122.7%20704.0C123.8%20697.6%20126.3%20692.6%20130.6%20688.3C133.2%20685.6%20136.0%20683.8%20141.9%20680.7C150.6%20676.1%20156.0%20672.8%20160.9%20669.2C172.2%20660.9%20180.7%20651.9%20187.8%20640.6C188.3%20639.9%20188.8%20639.4%20189.0%20639.4C189.4%20639.4%20189.5%20702.5%20189.0%20705.6C187.7%20714.1%20184.5%20720.7%20178.6%20726.7C172.9%20732.7%20168.0%20735.6%20160.8%20737.5C158.3%20738.2%20157.3%20738.3%20154.1%20738.4C151.7%20738.4%20149.5%20738.4%20148.0%20738.1ZM183.5%20737.9C183.5%20737.7%20184.1%20737.1%20184.9%20736.6C189.2%20733.9%20194.3%20728.3%20197.4%20723.0C202.1%20715.1%20203.7%20708.5%20203.7%20698.0C203.7%20694.3%20203.8%20692.7%20204.1%20692.4C204.3%20692.1%20206.1%20692.0%20222.0%20691.9C238.3%20691.8%20239.9%20691.8%20243.0%20691.3C254.0%20689.6%20263.9%20685.6%20273.4%20679.0C281.6%20673.4%20288.9%20665.8%20294.0%20657.5C298.3%20650.5%20301.7%20642.5%20303.3%20635.4C306.8%20619.6%20305.5%20604.6%20299.3%20589.3C296.5%20582.2%20293.0%20576.6%20286.9%20569.6C282.9%20564.8%20279.8%20562.0%20274.4%20558.1C264.1%20550.6%20251.7%20545.8%20240.8%20545.0C238.8%20544.8%20228.4%20544.8%20215.6%20544.8L193.8%20544.9L192.7%20545.6C191.4%20546.5%20190.1%20548.2%20189.7%20549.4C189.5%20550.1%20189.4%20555.5%20189.4%20571.2C189.4%20582.6%20189.3%20592.1%20189.2%20592.2C188.9%20592.4%20188.0%20591.4%20188.0%20590.9C188.0%20590.0%20185.1%20584.4%20182.5%20580.6C179.3%20575.7%20171.4%20568.0%20165.1%20563.7C161.4%20561.2%20152.2%20556.2%20143.4%20551.9C134.1%20547.4%20130.6%20544.8%20127.0%20540.0C124.6%20536.8%20123.4%20533.6%20122.6%20529.1C122.2%20526.2%20122.2%20523.9%20122.6%20520.6C123.1%20517.2%20123.8%20514.9%20125.2%20512.1C128.5%20505.5%20134.2%20500.8%20141.6%20498.7C146.7%20497.2%20146.0%20497.2%20196.5%20497.3C246.4%20497.4%20244.5%20497.4%20253.4%20498.8C268.8%20501.2%20287.7%20509.1%20301.3%20518.9C312.8%20527.0%20323.6%20538.1%20330.9%20549.1C335.2%20555.5%20337.8%20560.2%20340.5%20566.0C344.7%20575.1%20347.2%20582.3%20349.5%20592.4C351.4%20600.7%20352.0%20605.8%20352.2%20615.9C352.4%20628.3%20351.3%20638.6%20348.6%20648.9C345.6%20660.5%20339.4%20674.8%20333.6%20684.0C323.4%20700.1%20309.0%20713.7%20292.2%20723.3C282.4%20728.9%20271.5%20733.1%20261.5%20735.3C248.6%20738.2%20247.4%20738.2%20211.8%20738.2C186.7%20738.2%20183.5%20738.2%20183.5%20737.9Z%22%2F%3E%3Ccircle%20fill%3D%22%2389C804%22%20cx%3D%22149.1%22%20cy%3D%22612.7%22%20r%3D%2229.7%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E\">\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n<link href=\"https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700;800&family=JetBrains+Mono:wght@500&display=swap\" rel=\"stylesheet\">\n<style>\n  :root{\n    --bg:#07030C;--card:#110A1B;--card-alt:#170E25;--border:#2A1B3D;--text:#F6F2FB;--text-dim:#A89BBA;\n    --lime:#89C804;--lime-bright:#B4F02B;--purple:#430960;--purple-bright:#A35BE0;--on-accent:#140620;\n    --error:#FF5C7A;--warning:#F5A623;\n    --grad-accent:linear-gradient(135deg,#C8F84A 0%,#89C804 100%);\n  }\n  *{box-sizing:border-box;}\n  body{margin:0;min-height:100vh;color:var(--text);font-family:\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;\n    background:radial-gradient(1100px 600px at 10% -14%, rgba(67,9,96,.9), rgba(67,9,96,0) 62%),\n      radial-gradient(800px 500px at 108% 6%, rgba(137,200,4,.10), rgba(137,200,4,0) 60%),#07030C;background-attachment:fixed;}\n  button,input,textarea{font-family:inherit;}\n  h1,h2,h3{font-family:\"Sora\",\"Manrope\",sans-serif;letter-spacing:-.025em;margin:0;}\n  .topo{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.08);\n    background:rgba(17,10,27,.6);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);position:sticky;top:0;z-index:10;}\n  .brand-logo{height:28px;width:auto;display:block;}\n  .brand-logo .bl-ink{fill:#FFFFFF;}\n  .brand-logo .bl-lime{fill:var(--lime);}\n  .etiqueta{font-family:\"JetBrains Mono\",monospace;font-size:12px;color:var(--lime);letter-spacing:.14em;}\n  .main{max-width:1100px;margin:0 auto;padding:32px 24px 80px;}\n  .caixa-chave{max-width:420px;margin:12vh auto 0;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:30px;}\n  .caixa-chave p{color:var(--text-dim);font-size:14px;line-height:1.6;margin:8px 0 20px;}\n  input[type=password],textarea{width:100%;background:var(--card-alt);border:1px solid var(--border);color:var(--text);border-radius:11px;padding:12px 14px;font-size:14px;outline:none;}\n  input:focus,textarea:focus{border-color:var(--lime);}\n  .btn{border:none;border-radius:11px;padding:11px 18px;font-size:13.5px;font-weight:700;cursor:pointer;transition:transform .15s,opacity .15s;}\n  .btn:disabled{opacity:.5;cursor:default;}\n  .btn-principal{background:var(--grad-accent);color:var(--on-accent);box-shadow:0 8px 24px rgba(137,200,4,.25);}\n  .btn-principal:hover:not(:disabled){transform:translateY(-1px);}\n  .btn-sec{background:transparent;color:var(--text);border:1px solid var(--border);}\n  .btn-sec:hover{border-color:var(--lime);}\n  .btn-perigo{background:rgba(255,92,122,.12);color:var(--error);border:1px solid rgba(255,92,122,.35);}\n  .erro{color:var(--error);font-size:13px;margin-top:12px;min-height:18px;}\n  .cabecalho{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:24px;}\n  .cabecalho p{color:var(--text-dim);margin:6px 0 0;font-size:14px;}\n  .tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:4px;}\n  .tab{background:transparent;border:none;color:var(--text-dim);padding:8px 14px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;}\n  .tab.activa{background:var(--card-alt);color:var(--text);box-shadow:inset 0 0 0 1px rgba(137,200,4,.35);}\n  .vazio{color:var(--text-dim);text-align:center;padding:60px 0;font-size:14px;}\n  .pedido{background:rgba(17,10,27,.7);border:1px solid var(--border);border-radius:18px;padding:22px;margin-bottom:16px;}\n  .pedido-topo{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;}\n  .pedido h3{font-size:18px;}\n  .dados{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:8px;font-size:13px;color:var(--text-dim);}\n  .dados b{color:var(--text);font-weight:600;font-family:\"JetBrains Mono\",monospace;font-size:12.5px;}\n  .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid var(--border);}\n  .pill.Pendente{color:var(--warning);border-color:rgba(245,166,35,.35);background:rgba(245,166,35,.1);}\n  .pill.Aprovado{color:var(--lime);border-color:rgba(137,200,4,.35);background:rgba(137,200,4,.1);}\n  .pill.Rejeitado{color:var(--error);border-color:rgba(255,92,122,.35);background:rgba(255,92,122,.1);}\n  .fotos{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;}\n  .foto{background:var(--card-alt);border:1px solid var(--border);border-radius:12px;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;\n    overflow:hidden;position:relative;color:var(--text-dim);font-size:12.5px;}\n  .foto img{width:100%;height:100%;object-fit:contain;cursor:zoom-in;background:#000;}\n  .foto .rotulo{position:absolute;left:8px;top:8px;font-family:\"JetBrains Mono\",monospace;font-size:10.5px;letter-spacing:.08em;\n    background:rgba(7,3,12,.75);color:var(--lime);padding:3px 7px;border-radius:6px;}\n  .accoes{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;align-items:center;}\n  .rejeitar-caixa{display:none;margin-top:14px;}\n  .rejeitar-caixa.aberta{display:block;}\n  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}\n  .chip{background:var(--card-alt);border:1px solid var(--border);color:var(--text-dim);border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer;}\n  .chip:hover{color:var(--text);border-color:var(--purple-bright);}\n  .motivo{color:var(--error);font-size:13px;margin-top:10px;}\n  .zoom{position:fixed;inset:0;background:rgba(7,3,12,.92);display:none;align-items:center;justify-content:center;z-index:100;cursor:zoom-out;padding:24px;}\n  .zoom.aberto{display:flex;}\n  .zoom img{max-width:100%;max-height:100%;border-radius:10px;}\n  @media (max-width:700px){.fotos{grid-template-columns:1fr;}.topo{padding:12px 16px;}}\n</style>\n</head>\n<body>\n<div class=\"topo\">\n  <svg class=\"brand-logo\" viewBox=\"112 489 1060 257\" role=\"img\" aria-label=\"Daniel IA\" xmlns=\"http://www.w3.org/2000/svg\"><path class=\"bl-ink\" d=\"M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z\"/><circle class=\"bl-lime\" cx=\"149.1\" cy=\"612.7\" r=\"29.7\"/><path class=\"bl-ink\" d=\"M583.7 695.1C577.0 694.2 572.3 692.2 567.6 688.5C561.0 683.2 557.4 673.0 558.6 663.1C559.4 656.8 561.1 652.6 564.5 648.3C567.6 644.6 571.5 642.0 577.4 639.7C580.8 638.4 581.6 638.1 585.4 637.3C591.0 636.0 596.6 635.5 608.5 635.3C614.7 635.2 619.0 635.1 619.2 634.9C619.4 634.8 619.5 633.9 619.5 632.5C619.5 625.7 617.7 621.5 613.8 618.7C610.5 616.5 606.0 615.2 601.4 615.2C598.3 615.2 596.0 615.8 593.1 617.1C589.4 618.9 587.1 621.5 585.5 625.7C584.8 627.6 584.5 627.8 583.1 627.7C581.5 627.5 576.4 626.8 574.1 626.5C572.5 626.2 566.0 625.3 564.0 625.1C562.2 624.9 562.0 624.8 562.0 624.1C562.0 623.1 563.0 619.4 563.8 617.0C565.5 612.6 568.3 608.5 571.9 605.4C573.6 603.9 576.3 602.0 576.7 602.0C576.8 602.0 577.0 601.8 577.2 601.7C578.0 600.9 581.6 599.2 584.1 598.4C590.2 596.3 595.4 595.5 602.5 595.5C616.5 595.5 627.3 599.3 635.0 607.0C639.5 611.5 641.5 615.3 643.3 622.5L643.9 624.9L643.9 659.2L643.9 693.6L632.7 693.7C622.5 693.7 621.5 693.7 621.0 693.3C620.5 692.9 620.5 692.6 620.5 687.1C620.4 684.0 620.4 681.2 620.3 681.1C620.1 680.4 619.5 680.8 617.7 683.1C615.1 686.3 614.3 687.2 612.5 688.6C609.1 691.3 605.3 693.1 600.4 694.5C596.9 695.4 588.4 695.8 583.7 695.1ZM853.4 695.1C849.2 694.6 845.0 693.5 840.4 691.6C832.6 688.3 826.5 683.4 822.1 676.7C820.0 673.5 817.6 669.2 816.8 667.1C815.3 663.1 814.4 659.3 813.7 654.6C813.3 651.3 813.2 650.1 813.3 644.1C813.4 637.0 813.6 635.6 814.9 630.6C815.5 628.4 816.9 624.2 817.5 622.9C820.4 616.5 823.3 612.2 827.7 608.0C833.0 602.8 839.6 599.2 847.5 597.1C859.0 594.2 871.8 595.1 881.2 599.7C889.1 603.5 895.4 609.2 899.6 616.4C902.9 622.0 905.4 630.2 906.0 637.2C906.1 638.8 906.2 642.6 906.2 645.5C906.2 650.1 906.2 651.0 905.9 651.3C905.6 651.5 899.0 651.6 872.4 651.5C840.3 651.5 839.3 651.5 838.9 652.0C838.5 652.4 838.5 652.7 838.8 654.9C839.2 658.9 840.9 663.5 842.9 666.3C846.2 670.7 852.0 674.2 858.0 675.3C860.2 675.7 864.7 675.6 867.0 675.2C871.8 674.1 876.0 671.7 878.7 668.4C879.7 667.1 881.3 664.3 881.6 663.3C881.8 662.2 882.1 662.2 889.6 664.2C900.7 667.0 903.5 667.8 903.8 668.3C904.2 668.9 902.1 673.8 899.8 677.4C897.5 681.0 892.8 685.8 889.1 688.2C885.3 690.7 879.8 693.0 874.4 694.2C869.4 695.4 859.5 695.8 853.4 695.1ZM430.3 693.3C429.9 692.5 429.9 561.5 430.3 561.1C430.7 560.7 482.3 560.6 487.3 561.0C492.7 561.4 498.2 562.6 505.7 565.2C508.2 566.0 513.4 568.4 514.9 569.4C515.3 569.7 516.6 570.5 517.8 571.3C526.0 576.6 531.8 583.4 536.7 593.1C540.0 599.7 541.8 605.0 543.2 612.9C545.1 623.1 544.8 638.6 542.4 647.9C539.5 659.3 533.8 669.5 526.3 676.8C522.2 680.7 521.1 681.7 517.5 683.8C510.6 687.9 504.6 690.3 496.7 692.0C488.9 693.6 489.4 693.6 458.6 693.7C430.8 693.8 430.5 693.8 430.3 693.3ZM663.9 693.4C663.4 693.1 663.4 692.2 663.4 645.6C663.4 598.5 663.4 598.2 663.9 597.8C664.3 597.5 666.0 597.5 675.9 597.5C683.0 597.6 687.5 597.7 687.7 597.9C687.9 598.1 688.0 599.4 688.1 604.2C688.2 611.5 688.2 611.5 690.3 608.6C695.1 601.8 703.7 596.8 712.4 595.8C715.6 595.4 720.8 595.4 723.9 595.9C732.9 597.2 741.5 602.4 746.0 609.2C748.5 613.0 749.9 616.2 751.1 621.0C752.6 626.6 752.5 625.9 752.6 660.7C752.7 692.0 752.7 692.8 752.3 693.2C751.8 693.7 751.2 693.7 740.0 693.7C729.3 693.8 728.1 693.7 727.7 693.3C727.3 692.9 727.2 691.9 727.2 664.8C727.2 646.1 727.2 635.7 727.0 633.8C726.4 627.8 724.1 623.2 720.6 620.7C717.2 618.4 713.5 617.2 709.0 617.2C703.2 617.2 698.2 619.4 694.2 623.7C691.3 626.8 689.4 631.5 688.8 637.3C688.6 638.9 688.5 648.8 688.5 666.5C688.5 681.6 688.4 693.3 688.3 693.4C688.2 693.4 682.7 693.6 676.2 693.6C666.2 693.8 664.3 693.7 663.9 693.4ZM772.1 693.3C771.8 693.0 771.8 687.9 771.8 645.5C771.8 603.7 771.8 598.0 772.1 597.8C772.4 597.5 775.2 597.5 784.5 597.5C795.8 597.6 796.6 597.7 796.9 598.1C797.2 598.5 797.2 606.7 797.2 645.8C797.3 688.7 797.2 693.0 796.9 693.4C796.5 693.7 795.1 693.8 784.5 693.7C774.1 693.7 772.5 693.7 772.1 693.3ZM922.8 693.4C922.4 693.0 922.2 561.6 922.6 561.1C922.8 560.8 924.9 560.8 935.1 560.7C943.9 560.7 947.4 560.8 947.6 561.0C948.2 561.4 948.1 692.4 947.6 693.2L947.2 693.8L935.1 693.8C925.6 693.8 923.0 693.7 922.8 693.4ZM604.4 675.8C608.3 674.7 611.3 672.9 614.3 669.8C617.0 667.0 618.6 663.7 619.2 660.0C619.6 657.4 619.7 652.3 619.3 652.0C618.4 651.5 604.6 651.6 600.2 652.1C597.6 652.5 593.5 653.3 592.1 653.8C587.7 655.3 584.6 657.9 583.5 661.2C582.7 663.4 582.9 668.0 583.7 669.9C584.9 672.5 587.0 674.4 590.1 675.5C592.5 676.3 593.8 676.5 598.2 676.4C601.5 676.3 602.8 676.2 604.4 675.8ZM486.9 670.3C495.8 668.6 501.6 665.8 506.8 660.4C510.0 657.1 513.1 652.2 514.4 648.1C515.5 645.1 516.7 639.3 517.1 635.6C517.6 631.5 517.5 622.1 517.0 618.5C514.5 601.5 506.4 590.5 492.7 586.0C487.4 584.3 485.4 584.0 474.9 583.7C462.7 583.4 456.6 583.5 456.2 584.0C456.1 584.2 456.0 600.8 456.0 627.4C456.0 661.5 456.1 670.5 456.3 670.7C456.6 671.0 459.5 671.0 470.4 670.9C482.9 670.8 484.4 670.8 486.9 670.3ZM882.0 634.8C882.3 634.3 882.1 633.0 881.4 630.3C880.3 626.3 877.5 622.1 874.0 619.4C868.1 614.8 858.4 613.9 851.3 617.2C847.5 619.0 844.6 621.6 842.4 625.0C841.1 627.0 840.5 628.3 839.6 631.1C838.9 633.4 838.8 634.9 839.3 635.1C839.5 635.2 849.1 635.2 860.7 635.2C881.2 635.2 881.7 635.2 882.0 634.8ZM782.2 583.2C778.2 582.6 774.0 579.9 771.9 576.5C769.8 573.2 769.3 567.7 770.6 563.1C773.2 554.3 784.5 550.4 792.5 555.5C795.7 557.6 798.2 561.2 799.0 564.8C799.5 566.9 799.2 571.7 798.5 573.6C797.3 576.9 794.3 580.4 791.2 581.8C788.5 583.1 785.0 583.7 782.2 583.2Z\"/><path class=\"bl-lime\" d=\"M999.8 693.4C999.4 692.9 999.4 561.8 999.8 561.2C1000.1 560.8 1001.4 560.8 1012.7 560.7C1019.6 560.7 1025.3 560.8 1025.5 560.9C1025.7 561.0 1025.8 580.3 1025.8 626.8C1025.8 683.3 1025.7 692.7 1025.4 693.1C1025.1 693.6 1024.6 693.6 1012.6 693.7C1002.0 693.8 1000.0 693.7 999.8 693.4ZM1039.6 693.6C1039.4 693.5 1039.2 693.2 1039.2 693.0C1039.2 692.5 1041.1 686.8 1041.5 685.9C1041.6 685.6 1041.9 684.9 1042.1 684.2C1042.3 683.6 1043.0 681.7 1043.6 679.9C1045.8 673.7 1046.5 671.6 1047.5 668.8C1048.0 667.2 1048.9 664.6 1049.5 663.0C1050.1 661.4 1050.7 659.5 1051.0 658.8C1051.3 658.0 1051.9 656.1 1052.5 654.5C1053.5 651.9 1054.1 650.2 1056.5 643.2C1056.9 642.1 1058.0 638.9 1059.0 636.1C1061.4 629.1 1063.3 623.7 1065.6 617.1C1066.3 615.3 1067.1 612.9 1067.5 611.6C1067.9 610.4 1068.7 608.4 1069.1 607.2C1069.6 606.1 1070.3 603.9 1070.8 602.5C1071.3 601.1 1072.4 597.9 1073.2 595.5C1074.1 593.1 1075.2 590.0 1075.6 588.6C1076.1 587.2 1076.8 585.3 1077.2 584.4C1077.6 583.4 1078.2 581.6 1078.6 580.4C1079.5 577.4 1080.3 575.0 1081.1 572.9C1082.3 569.7 1082.8 568.4 1083.6 565.9C1084.6 562.9 1085.4 561.1 1085.7 560.9C1085.9 560.8 1093.2 560.7 1102.0 560.7C1116.7 560.7 1118.1 560.8 1118.5 561.2C1118.8 561.4 1119.0 561.7 1119.0 561.9C1119.0 562.1 1119.7 564.2 1120.5 566.7C1121.3 569.1 1122.1 571.5 1122.2 572.0C1122.4 572.8 1123.6 576.1 1125.3 580.8C1125.6 581.5 1126.2 583.4 1126.7 585.0C1127.3 586.6 1128.4 589.8 1129.2 592.1C1130.0 594.5 1131.2 597.8 1131.7 599.5C1132.3 601.2 1133.1 603.5 1133.5 604.5C1135.0 608.5 1138.0 617.1 1140.0 622.9C1141.1 626.2 1142.6 630.7 1143.4 632.9C1144.1 635.1 1145.8 639.9 1147.1 643.6C1148.4 647.3 1150.1 652.2 1150.9 654.4C1152.3 658.3 1154.8 665.7 1160.6 682.6C1162.2 687.3 1163.7 691.5 1163.9 692.1C1164.2 692.7 1164.2 693.1 1164.1 693.3C1163.9 693.6 1160.9 693.6 1150.4 693.7C1137.8 693.8 1137.1 693.8 1136.6 693.3C1136.2 693.0 1135.3 690.7 1133.4 684.9C1132.0 680.5 1130.2 675.2 1129.6 673.2C1128.9 671.3 1128.0 668.6 1127.6 667.4C1127.3 666.1 1126.8 664.7 1126.5 664.2L1126.1 663.4L1123.6 663.2C1122.2 663.1 1111.2 663.0 1099.1 663.0C1077.3 663.0 1077.0 663.0 1076.5 663.5C1076.2 663.8 1076.0 664.2 1076.0 664.4C1076.0 664.7 1073.0 673.9 1071.3 678.9C1070.4 681.4 1069.4 684.3 1068.9 685.8C1068.6 686.6 1068.0 688.4 1067.6 689.6C1066.7 692.7 1066.5 693.2 1066.2 693.4C1065.8 693.6 1040.1 693.8 1039.6 693.6ZM1119.4 641.6C1119.6 641.2 1118.2 636.6 1116.2 631.1C1115.4 628.6 1114.6 626.1 1112.0 618.1C1109.8 611.4 1108.3 606.4 1107.1 602.6C1106.5 600.4 1105.4 596.9 1104.7 594.9C1104.0 592.8 1103.2 590.2 1102.9 589.1C1102.5 587.6 1102.3 587.1 1101.9 587.0C1101.3 586.9 1101.0 587.4 1101.0 588.4C1101.0 588.8 1100.2 591.4 1099.2 594.3C1097.2 600.3 1092.6 613.9 1091.6 617.1C1090.7 620.0 1089.0 625.3 1086.9 631.5C1084.4 638.7 1083.6 641.5 1084.0 641.8C1084.2 641.9 1092.2 642.0 1101.8 642.0C1117.3 642.0 1119.3 642.0 1119.4 641.6Z\"/></svg>\n  <span class=\"etiqueta\">// PAINEL KYC</span>\n</div>\n\n<div class=\"main\">\n  <div class=\"caixa-chave\" id=\"vista-chave\">\n    <h2>Acesso restrito</h2>\n    <p>Escreve a chave de administração (a mesma ADMIN_SECRET das variáveis do container). Fica guardada só nesta aba.</p>\n    <input type=\"password\" id=\"chave\" placeholder=\"Chave de administração\" autocomplete=\"off\">\n    <div style=\"margin-top:14px;\"><button class=\"btn btn-principal\" id=\"btn-entrar\" style=\"width:100%;\">Entrar</button></div>\n    <div class=\"erro\" id=\"erro-chave\"></div>\n  </div>\n\n  <div id=\"vista-painel\" style=\"display:none;\">\n    <div class=\"cabecalho\">\n      <div>\n        <h1>Verificações de identidade</h1>\n        <p id=\"resumo\">A carregar...</p>\n      </div>\n      <div class=\"tabs\">\n        <button class=\"tab activa\" data-estado=\"Pendente\">Pendentes</button>\n        <button class=\"tab\" data-estado=\"Aprovado\">Aprovados</button>\n        <button class=\"tab\" data-estado=\"Rejeitado\">Rejeitados</button>\n      </div>\n    </div>\n    <div id=\"lista\"></div>\n    <div style=\"text-align:center;margin-top:24px;\"><button class=\"btn btn-sec\" id=\"btn-sair\">Sair do painel</button></div>\n  </div>\n</div>\n\n<div class=\"zoom\" id=\"zoom\"><img id=\"zoom-img\" alt=\"\"></div>\n\n<script>\n(function(){\n  'use strict';\n  var chave = '';\n  var estadoActual = 'Pendente';\n  try { chave = sessionStorage.getItem('dia_admin_kyc') || ''; } catch (e) {}\n\n  function post(caminho, dados){\n    dados.key = chave;\n    return fetch(caminho, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify(dados)\n    }).then(function(r){ return r.json(); });\n  }\n\n  function esc(t){\n    return String(t == null ? '' : t).replace(/[&<>\"']/g, function(c){\n      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c];\n    });\n  }\n\n  function data(iso){\n    if (!iso) return '—';\n    var d = new Date(iso);\n    if (isNaN(d.getTime())) return '—';\n    return d.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });\n  }\n\n  var elChave = document.getElementById('chave');\n  var elErroChave = document.getElementById('erro-chave');\n  var elLista = document.getElementById('lista');\n  var elResumo = document.getElementById('resumo');\n\n  function entrar(){\n    chave = elChave.value.trim();\n    if (!chave) { elErroChave.textContent = 'Escreve a chave.'; return; }\n    carregar(true);\n  }\n  document.getElementById('btn-entrar').addEventListener('click', entrar);\n  elChave.addEventListener('keydown', function(e){ if (e.key === 'Enter') entrar(); });\n\n  document.getElementById('btn-sair').addEventListener('click', function(){\n    try { sessionStorage.removeItem('dia_admin_kyc'); } catch (e) {}\n    chave = '';\n    elChave.value = '';\n    document.getElementById('vista-painel').style.display = 'none';\n    document.getElementById('vista-chave').style.display = 'block';\n  });\n\n  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(tab){\n    tab.addEventListener('click', function(){\n      Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(t){ t.classList.remove('activa'); });\n      tab.classList.add('activa');\n      estadoActual = tab.getAttribute('data-estado');\n      carregar(false);\n    });\n  });\n\n  function carregar(daChave){\n    elResumo.textContent = 'A carregar...';\n    elLista.innerHTML = '';\n    post('/admin-kyc-lista', { estado: estadoActual }).then(function(r){\n      if (r.status !== 'success') {\n        if (daChave || r.message === 'Chave inválida.') {\n          elErroChave.textContent = r.message || 'Não foi possível entrar.';\n          document.getElementById('vista-painel').style.display = 'none';\n          document.getElementById('vista-chave').style.display = 'block';\n          try { sessionStorage.removeItem('dia_admin_kyc'); } catch (e) {}\n        } else {\n          elResumo.textContent = r.message || 'Erro ao carregar.';\n        }\n        return;\n      }\n      try { sessionStorage.setItem('dia_admin_kyc', chave); } catch (e) {}\n      elErroChave.textContent = '';\n      document.getElementById('vista-chave').style.display = 'none';\n      document.getElementById('vista-painel').style.display = 'block';\n      var pedidos = r.response.pedidos || [];\n      var nomes = { Pendente: 'pendente', Aprovado: 'aprovado', Rejeitado: 'rejeitado' };\n      elResumo.textContent = pedidos.length + ' pedido' + (pedidos.length === 1 ? '' : 's') + ' ' + nomes[estadoActual] + (pedidos.length === 1 ? '' : 's') + '.';\n      if (!pedidos.length) {\n        elLista.innerHTML = '<div class=\"vazio\">Nada por aqui.</div>';\n        return;\n      }\n      pedidos.forEach(function(p){ elLista.appendChild(cartao(p)); });\n    }).catch(function(){\n      elErroChave.textContent = 'Não foi possível ligar ao servidor.';\n    });\n  }\n\n  var MOTIVOS = [\n    'A selfie está desfocada ou escura.',\n    'O B.I. está ilegível.',\n    'A selfie não corresponde à foto do B.I.',\n    'O B.I. está fora do prazo de validade.',\n    'Os dados escritos não batem certo com o B.I.'\n  ];\n\n  function cartao(p){\n    var el = document.createElement('div');\n    el.className = 'pedido';\n    var html = ''\n      + '<div class=\"pedido-topo\"><div>'\n      + '<h3>' + esc(p.nome) + '</h3>'\n      + '<div class=\"dados\">'\n      + '<span>B.I. <b>' + esc(p.numero_bi) + '</b></span>'\n      + '<span>Tel. <b>' + esc(p.telefone) + '</b></span>'\n      + '<span>Email <b>' + esc(p.email || '—') + '</b></span>'\n      + '<span>Enviado <b>' + esc(data(p.enviado)) + '</b></span>'\n      + (p.revisto ? '<span>Revisto <b>' + esc(data(p.revisto)) + '</b></span>' : '')\n      + '</div></div>'\n      + '<div><span class=\"pill ' + esc(p.estado) + '\">' + esc(p.estado) + '</span></div></div>'\n      + (p.motivo ? '<div class=\"motivo\">Motivo: ' + esc(p.motivo) + '</div>' : '')\n      + '<div class=\"fotos\">'\n      + '<div class=\"foto\" data-tipo=\"selfie\"><span class=\"rotulo\">SELFIE</span>A carregar...</div>'\n      + '<div class=\"foto\" data-tipo=\"frente\"><span class=\"rotulo\">B.I. FRENTE</span>A carregar...</div>'\n      + '<div class=\"foto\" data-tipo=\"verso\"><span class=\"rotulo\">B.I. VERSO</span>A carregar...</div>'\n      + '</div>';\n    if (p.estado === 'Pendente') {\n      html += '<div class=\"accoes\">'\n        + '<button class=\"btn btn-principal\" data-acao=\"aprovar\">Aprovar</button>'\n        + '<button class=\"btn btn-perigo\" data-acao=\"rejeitar\">Rejeitar</button>'\n        + '<span class=\"erro\" data-erro></span></div>'\n        + '<div class=\"rejeitar-caixa\"><div class=\"chips\">'\n        + MOTIVOS.map(function(m){ return '<button class=\"chip\" type=\"button\">' + esc(m) + '</button>'; }).join('')\n        + '</div><textarea rows=\"3\" placeholder=\"Motivo da rejeição (vai por email ao cliente)\"></textarea>'\n        + '<div class=\"accoes\"><button class=\"btn btn-perigo\" data-acao=\"confirmar-rejeicao\">Confirmar rejeição</button>'\n        + '<button class=\"btn btn-sec\" data-acao=\"cancelar\">Cancelar</button></div></div>';\n    }\n    el.innerHTML = html;\n\n    Array.prototype.forEach.call(el.querySelectorAll('.foto'), function(caixa){\n      var tipo = caixa.getAttribute('data-tipo');\n      post('/admin-kyc-imagem', { id: p.id, tipo: tipo }).then(function(r){\n        var rotulo = caixa.querySelector('.rotulo').outerHTML;\n        if (r.status !== 'success') { caixa.innerHTML = rotulo + esc(r.message || 'Erro'); return; }\n        caixa.innerHTML = rotulo + '<img alt=\"' + tipo + '\">';\n        var img = caixa.querySelector('img');\n        img.src = r.response.data;\n        img.addEventListener('click', function(){\n          document.getElementById('zoom-img').src = img.src;\n          document.getElementById('zoom').classList.add('aberto');\n        });\n      }).catch(function(){ caixa.lastChild.textContent = 'Erro de ligação'; });\n    });\n\n    if (p.estado === 'Pendente') {\n      var caixaRej = el.querySelector('.rejeitar-caixa');\n      var txt = caixaRej.querySelector('textarea');\n      var elErro = el.querySelector('[data-erro]');\n      Array.prototype.forEach.call(caixaRej.querySelectorAll('.chip'), function(chip){\n        chip.addEventListener('click', function(){ txt.value = chip.textContent; txt.focus(); });\n      });\n      el.querySelector('[data-acao=\"rejeitar\"]').addEventListener('click', function(){ caixaRej.classList.add('aberta'); txt.focus(); });\n      el.querySelector('[data-acao=\"cancelar\"]').addEventListener('click', function(){ caixaRej.classList.remove('aberta'); });\n\n      function decidir(decisao, motivo, botao){\n        botao.disabled = true;\n        elErro.textContent = '';\n        post('/admin-kyc-decidir', { id: p.id, decisao: decisao, motivo: motivo }).then(function(r){\n          if (r.status !== 'success') { botao.disabled = false; elErro.textContent = r.message || 'Erro.'; return; }\n          el.style.transition = 'opacity .3s';\n          el.style.opacity = '0';\n          setTimeout(function(){ carregar(false); }, 320);\n        }).catch(function(){ botao.disabled = false; elErro.textContent = 'Erro de ligação.'; });\n      }\n      el.querySelector('[data-acao=\"aprovar\"]').addEventListener('click', function(){\n        if (!window.confirm('Aprovar a verificação de ' + p.nome + '?')) return;\n        decidir('Aprovado', '', this);\n      });\n      el.querySelector('[data-acao=\"confirmar-rejeicao\"]').addEventListener('click', function(){\n        decidir('Rejeitado', txt.value.trim(), this);\n      });\n    }\n    return el;\n  }\n\n  document.getElementById('zoom').addEventListener('click', function(){ this.classList.remove('aberto'); });\n\n  if (chave) { elChave.value = chave; carregar(true); }\n})();\n</script>\n</body>\n</html>\n";
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
