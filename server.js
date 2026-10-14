@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.45.0'; // 14/10/2026 - KYC (selfie + B.I. pela câmara, aprovação manual em /admin-kyc)
+const VERSION = '1.48.0'; // 14/10/2026 - visual livre: a descrição da pessoa manda, sem receitas por sector
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -1334,13 +1334,74 @@ async function mozpaymentToken() {
 // Helper - OpenAI
 // ======================================================
 
+// ======================================================
+// Direcção de arte - padrão de qualidade visual de TODOS os sites gerados
+// ======================================================
+// Regra da casa (14/10/2026): nada do que a plataforma gera pode ter ar de
+// template genérico. Cada site tem de parecer desenhado por um estúdio,
+// com uma identidade própria tirada do próprio negócio. Este bloco entra no
+// pedido à IA tanto na criação como na edição.
+//
+// As fichas --dia-* no :root são o que liga o site aos módulos automáticos
+// (produtos/carrinho, galeria, portefólio, blog, contacto): esses módulos
+// lêem estas variáveis e ficam com as cores, tipos e cantos do próprio
+// site, em vez de aparecerem com um visual à parte.
+const DIRECAO_DE_ARTE = `
+PADRÃO VISUAL (obrigatório - nenhum site pode parecer um modelo repetido nem ter ar de "feito por IA"):
+0. A DESCRIÇÃO DA PESSOA MANDA. Lê-a com atenção antes de tudo e segue o que ela pede sobre estilo, cores, ambiente, quantidade de secções e tom. Se pedir algo simples, minimalista, limpo ou "só o essencial", faz um site simples a sério: poucas secções, muito espaço, uma ou duas cores, tipografia limpa - simples mas acabado com cuidado, nunca pobre. Se pedir algo ousado, colorido, divertido, escuro, clássico, luxuoso ou futurista, vai a fundo nessa direcção. Se der cores, referências ou um exemplo, usa-os. Só quando a descrição não disser nada sobre o visual é que decides tu, a partir do negócio e do público.
+1. Nada de receitas por sector. Um fotógrafo não tem de ser preto e dourado, um restaurante não tem de ser castanho, uma clínica não tem de ser azul e branco. Evita o primeiro clichê que vem à cabeça para aquele sector. Dois sites do mesmo tipo de negócio com descrições diferentes têm de sair claramente diferentes: estrutura, cores, letras e composição.
+2. Direcção de arte própria. Decide uma identidade e compromete-te com ela em todo o site (por exemplo: claro e arejado, editorial de revista, minimal suíço, artesanal e orgânico, tropical vibrante, luxo escuro, cinematográfico, tecnológico, retro, brutalista colorido, lúdico e arredondado).
+3. Tipografia com personalidade. Usa duas fontes do Google Fonts que combinem (uma de títulos com carácter, uma de texto muito legível), carregadas no <head>, escolhidas para esta identidade - não repitas sempre as mesmas. Títulos com tamanho fluido (clamp), boa hierarquia e espaçamento de letras ajustado. Nunca só Arial/Helvetica/sistema.
+4. Paleta intencional. Uma cor dominante, uma cor de destaque e neutros afinados, tirados da descrição, do negócio ou do logótipo, se existir. Contraste de texto sempre legível (nível AA). Evita o degradê roxo-azul genérico, a não ser que a pessoa o peça.
+5. Composição com ritmo. A estrutura e a ordem das secções saem da descrição e do negócio, não de um molde fixo. Hero memorável e à medida (pode ser só tipográfico, de ecrã inteiro, dividido, em mosaico, minimalista...), nunca um bloco centrado banal. Varia as secções: largura total, grelhas assimétricas, sobreposições, números ou palavras gigantes, faixas de cor, cartões. Não empilhes secções todas iguais e centradas.
+6. Detalhe e acabamento. Ícones em SVG inline desenhados por ti (nunca emojis como ícones). Estados de hover e foco em botões, links e cartões. Transições suaves e revelação das secções ao fazer scroll (IntersectionObserver), respeitando prefers-reduced-motion - num site simples, movimento discreto. Texturas, formas, padrões ou ilustrações em SVG/CSS só quando servirem a identidade. Cantos, sombras e espaçamentos consistentes.
+7. Imagens. Usa as imagens que a pessoa forneceu. Nunca inventes URLs de imagens externas (ficam partidas). Quando faltarem imagens, cria composições bonitas em CSS/SVG (formas, degradês, padrões, ilustrações simples) em vez de caixas cinzentas vazias.
+8. Telemóvel primeiro. A maioria dos clientes vê no telemóvel: tem de ficar impecável a 360px de largura, com menu próprio para telemóvel, botões fáceis de tocar (mínimo 44px) e nada a sair do ecrã.
+9. Fichas de tema obrigatórias. No CSS, dentro de :root, define SEMPRE estas variáveis com os valores da tua paleta (os sistemas automáticos do site - produtos, carrinho, galeria, portefólio, blog e contacto - usam-nas para ficarem com o mesmo visual do resto do site):
+   --dia-primaria (cor dos botões principais), --dia-primaria-texto (texto em cima da primária, com bom contraste), --dia-fundo (fundo da página), --dia-superficie (fundo de cartões), --dia-texto (texto principal), --dia-texto-suave (texto secundário), --dia-borda (linhas e bordas), --dia-raio (raio dos cantos: 0px para um visual recto e editorial, 4 a 10px para sóbrio, 16px ou mais para arredondado e amigável), --dia-fonte-titulos e --dia-fonte-texto (as famílias de letra que escolheste).
+Antes de responder, revê o resultado como um director de arte exigente: confirma que respeita o que a pessoa descreveu (se pediu simples, não carregues; se pediu impacto, não fiques tímido) e que não parece genérico, vazio ou desalinhado.`;
+
+// Os modelos de IA tendem a cair sempre no mesmo visual para o mesmo
+// sector (ex: fotógrafo = preto e dourado). Quando a pessoa não diz nada
+// sobre o estilo, sorteamos um ponto de partida diferente em cada geração,
+// para que dois sites parecidos no pedido não saiam iguais. Se a descrição
+// falar do visual, a IA ignora o sorteio.
+const ESTILOS_SORTEIO = [
+  'claro e arejado: fundo quase branco, muito espaço, tipografia fina e elegante',
+  'editorial de revista: títulos serifados enormes, grelha assimétrica, legendas pequenas',
+  'cores vivas em blocos sólidos, letras grossas e confiantes',
+  'escuro e cinematográfico, contraste forte, uma cor de destaque intensa',
+  'minimal suíço: grelha rígida, uma só cor de destaque, tipografia sem serifa',
+  'quente e artesanal: tons de terra, texturas suaves, formas orgânicas',
+  'lúdico e arredondado: cores alegres, cantos muito redondos, formas soltas',
+  'tecnológico: linhas finas, pormenores em letra monoespaçada, detalhes geométricos',
+  'retro anos 70: cores quentes, formas redondas, títulos com carácter',
+  'brutalista colorido: bordas grossas, sombras duras, cores directas',
+  'tropical moçambicano: cores do mar, da areia e da natureza, padrões inspirados em capulanas',
+  'pastel suave e sereno: tons calmos, muito espaço, detalhes delicados'
+];
+const HEROS_SORTEIO = [
+  'composição a ocupar o ecrã inteiro com o título por cima',
+  'só tipografia: título gigante, sem imagem',
+  'ecrã dividido em duas colunas assimétricas',
+  'mosaico de formas ou imagens com o título encaixado no meio',
+  'minimalista: título discreto e muito espaço à volta',
+  'título com uma faixa de texto em movimento por baixo'
+];
+function sortear(lista) {
+  return lista[Math.floor(Math.random() * lista.length)];
+}
+function pontoDePartidaVisual() {
+  return `\nPONTO DE PARTIDA SORTEADO (usa só se a descrição da pessoa não disser nada sobre o visual - se disser, ignora isto por completo): estilo "${sortear(ESTILOS_SORTEIO)}"; hero "${sortear(HEROS_SORTEIO)}". Adapta-o ao negócio. Se não fizer sentido nenhum para este negócio, escolhe outra direcção, mas nunca o clichê do sector.`;
+}
+
 const GUIA_TIPO = {
-  'E-commerce': 'Desenha a aparência completa de uma loja online, com várias secções bem desenvolvidas: cabeçalho com o nome do negócio, hero de apresentação com uma frase forte sobre o que vendem, uma secção "sobre nós" com texto real (não só uma frase), destaques ou categorias, uma secção de confiança (ex: entrega, garantia, atendimento), e rodapé completo com contactos e redes sociais. NÃO desenhes produtos, carrinho, nem botões de compra - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
-  'Checkout': 'Desenha a aparência de uma página de loja/checkout simples e directa, focada num negócio pequeno, mas ainda assim completa: cabeçalho com o nome do negócio, uma secção de apresentação com texto real sobre o negócio, o que o torna especial, e rodapé com contactos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - isso é tratado à parte, automaticamente (ver instrução obrigatória abaixo).',
-  'Landing Page': 'Cria uma landing page completa e bem desenvolvida, com várias secções: hero com título forte e subtítulo, benefícios/funcionalidades detalhados (não só títulos soltos, explica cada um), uma secção "como funciona" ou "sobre", depoimentos fictícios coerentes e bem escritos, perguntas frequentes se fizer sentido, chamada para acção clara, e rodapé completo com contactos.',
-  'Portefólio': 'Cria um portefólio pessoal/profissional completo, com várias secções bem desenvolvidas: hero de apresentação com o nome e uma frase de impacto sobre o que a pessoa faz, uma secção "sobre" com texto real e com substância (percurso, especialidades, o que a distingue - não só uma frase), uma secção de serviços ou áreas de actuação se fizer sentido para o tipo de trabalho, e uma secção de contacto completa. NÃO desenhes trabalhos/projectos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
-  'Blog': 'Cria uma página inicial de blog completa: cabeçalho com o nome do negócio/autor, um hero de apresentação com uma frase sobre o que o blog aborda, e uma secção "sobre" com texto real sobre quem escreve e porquê. NÃO desenhes artigos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
-  'Galeria': 'Cria a aparência completa de um site de fotógrafo/videógrafo profissional, com várias secções: cabeçalho com o nome, hero com uma frase de impacto sobre o estilo de trabalho, uma secção "sobre" com texto real (percurso, estilo, o que distingue o trabalho), uma grelha de álbuns de exemplo (cada um com um título de trabalho, tipo "Casamento Ana & Jorge"), e secção de contacto completa. NÃO desenhes fotos/vídeos reais nem o visualizador dos álbuns - isso é tratado à parte, automaticamente.'
+  'E-commerce': 'Esta é uma loja online ao estilo dos grandes marketplaces (Amazon, Shein, Jumia): o protagonista são os PRODUTOS, com pouca informação à volta. Desenha só: (1) um cabeçalho compacto e elegante com o logótipo/nome da loja e um menu curto (ex: Início, Produtos, Contacto), que pode ficar fixo no topo; (2) logo a seguir ao cabeçalho, a div obrigatória da loja (ver instrução abaixo) - NÃO ponhas nenhum hero, banner ou capa antes dela, porque a capa em carrossel, a pesquisa, as categorias, os destaques e os produtos aparecem automaticamente dentro dessa div; (3) depois dela, uma faixa curta de confiança com 3 ou 4 pontos (ex: entrega rápida, pagamento seguro, apoio por WhatsApp), cada um com um ícone SVG; (4) a secção de contacto e um rodapé compacto com contactos e redes sociais. Nada de textos longos, sobre nós extensos ou testemunhos - a loja vai directa aos produtos. NÃO desenhes produtos, preços, carrinho, pesquisa, categorias nem capa - é tudo tratado automaticamente.',
+  'Checkout': 'Esta é uma página de venda directa de uma loja pequena, focada nos produtos. Desenha só: (1) um cabeçalho compacto com o logótipo/nome; (2) logo a seguir, a div obrigatória da loja (ver instrução abaixo) - sem hero nem capa antes dela, porque a capa, os produtos, o carrinho e o pagamento aparecem automaticamente lá dentro; (3) uma faixa curta com 3 razões para comprar (com ícones SVG); (4) a secção de contacto e um rodapé compacto. Textos curtos e directos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - é tudo tratado automaticamente.',
+  'Landing Page': 'Landing page para apresentar o negócio e levar a uma acção (contactar, comprar, reservar, inscrever-se). Secções possíveis - escolhe as que fazem sentido para a descrição, pela ordem que conta melhor a história: hero, benefícios, como funciona, sobre, serviços ou preços, depoimentos, perguntas frequentes, chamada para acção, contacto e rodapé. Se a pessoa pedir uma página simples ou curta, fica-te por 3 ou 4 secções muito bem feitas. Se não disser nada, desenvolve o suficiente para convencer, com textos com substância (explica cada benefício, não só títulos soltos).',
+  'Portefólio': 'Portefólio pessoal ou profissional. Obrigatório: apresentação com o nome e o que a pessoa faz, a zona dos trabalhos (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: sobre com percurso, serviços, clientes, processo de trabalho, prémios, uma citação. A forma é livre e segue a descrição: pode ser uma página minimal só com nome, trabalhos e contacto, ou uma página rica e editorial. NÃO desenhes trabalhos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
+  'Blog': 'Página inicial de um blog. Obrigatório: o nome do blog ou do autor, uma frase sobre o que o blog aborda, a zona dos artigos (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: sobre quem escreve, temas principais, subscrição, redes sociais. Pode ser leve e minimal, ao estilo de um caderno, ou uma capa de revista. NÃO desenhes artigos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
+  'Galeria': 'Site de fotógrafo, videógrafo ou de qualquer pessoa que mostra o seu trabalho em imagens. Obrigatório: o nome, a zona dos álbuns (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: hero, sobre, serviços ou pacotes, testemunhos, processo de trabalho. O estilo segue a descrição e não um molde: pode ser branco e silencioso para as fotos falarem sozinhas, cheio de cor e energia, escuro e cinematográfico, revista de moda, documental e cru, romântico e suave. As fotos são as protagonistas. NÃO desenhes álbuns, fotos ou vídeos falsos nem o visualizador - os álbuns a sério aparecem sozinhos, tratados à parte.'
 };
 
 async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua }) {
@@ -1372,21 +1433,21 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
   // (LOJA_CART_JS), injectado depois. A única coisa que a IA tem de
   // garantir é deixar esta div vazia algures na página.
   const instrucaoLoja = ehLoja
-    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-produtos"></div> - é ali que os produtos a sério, o carrinho de compras e o pagamento vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum produto, preço, botão "comprar" ou "adicionar ao carrinho" - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos produtos" ou "A nossa loja").`
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, logo a seguir ao cabeçalho, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-produtos"></div> - dentro de um contentor com a mesma largura máxima e margens laterais do resto do conteúdo (ex: max-width 1240px, padding lateral 16 a 24px), sem título por cima. É ali que aparecem sozinhos, geridos por um sistema à parte, a capa da loja em carrossel, a pesquisa, as categorias, os produtos em destaque, o catálogo, a página de cada produto, o carrinho e o pagamento. Não escrevas tu nada disso.`
     : '';
 
   // Para a Galeria, o mesmo princípio do Loja: a IA nunca desenha álbuns,
   // fotos ou vídeos a sério, nem o visualizador - isso é sempre o mesmo
   // módulo testado por nós (GALERIA_VIEWER_JS), injectado depois.
   const instrucaoGaleria = ehGaleria
-    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-galeria"></div> - é ali que os álbuns a sério (com as fotos e vídeos reais, e o visualizador deles) vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum álbum, foto ou vídeo falso para além dos exemplos pedidos acima - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos trabalhos" ou "Álbuns").`
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-galeria"></div> - é ali que os álbuns a sério (com as fotos e vídeos reais, e o visualizador deles) vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum álbum, foto ou vídeo falso - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Os nossos trabalhos" ou "Álbuns").`
     : '';
 
   // Para o Portefólio, o mesmo princípio: a IA nunca desenha trabalhos a
   // sério - isso é sempre o mesmo módulo testado por nós
   // (PORTFOLIO_VIEWER_JS), injectado depois.
   const instrucaoPortfolio = ehPortfolio
-    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-portfolio"></div> - é ali que os trabalhos/projectos a sério vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum trabalho/projecto falso para além dos exemplos pedidos acima - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Trabalhos" ou "Projectos").`
+    ? `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-portfolio"></div> - é ali que os trabalhos/projectos a sério vão aparecer sozinhos, geridos por um sistema à parte. Não escrevas tu nenhum trabalho/projecto falso - só essa div vazia, bem posicionada na página (por exemplo, numa secção com título "Trabalhos" ou "Projectos").`
     : '';
 
   // Para o Blog, o mesmo princípio: a IA nunca desenha artigos a sério -
@@ -1406,7 +1467,8 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
-IMPORTANTE: o site tem de ficar completo e bem desenvolvido - nunca curto, vazio ou com ar de esqueleto. Capricha mesmo em todas as secções: textos bem escritos e com substância (não só uma frase solta), várias secções relevantes para o tipo de negócio, boa quantidade de conteúdo coerente. Isto aplica-se a todos os tipos, incluindo os mais simples como Portefólio ou Blog - não te limites ao mínimo só porque o tipo parece simples.
+${DIRECAO_DE_ARTE}${pontoDePartidaVisual()}
+IMPORTANTE: o site tem de parecer acabado e profissional - nunca com ar de esqueleto, com caixas vazias ou textos de enchimento. Acabado não quer dizer comprido: o tamanho e a quantidade de secções seguem a descrição. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, desenvolve o suficiente para aquele negócio, com textos com substância.
 ${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
   const textoPedido = `Nome do negócio: ${nome}
@@ -1660,7 +1722,9 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
-IMPORTANTE: o site tem de continuar completo e bem desenvolvido depois da alteração - nunca o deixes curto, vazio ou com ar de esqueleto. Se a alteração pedida implicar reescrever ou ampliar alguma secção, capricha nela (textos com substância, boa quantidade de conteúdo), mesmo em tipos mais simples como Portefólio ou Blog.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
+IMPORTANTE: o site tem de continuar acabado e profissional depois da alteração - nunca partido, vazio ou com ar de esqueleto. Se a alteração implicar reescrever ou ampliar alguma secção, capricha nela. Se a pessoa pedir para simplificar ou tirar coisas, faz isso mesmo, sem voltar a encher.
+${DIRECAO_DE_ARTE}
+NA EDIÇÃO: mantém a identidade visual que o site já tem, mas tudo o que mudares ou acrescentares tem de seguir este padrão de qualidade. Se o :root ainda não tiver as fichas --dia-*, acrescenta-as com os valores que o site já usa (sem mudar o visual). Se o pedido mudar cores ou tipos de letra, actualiza também as fichas.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -1725,13 +1789,20 @@ ${htmlAtual}`;
 // ficheiro que todos os sites de E-commerce/Checkout gerados carregam -
 // nunca é a IA a escrever esta lógica.
 const LOJA_CART_JS = `/*
-  Daniel IA - módulo fixo de loja (produtos, carrinho e checkout real)
+  Daniel IA - módulo fixo da loja v2 (montra completa estilo marketplace)
   ---------------------------------------------------------------------
-  Este ficheiro é servido pelo próprio container em /loja-cart.js e é
-  carregado por TODOS os sites de E-commerce/Checkout gerados pela IA.
-  A IA nunca escreve esta lógica - só desenha a aparência do site e deixa
-  uma div com id="daniel-ia-produtos" onde este módulo mostra os produtos
-  a sério, o carrinho, e o checkout ligado à MozPayment.
+  Servido pelo container em /loja-cart.js e carregado por TODOS os sites de
+  E-commerce/Checkout. A IA desenha só o cabeçalho e o rodapé do site e
+  deixa uma div com id="daniel-ia-produtos". Este módulo monta ali:
+    - a capa (carrossel até 3 imagens, ou uma capa gerada com a marca)
+    - a pesquisa e as categorias
+    - os produtos em destaque
+    - o catálogo por categoria, com preço antigo e desconto
+    - a página de cada produto, o carrinho e o checkout
+  O checkout adapta-se ao modo da loja: pagamentos Daniel IA (M-Pesa,
+  e-Mola, cartão), pagamento manual para os números do dono, encomenda
+  pelo WhatsApp, ou encomenda simples (chega ao dono por email).
+  As cores, tipos e cantos vêm das fichas --dia-* do próprio site.
 
   Cada página gerada define, antes de carregar este ficheiro:
     window.DANIEL_IA_SITE_ID = 'xxxxx';
@@ -1741,365 +1812,830 @@ const LOJA_CART_JS = `/*
 
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
-
   if (!SITE_ID) {
     console.error('Daniel IA: falta window.DANIEL_IA_SITE_ID nesta página - o módulo da loja não pode arrancar.');
     return;
   }
 
   var CART_KEY = 'daniel_ia_carrinho_' + SITE_ID;
-  var produtosCache = [];
+  var produtos = [];
+  var loja = { nome: '', capa: [], modo: 'pedido', metodos: [], manual: null, whatsapp: '' };
   var carrinho = lerCarrinho();
+  var filtro = { categoria: '', texto: '' };
+  var slideActual = 0;
+  var temporizadorCapa = null;
 
   // ======================================================
-  // Carrinho (guardado no browser de quem está a comprar)
+  // Utilitários
+  // ======================================================
+  function $(id){ return document.getElementById(id); }
+  function esc(t){
+    return String(t == null ? '' : t)
+      .split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;')
+      .split('"').join('&quot;').split("'").join('&#39;');
+  }
+  function mzn(v){ return Number(v || 0).toLocaleString('pt-PT') + ' MZN'; }
+  function desconto(p){
+    if (!p.preco_antigo || p.preco_antigo <= p.preco) return 0;
+    return Math.round((1 - p.preco / p.preco_antigo) * 100);
+  }
+  function post(caminho, corpo){
+    return fetch(CONTAINER_URL + caminho, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo)
+    }).then(function(r){ return r.json(); });
+  }
+  function soDigitos(t){
+    var s = String(t || ''), r = '';
+    for (var i = 0; i < s.length; i++) { if (s[i] >= '0' && s[i] <= '9') r += s[i]; }
+    return r;
+  }
+  function emailValido(e){
+    var a = e.indexOf('@');
+    return a > 0 && e.indexOf('.', a) > a + 1 && e.indexOf(' ') === -1;
+  }
+  function normalizar(t){
+    return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+  function produtoPorId(id){
+    for (var i = 0; i < produtos.length; i++) { if (produtos[i].id === id) return produtos[i]; }
+    return null;
+  }
+  var ICONES = {
+    carrinho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1.4"/><circle cx="19" cy="21" r="1.4"/><path d="M2.5 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.3a2 2 0 0 0 2-1.5L22 7H6.2"/></svg>',
+    lupa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    mais: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    fechar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
+    seta: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
+    estrela: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z"/></svg>',
+    whatsapp: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.3.8 3.2.7a2.7 2.7 0 0 0 1.8-1.3 2.2 2.2 0 0 0 .2-1.3c-.1-.1-.2-.2-.5-.3z"/></svg>',
+    certo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    copiar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    caixa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>'
+  };
+
+  // ======================================================
+  // Carrinho (guardado no browser de quem compra)
   // ======================================================
   function lerCarrinho(){
-    try {
-      var dados = localStorage.getItem(CART_KEY);
-      return dados ? JSON.parse(dados) : {};
-    } catch (e) { return {}; }
+    try { var d = localStorage.getItem(CART_KEY); return d ? JSON.parse(d) : {}; } catch (e) { return {}; }
   }
   function guardarCarrinho(){
     try { localStorage.setItem(CART_KEY, JSON.stringify(carrinho)); } catch (e) {}
   }
-  function limparCarrinho(){
-    carrinho = {};
+  function limparCarrinho(){ carrinho = {}; guardarCarrinho(); }
+  function itensDoCarrinho(){
+    return Object.keys(carrinho).filter(function(id){ return carrinho[id] > 0; }).map(function(id){
+      var p = produtoPorId(id);
+      return p ? { produto: p, quantidade: carrinho[id] } : null;
+    }).filter(function(x){ return x; });
+  }
+  function adicionar(id, qtd){
+    carrinho[id] = (carrinho[id] || 0) + (qtd || 1);
     guardarCarrinho();
+    renderCarrinho();
+    var b = $('dia-carrinho-botao');
+    if (b) { b.classList.remove('dia-pulo'); void b.offsetWidth; b.classList.add('dia-pulo'); }
+    var p = produtoPorId(id);
+    toast((p ? p.nome : 'Produto') + ' adicionado ao carrinho');
+  }
+
+  var temporizadorToast = null;
+  function toast(texto){
+    var t = $('dia-toast');
+    if (!t) return;
+    t.innerHTML = ICONES.certo + '<span>' + esc(texto) + '</span>';
+    t.classList.add('dia-visivel');
+    clearTimeout(temporizadorToast);
+    temporizadorToast = setTimeout(function(){ t.classList.remove('dia-visivel'); }, 2200);
   }
 
   // ======================================================
-  // Texto seguro para dentro de HTML
-  // ======================================================
-  function escaparHtml(t){
-    var d = document.createElement('div');
-    d.textContent = (t == null ? '' : String(t));
-    return d.innerHTML;
-  }
-  function escaparAtributo(t){
-    return escaparHtml(t).replace(/"/g, '&quot;');
-  }
-
-  // ======================================================
-  // Estilos (isolados com o prefixo "dia-" para não colidir com o CSS
-  // que a IA desenhou para o resto do site)
+  // Estilos
   // ======================================================
   function injectarEstilos(){
-    var css = ''
-      + '.dia-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:18px;margin:0;padding:0;}'
-      + '.dia-produto-card{background:#fff;border:1px solid #e4e4e8;border-radius:14px;padding:14px;display:flex;flex-direction:column;font-family:inherit;}'
-      + '.dia-produto-img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px;margin-bottom:10px;background:#f1f1f4;}'
-      + '.dia-produto-img-vazia{display:flex;align-items:center;justify-content:center;}'
-      + '.dia-produto-nome{font-weight:700;font-size:14px;margin-bottom:4px;color:#111;}'
-      + '.dia-produto-preco{font-weight:700;font-size:14px;margin-bottom:10px;color:#111;}'
-      + '.dia-btn-add{margin-top:auto;background:#111;color:#fff;border:none;border-radius:8px;padding:10px 12px;font-size:13px;font-weight:600;cursor:pointer;}'
-      + '.dia-btn-add:hover{opacity:.88;}'
-      + '.dia-vazio{color:#777;font-size:13px;}'
-      + '.dia-carrinho-botao{position:fixed;right:20px;bottom:20px;z-index:99998;background:#111;color:#fff;border-radius:999px;padding:14px 18px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.25);font-family:inherit;}'
-      + '.dia-painel-carrinho{position:fixed;top:0;right:-380px;width:360px;max-width:92vw;height:100%;background:#fff;box-shadow:-8px 0 24px rgba(0,0,0,.18);z-index:99999;transition:right .25s;display:flex;flex-direction:column;font-family:inherit;color:#111;}'
-      + '.dia-painel-carrinho.aberto{right:0;}'
-      + '.dia-painel-cabeca{display:flex;align-items:center;justify-content:space-between;padding:18px;border-bottom:1px solid #eee;}'
-      + '.dia-painel-cabeca button{background:none;border:none;font-size:22px;cursor:pointer;line-height:1;color:#111;}'
-      + '#dia-itens-carrinho{flex:1;overflow-y:auto;padding:14px 18px;}'
-      + '.dia-item-carrinho{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-bottom:1px solid #f0f0f0;font-size:13px;}'
-      + '.dia-remover{background:none;border:none;color:#c0392b;font-size:12px;cursor:pointer;text-decoration:underline;}'
-      + '.dia-total{padding:14px 18px;font-weight:700;font-size:15px;border-top:1px solid #eee;}'
-      + '.dia-btn-principal{margin:0 18px 18px 18px;background:#111;color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;}'
-      + '.dia-btn-principal:disabled{opacity:.4;cursor:default;}'
-      + '.dia-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit;}'
-      + '.dia-modal{background:#fff;border-radius:16px;padding:26px;max-width:380px;width:100%;color:#111;max-height:90vh;overflow-y:auto;}'
-      + '.dia-modal h3{margin:0 0 16px 0;font-size:17px;}'
-      + '.dia-campo{margin-bottom:12px;}'
-      + '.dia-campo label{display:block;font-size:12px;color:#666;margin-bottom:5px;font-weight:600;}'
-      + '.dia-campo input{width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;}'
-      + '.dia-metodos{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}'
-      + '.dia-metodo{border:1px solid #ddd;border-radius:10px;padding:12px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;}'
-      + '.dia-metodo.seleccionado{border-color:#111;background:#f7f7f7;}'
-      + '.dia-msg-erro{color:#c0392b;font-size:12px;margin-top:8px;}'
-      + '.dia-estado-pagamento{text-align:center;padding:10px 0;}'
-      + '.dia-spinner{width:28px;height:28px;border-radius:50%;border:3px solid #e4e4e8;border-top-color:#111;animation:dia-girar .8s linear infinite;margin:0 auto 14px auto;}'
-      + '@keyframes dia-girar{to{transform:rotate(360deg);}}'
-      + '.dia-fechar-modal{background:none;border:none;color:#777;font-size:12px;cursor:pointer;text-decoration:underline;margin-top:10px;}';
+    var css = [
+      '.dia-loja,.dia-carrinho-botao,.dia-painel-carrinho,.dia-overlay,.dia-toast{--_p:var(--dia-primaria,#111);--_pt:var(--dia-primaria-texto,#fff);--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);}',
+      '.dia-loja{--_p:var(--dia-primaria,currentColor);--_s:var(--dia-superficie,color-mix(in srgb,currentColor 4%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_f:var(--dia-fundo,Canvas);color:var(--_t);font-family:inherit;}',
+      '.dia-loja *{box-sizing:border-box;}',
+      /* capa */
+      '.dia-capa{position:relative;border-radius:calc(var(--_r) + 8px);overflow:hidden;height:clamp(230px,44vw,480px);margin-bottom:22px;isolation:isolate;background:color-mix(in srgb,var(--_p) 18%,transparent);}',
+      '.dia-slide{position:absolute;inset:0;opacity:0;transition:opacity .9s ease;}',
+      '.dia-slide.dia-activo{opacity:1;z-index:1;}',
+      '.dia-slide img{width:100%;height:100%;object-fit:cover;transform:scale(1.06);transition:transform 6s ease;}',
+      '.dia-slide.dia-activo img{transform:scale(1);}',
+      '.dia-slide::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.62) 0%,rgba(0,0,0,.25) 55%,rgba(0,0,0,0) 100%);}',
+      '.dia-slide-texto{position:absolute;z-index:2;left:clamp(20px,5vw,56px);bottom:clamp(26px,6vw,64px);right:20px;max-width:560px;color:#fff;}',
+      '.dia-slide-titulo{font-family:var(--_ft);font-weight:800;font-size:clamp(26px,4.6vw,52px);line-height:1.05;letter-spacing:-.025em;margin:0 0 10px;text-shadow:0 2px 24px rgba(0,0,0,.35);}',
+      '.dia-slide-sub{font-size:clamp(14px,1.6vw,18px);line-height:1.5;opacity:.92;margin:0 0 18px;max-width:440px;}',
+      '.dia-slide-btn{display:inline-flex;align-items:center;gap:8px;background:#fff;color:#111;border:none;border-radius:999px;padding:12px 22px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;transition:transform .2s ease,box-shadow .2s ease;}',
+      '.dia-slide-btn:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,.3);}',
+      '.dia-slide-btn svg{width:16px;height:16px;}',
+      '.dia-capa-gerada{position:absolute;inset:0;background:radial-gradient(circle at 85% 20%,color-mix(in srgb,var(--_p) 70%,#fff) 0%,transparent 45%),linear-gradient(135deg,var(--_p) 0%,color-mix(in srgb,var(--_p) 55%,#000) 100%);}',
+      '.dia-capa-gerada::before{content:"";position:absolute;width:62%;aspect-ratio:1;right:-12%;top:-30%;border-radius:50%;border:2px solid rgba(255,255,255,.18);box-shadow:0 0 0 40px rgba(255,255,255,.05),0 0 0 90px rgba(255,255,255,.035);}',
+      '.dia-capa-pontos{position:absolute;z-index:3;left:0;right:0;bottom:16px;display:flex;justify-content:center;gap:7px;}',
+      '.dia-ponto{width:8px;height:8px;border-radius:999px;border:none;background:rgba(255,255,255,.5);cursor:pointer;padding:0;transition:width .3s ease,background .3s ease;}',
+      '.dia-ponto.dia-activo{width:26px;background:#fff;}',
+      '.dia-capa-seta{position:absolute;z-index:3;top:50%;transform:translateY(-50%);width:42px;height:42px;border-radius:50%;border:none;background:rgba(255,255,255,.85);color:#111;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s ease;}',
+      '.dia-capa:hover .dia-capa-seta{opacity:1;}',
+      '.dia-capa-seta svg{width:18px;height:18px;}',
+      '.dia-capa-seta.dia-esq{left:14px;}.dia-capa-seta.dia-esq svg{transform:rotate(180deg);}',
+      '.dia-capa-seta.dia-dir{right:14px;}',
+      /* barra: pesquisa + categorias */
+      '.dia-barra{display:flex;flex-direction:column;gap:12px;padding:2px 0 6px;margin-bottom:6px;}',
+      '.dia-pesquisa{display:flex;align-items:center;gap:10px;background:var(--_s);border:1px solid var(--_b);border-radius:999px;padding:0 16px;height:48px;transition:border-color .2s ease,box-shadow .2s ease;}',
+      '.dia-pesquisa:focus-within{border-color:var(--_p);box-shadow:0 0 0 4px color-mix(in srgb,var(--_p) 16%,transparent);}',
+      '.dia-pesquisa svg{width:19px;height:19px;color:var(--_ts);flex-shrink:0;}',
+      '.dia-pesquisa input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:var(--_t);font-size:15px;font-family:inherit;height:100%;}',
+      '.dia-pesquisa input::placeholder{color:var(--_ts);}',
+      '.dia-categorias{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;}',
+      '.dia-categorias::-webkit-scrollbar{display:none;}',
+      '.dia-chip{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--_b);background:var(--_s);color:var(--_t);border-radius:999px;padding:8px 15px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s ease;white-space:nowrap;}',
+      '.dia-chip small{font-weight:600;opacity:.6;font-size:11.5px;}',
+      '.dia-chip:hover{border-color:color-mix(in srgb,var(--_p) 55%,transparent);}',
+      '.dia-chip.dia-activo{background:var(--dia-primaria,currentColor);color:var(--dia-primaria-texto,var(--_f));border-color:transparent;}',
+      /* secções */
+      '.dia-seccao{margin:26px 0 8px;}',
+      '.dia-seccao-topo{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;}',
+      '.dia-seccao-titulo{font-family:var(--_ft);font-weight:800;font-size:clamp(20px,2.4vw,26px);letter-spacing:-.02em;margin:0;display:flex;align-items:center;gap:8px;}',
+      '.dia-seccao-titulo svg{width:20px;height:20px;color:var(--_p);}',
+      '.dia-ver-todos{background:none;border:none;color:var(--_ts);font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;}',
+      '.dia-ver-todos:hover{color:var(--_t);}',
+      '.dia-ver-todos svg{width:14px;height:14px;}',
+      '.dia-fila{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(200px,230px);gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;padding:4px 2px 14px;scrollbar-width:thin;}',
+      '.dia-fila > *{scroll-snap-align:start;}',
+      '.dia-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;}',
+      '@media (max-width:560px){.dia-grelha{grid-template-columns:1fr 1fr;gap:10px;}.dia-fila{grid-auto-columns:minmax(160px,46%);}}',
+      /* cartão de produto */
+      '.dia-produto-card{position:relative;display:flex;flex-direction:column;background:var(--_s);border:1px solid var(--_b);border-radius:var(--_r);overflow:hidden;cursor:pointer;transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;}',
+      '.dia-produto-card:hover{transform:translateY(-4px);border-color:color-mix(in srgb,var(--_p) 40%,transparent);box-shadow:0 22px 40px -22px color-mix(in srgb,var(--_p) 70%,transparent);}',
+      '.dia-produto-media{position:relative;aspect-ratio:1/1;overflow:hidden;background:color-mix(in srgb,currentColor 6%,transparent);}',
+      '.dia-produto-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s ease;}',
+      '.dia-produto-card:hover .dia-produto-img{transform:scale(1.05);}',
+      '.dia-produto-vazio{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--_ts);}',
+      '.dia-produto-vazio svg{width:38%;height:38%;opacity:.45;}',
+      '.dia-badge{position:absolute;top:10px;left:10px;background:#E11D48;color:#fff;font-size:12px;font-weight:800;padding:4px 9px;border-radius:999px;letter-spacing:.01em;box-shadow:0 6px 14px rgba(225,29,72,.35);}',
+      '.dia-badge-destaque{position:absolute;top:10px;right:10px;width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.92);color:#F59E0B;display:flex;align-items:center;justify-content:center;}',
+      '.dia-badge-destaque svg{width:15px;height:15px;}',
+      '.dia-produto-corpo{padding:12px 12px 14px;display:flex;flex-direction:column;gap:6px;flex:1;}',
+      '.dia-produto-cat{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--_ts);}',
+      '.dia-produto-nome{font-family:var(--_ft);font-weight:700;font-size:14.5px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.6em;}',
+      '.dia-produto-precos{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:auto;padding-right:44px;}',
+      '.dia-produto-preco{font-weight:800;font-size:17px;letter-spacing:-.01em;}',
+      '.dia-produto-antigo{font-size:12.5px;color:var(--_ts);text-decoration:line-through;}',
+      '.dia-btn-add{position:absolute;right:10px;bottom:10px;width:38px;height:38px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:var(--dia-primaria,transparent);color:var(--dia-primaria-texto,currentColor);box-shadow:inset 0 0 0 1.5px var(--_p),0 8px 18px -8px color-mix(in srgb,var(--_p) 80%,transparent);transition:transform .2s ease;}',
+      '.dia-btn-add:hover{transform:scale(1.1) rotate(90deg);}',
+      '.dia-btn-add svg{width:18px;height:18px;}',
+      '.dia-vazio{text-align:center;padding:50px 20px;color:var(--_ts);font-size:14.5px;}',
+      '.dia-vazio svg{width:46px;height:46px;opacity:.5;margin-bottom:10px;}',
+      '.dia-esqueleto{border-radius:var(--_r);aspect-ratio:3/4;background:linear-gradient(90deg,color-mix(in srgb,currentColor 5%,transparent) 25%,color-mix(in srgb,currentColor 11%,transparent) 50%,color-mix(in srgb,currentColor 5%,transparent) 75%);background-size:200% 100%;animation:dia-brilho 1.4s linear infinite;}',
+      '@keyframes dia-brilho{from{background-position:200% 0;}to{background-position:-200% 0;}}',
+      /* botão flutuante + toast */
+      '.dia-carrinho-botao{position:fixed;right:18px;bottom:18px;z-index:99998;display:flex;align-items:center;gap:10px;background:var(--_p);color:var(--_pt);border:none;border-radius:999px;padding:14px 20px 14px 18px;font-size:14.5px;font-weight:800;cursor:pointer;box-shadow:0 16px 36px -10px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.12);font-family:inherit;transition:transform .2s ease;}',
+      '.dia-carrinho-botao:hover{transform:translateY(-2px);}',
+      '.dia-carrinho-botao svg{width:20px;height:20px;}',
+      '.dia-contagem{min-width:22px;height:22px;border-radius:999px;background:var(--_pt);color:var(--_p);font-size:12px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;}',
+      '.dia-pulo{animation:dia-pulo .5s cubic-bezier(.3,1.6,.5,1);}',
+      '@keyframes dia-pulo{0%{transform:scale(1);}40%{transform:scale(1.15);}100%{transform:scale(1);}}',
+      '.dia-toast{position:fixed;left:50%;bottom:86px;z-index:100001;transform:translate(-50%,20px);opacity:0;pointer-events:none;display:flex;align-items:center;gap:10px;background:#111;color:#fff;padding:12px 18px;border-radius:999px;font-size:14px;font-weight:600;box-shadow:0 14px 34px rgba(0,0,0,.3);transition:all .3s cubic-bezier(.2,.8,.2,1);max-width:calc(100vw - 32px);font-family:inherit;}',
+      '.dia-toast.dia-visivel{opacity:1;transform:translate(-50%,0);}',
+      '.dia-toast svg{width:18px;height:18px;color:#4ADE80;flex-shrink:0;}',
+      '.dia-toast span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+      /* painel do carrinho */
+      '.dia-painel-carrinho{--_f:var(--dia-fundo,Canvas);--_t:var(--dia-texto,CanvasText);--_ts:var(--dia-texto-suave,color-mix(in srgb,var(--_t) 60%,transparent));--_b:var(--dia-borda,color-mix(in srgb,var(--_t) 13%,transparent));position:fixed;top:0;right:0;width:400px;max-width:94vw;height:100%;background:var(--_f);color:var(--_t);z-index:100000;transform:translateX(105%);visibility:hidden;transition:transform .38s cubic-bezier(.2,.8,.2,1),visibility 0s linear .38s;display:flex;flex-direction:column;font-family:inherit;}',
+      '.dia-painel-carrinho.aberto{transform:none;visibility:visible;box-shadow:-30px 0 70px rgba(0,0,0,.3);transition:transform .38s cubic-bezier(.2,.8,.2,1);}',
+      '.dia-fundo-escuro{position:fixed;inset:0;background:rgba(0,0,0,.45);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);z-index:99999;opacity:0;pointer-events:none;transition:opacity .3s ease;}',
+      '.dia-fundo-escuro.aberto{opacity:1;pointer-events:auto;}',
+      '.dia-painel-cabeca{display:flex;align-items:center;justify-content:space-between;padding:20px;border-bottom:1px solid var(--_b);}',
+      '.dia-painel-cabeca strong{font-family:var(--_ft);font-size:19px;letter-spacing:-.01em;}',
+      '.dia-icone-btn{width:38px;height:38px;border-radius:50%;border:none;background:color-mix(in srgb,var(--_t) 8%,transparent);color:var(--_t);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s ease;flex-shrink:0;}',
+      '.dia-icone-btn:hover{background:color-mix(in srgb,var(--_t) 16%,transparent);}',
+      '.dia-icone-btn svg{width:18px;height:18px;}',
+      '#dia-itens-carrinho{flex:1;overflow-y:auto;padding:8px 20px;}',
+      '.dia-item-carrinho{display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--_b);}',
+      '.dia-item-img{width:64px;height:64px;border-radius:12px;object-fit:cover;flex-shrink:0;background:color-mix(in srgb,var(--_t) 7%,transparent);}',
+      '.dia-item-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}',
+      '.dia-item-nome{font-weight:700;font-size:14px;line-height:1.3;}',
+      '.dia-item-linha{display:flex;align-items:center;justify-content:space-between;gap:8px;}',
+      '.dia-qtd{display:inline-flex;align-items:center;border:1px solid var(--_b);border-radius:999px;overflow:hidden;}',
+      '.dia-qtd button{width:30px;height:30px;border:none;background:transparent;color:inherit;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;}',
+      '.dia-qtd button:hover{background:color-mix(in srgb,var(--_t) 8%,transparent);}',
+      '.dia-qtd span{min-width:26px;text-align:center;font-weight:800;font-size:13.5px;}',
+      '.dia-item-preco{font-weight:800;font-size:14px;}',
+      '.dia-remover{background:none;border:none;color:var(--_ts);font-size:12px;cursor:pointer;text-decoration:underline;font-family:inherit;padding:0;align-self:flex-start;}',
+      '.dia-remover:hover{color:#D64545;}',
+      '.dia-painel-rodape{padding:16px 20px 20px;border-top:1px solid var(--_b);}',
+      '.dia-total{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;font-size:14px;color:var(--_ts);}',
+      '.dia-total strong{font-size:22px;color:var(--_t);letter-spacing:-.02em;}',
+      '.dia-btn-principal{width:100%;display:flex;align-items:center;justify-content:center;gap:9px;background:var(--_p);color:var(--_pt);border:none;border-radius:calc(var(--_r) - 2px);padding:16px;font-size:15.5px;font-weight:800;cursor:pointer;font-family:inherit;box-shadow:0 14px 28px -12px color-mix(in srgb,var(--_p) 75%,transparent);transition:transform .15s ease,filter .15s ease;}',
+      '.dia-btn-principal:hover:not(:disabled){filter:brightness(1.08);}',
+      '.dia-btn-principal:active:not(:disabled){transform:scale(.98);}',
+      '.dia-btn-principal:disabled{opacity:.45;cursor:default;box-shadow:none;}',
+      '.dia-btn-principal svg{width:20px;height:20px;}',
+      '.dia-btn-principal.dia-wa{background:#25D366;color:#fff;box-shadow:0 14px 28px -12px rgba(37,211,102,.7);}',
+      '.dia-btn-sec{width:100%;margin-top:10px;background:transparent;color:inherit;border:1px solid var(--_b);border-radius:calc(var(--_r) - 2px);padding:14px;font-size:14.5px;font-weight:700;cursor:pointer;font-family:inherit;}',
+      '.dia-btn-sec:hover{border-color:var(--_p);}',
+      '.dia-carrinho-vazio{text-align:center;color:var(--_ts);padding:60px 10px;font-size:14px;}',
+      '.dia-carrinho-vazio svg{width:52px;height:52px;opacity:.4;margin-bottom:12px;}',
+      /* janelas (produto e checkout) */
+      '.dia-overlay{--_f:var(--dia-fundo,Canvas);--_t:var(--dia-texto,CanvasText);--_ts:var(--dia-texto-suave,color-mix(in srgb,var(--_t) 60%,transparent));--_b:var(--dia-borda,color-mix(in srgb,var(--_t) 13%,transparent));position:fixed;inset:0;background:rgba(8,8,12,.6);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:100002;display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit;animation:dia-surgir .2s ease;}',
+      '.dia-modal{position:relative;background:var(--_f);color:var(--_t);border-radius:calc(var(--_r) + 8px);width:100%;max-width:440px;max-height:92vh;overflow-y:auto;box-shadow:0 40px 90px rgba(0,0,0,.4);animation:dia-subir .32s cubic-bezier(.2,.8,.2,1);}',
+      '.dia-modal-corpo{padding:26px;}',
+      '.dia-modal .dia-icone-btn.dia-fechar{position:absolute;top:14px;right:14px;z-index:3;background:color-mix(in srgb,var(--_f) 80%,transparent);}',
+      '@keyframes dia-surgir{from{opacity:0;}to{opacity:1;}}',
+      '@keyframes dia-subir{from{opacity:0;transform:translateY(20px) scale(.98);}to{opacity:1;transform:none;}}',
+      '.dia-detalhe{max-width:880px;display:grid;grid-template-columns:1.05fr 1fr;}',
+      '.dia-detalhe-media{background:color-mix(in srgb,var(--_t) 6%,transparent);min-height:320px;position:relative;}',
+      '.dia-detalhe-media img{width:100%;height:100%;object-fit:cover;display:block;}',
+      '.dia-detalhe-info{padding:30px 28px;display:flex;flex-direction:column;gap:12px;}',
+      '.dia-detalhe-nome{font-family:var(--_ft);font-weight:800;font-size:clamp(22px,3vw,30px);line-height:1.15;letter-spacing:-.02em;margin:0;}',
+      '.dia-detalhe-precos{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}',
+      '.dia-detalhe-preco{font-size:28px;font-weight:800;letter-spacing:-.02em;}',
+      '.dia-detalhe-poupa{font-size:12.5px;font-weight:800;color:#E11D48;background:rgba(225,29,72,.1);padding:4px 9px;border-radius:999px;}',
+      '.dia-detalhe-desc{color:var(--_ts);font-size:14.5px;line-height:1.7;white-space:pre-wrap;margin:4px 0 6px;}',
+      '.dia-detalhe-qtd{display:flex;align-items:center;gap:12px;font-size:13px;font-weight:700;color:var(--_ts);}',
+      '.dia-detalhe-qtd .dia-qtd button{width:38px;height:38px;}',
+      '@media (max-width:720px){.dia-overlay{align-items:flex-end;padding:0;}.dia-modal{max-height:94vh;border-radius:calc(var(--_r) + 8px) calc(var(--_r) + 8px) 0 0;}.dia-detalhe{grid-template-columns:1fr;}.dia-detalhe-media{min-height:0;aspect-ratio:1/1;}}',
+      /* checkout */
+      '.dia-modal h3{font-family:var(--_ft);font-size:21px;letter-spacing:-.02em;margin:0 0 4px;}',
+      '.dia-modal-sub{color:var(--_ts);font-size:13.5px;margin:0 0 18px;}',
+      '.dia-resumo{display:flex;justify-content:space-between;align-items:center;background:color-mix(in srgb,var(--_t) 5%,transparent);border-radius:calc(var(--_r) - 4px);padding:12px 14px;margin-bottom:18px;font-size:13.5px;}',
+      '.dia-resumo strong{font-size:17px;}',
+      '.dia-campo{margin-bottom:12px;}',
+      '.dia-campo label{display:block;font-size:12.5px;color:var(--_ts);margin-bottom:6px;font-weight:700;}',
+      '.dia-campo input,.dia-campo textarea{width:100%;background:transparent;color:var(--_t);border:1px solid var(--_b);border-radius:calc(var(--_r) - 4px);padding:13px 14px;font-size:15px;font-family:inherit;outline:none;transition:border-color .15s,box-shadow .15s;resize:vertical;}',
+      '.dia-campo input:focus,.dia-campo textarea:focus{border-color:var(--_p);box-shadow:0 0 0 3px color-mix(in srgb,var(--_p) 20%,transparent);}',
+      '.dia-metodos{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;}',
+      '.dia-metodo{border:1.5px solid var(--_b);border-radius:calc(var(--_r) - 4px);padding:14px 6px;cursor:pointer;font-size:13px;font-weight:800;text-align:center;transition:all .15s ease;}',
+      '.dia-metodo small{display:block;font-weight:600;font-size:11px;color:var(--_ts);margin-top:3px;}',
+      '.dia-metodo:hover{border-color:color-mix(in srgb,var(--_p) 55%,transparent);}',
+      '.dia-metodo.seleccionado{border-color:var(--_p);background:color-mix(in srgb,var(--_p) 10%,transparent);}',
+      '.dia-pagar-para{border:1px dashed var(--_b);border-radius:calc(var(--_r) - 4px);padding:14px;margin-bottom:16px;}',
+      '.dia-pagar-para p{margin:0 0 10px;font-size:13px;color:var(--_ts);line-height:1.5;}',
+      '.dia-numero{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:10px;background:color-mix(in srgb,var(--_t) 5%,transparent);margin-top:8px;font-size:14px;}',
+      '.dia-numero b{font-size:16px;letter-spacing:.02em;}',
+      '.dia-copiar{display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--_b);color:inherit;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;}',
+      '.dia-copiar svg{width:13px;height:13px;}',
+      '.dia-msg-erro{color:#D64545;font-size:13px;margin-top:10px;line-height:1.4;}',
+      '.dia-msg-erro:empty{display:none;}',
+      '.dia-estado-pagamento{text-align:center;padding:16px 0 6px;}',
+      '.dia-estado-pagamento p{color:var(--_ts);font-size:14px;line-height:1.6;margin:8px 0 0;}',
+      '.dia-ok{width:72px;height:72px;border-radius:50%;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;background:rgba(34,197,94,.14);color:#16A34A;animation:dia-pulo .6s cubic-bezier(.3,1.6,.5,1);}',
+      '.dia-ok svg{width:34px;height:34px;}',
+      '.dia-ref{display:inline-block;font-weight:800;letter-spacing:.06em;background:color-mix(in srgb,var(--_t) 7%,transparent);padding:6px 12px;border-radius:999px;margin-top:10px;}',
+      '.dia-spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--_b);border-top-color:var(--_p);animation:dia-girar .8s linear infinite;margin:0 auto 14px;}',
+      '@keyframes dia-girar{to{transform:rotate(360deg);}}',
+      '@media (prefers-reduced-motion:reduce){.dia-loja *,.dia-modal,.dia-overlay,.dia-painel-carrinho,.dia-carrinho-botao,.dia-toast{animation:none !important;transition:none !important;}}'
+    ];
     var style = document.createElement('style');
     style.setAttribute('data-daniel-ia', 'loja');
-    style.textContent = css;
+    style.textContent = css.join('');
     document.head.appendChild(style);
   }
 
   // ======================================================
-  // Montagem da UI (grelha + botão flutuante + painel do carrinho)
+  // Montagem
   // ======================================================
   function montarUI(){
-    var alvo = document.getElementById('daniel-ia-produtos');
+    var alvo = $('daniel-ia-produtos');
     if (!alvo) {
       console.error('Daniel IA: falta uma div com id="daniel-ia-produtos" nesta página - os produtos não têm onde aparecer.');
-      return;
+      return false;
     }
-    alvo.innerHTML = '<div id="dia-grelha" class="dia-grelha"><p class="dia-vazio">A carregar produtos...</p></div>';
+    var esqueletos = '';
+    for (var i = 0; i < 8; i++) esqueletos += '<div class="dia-esqueleto"></div>';
+    alvo.innerHTML = ''
+      + '<div class="dia-loja">'
+      + '<div class="dia-capa" id="dia-capa"></div>'
+      + '<div class="dia-barra">'
+      + '<label class="dia-pesquisa">' + ICONES.lupa + '<input type="search" id="dia-pesquisa" placeholder="Pesquisar produtos" autocomplete="off"></label>'
+      + '<div class="dia-categorias" id="dia-categorias"></div>'
+      + '</div>'
+      + '<div id="dia-destaques"></div>'
+      + '<div id="dia-catalogo"><div class="dia-grelha">' + esqueletos + '</div></div>'
+      + '</div>';
 
-    var botaoCarrinho = document.createElement('div');
-    botaoCarrinho.id = 'dia-carrinho-botao';
-    botaoCarrinho.className = 'dia-carrinho-botao';
-    botaoCarrinho.innerHTML = 'Carrinho (<span id="dia-carrinho-contagem">0</span>)';
-    document.body.appendChild(botaoCarrinho);
+    var botao = document.createElement('button');
+    botao.id = 'dia-carrinho-botao';
+    botao.className = 'dia-carrinho-botao';
+    botao.setAttribute('aria-label', 'Abrir carrinho');
+    botao.innerHTML = ICONES.carrinho + '<span>Carrinho</span><span class="dia-contagem" id="dia-carrinho-contagem">0</span>';
+    document.body.appendChild(botao);
 
-    var painel = document.createElement('div');
+    var fundo = document.createElement('div');
+    fundo.className = 'dia-fundo-escuro';
+    fundo.id = 'dia-fundo-escuro';
+    document.body.appendChild(fundo);
+
+    var painel = document.createElement('aside');
     painel.id = 'dia-painel-carrinho';
     painel.className = 'dia-painel-carrinho';
     painel.innerHTML = ''
-      + '<div class="dia-painel-cabeca"><strong>O teu carrinho</strong><button id="dia-fechar-painel">&times;</button></div>'
+      + '<div class="dia-painel-cabeca"><strong>O teu carrinho</strong><button class="dia-icone-btn" id="dia-fechar-painel" aria-label="Fechar">' + ICONES.fechar + '</button></div>'
       + '<div id="dia-itens-carrinho"></div>'
-      + '<div id="dia-total-carrinho" class="dia-total"></div>'
-      + '<button id="dia-btn-finalizar" class="dia-btn-principal" disabled>Finalizar compra</button>';
+      + '<div class="dia-painel-rodape" id="dia-painel-rodape">'
+      + '<div class="dia-total"><span>Total</span><strong id="dia-total-carrinho">0 MZN</strong></div>'
+      + '<button id="dia-btn-finalizar" class="dia-btn-principal" disabled>Finalizar compra</button>'
+      + '</div>';
     document.body.appendChild(painel);
 
-    botaoCarrinho.addEventListener('click', function(){
-      painel.classList.add('aberto');
+    var t = document.createElement('div');
+    t.className = 'dia-toast';
+    t.id = 'dia-toast';
+    document.body.appendChild(t);
+
+    botao.addEventListener('click', abrirPainel);
+    fundo.addEventListener('click', fecharPainel);
+    $('dia-fechar-painel').addEventListener('click', fecharPainel);
+    $('dia-btn-finalizar').addEventListener('click', function(){ fecharPainel(); abrirCheckout(); });
+    $('dia-pesquisa').addEventListener('input', function(){
+      filtro.texto = this.value;
+      renderCatalogo();
     });
-    document.getElementById('dia-fechar-painel').addEventListener('click', function(){
-      painel.classList.remove('aberto');
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape') { fecharPainel(); fecharJanela(); }
     });
-    document.getElementById('dia-btn-finalizar').addEventListener('click', abrirCheckout);
+    return true;
   }
 
-  function renderGrelha(){
-    var grelha = document.getElementById('dia-grelha');
-    if (!grelha) return;
-    if (produtosCache.length === 0) {
-      grelha.innerHTML = '<p class="dia-vazio">Ainda não há produtos à venda aqui.</p>';
+  function abrirPainel(){
+    $('dia-painel-carrinho').classList.add('aberto');
+    $('dia-fundo-escuro').classList.add('aberto');
+  }
+  function fecharPainel(){
+    var p = $('dia-painel-carrinho');
+    if (p) p.classList.remove('aberto');
+    var f = $('dia-fundo-escuro');
+    if (f) f.classList.remove('aberto');
+  }
+
+  // ======================================================
+  // Capa (carrossel)
+  // ======================================================
+  function renderCapa(){
+    var capa = $('dia-capa');
+    if (!capa) return;
+    var slides = loja.capa || [];
+    // Sites antigos podem ter a loja a meio da página, depois do hero do
+    // próprio site - aí uma capa gerada ficaria repetida. Sem imagens de
+    // capa e com a loja já lá em baixo, não mostramos capa nenhuma.
+    if (!slides.length && capa.getBoundingClientRect().top + window.pageYOffset > window.innerHeight * 1.1) {
+      capa.style.display = 'none';
       return;
     }
-    grelha.innerHTML = produtosCache.map(function(p){
-      return ''
-        + '<div class="dia-produto-card">'
-        + (p.imagem ? '<img src="' + escaparAtributo(p.imagem) + '" class="dia-produto-img" alt="' + escaparAtributo(p.nome) + '">' : '<div class="dia-produto-img dia-produto-img-vazia"></div>')
-        + '<div class="dia-produto-nome">' + escaparHtml(p.nome) + '</div>'
-        + '<div class="dia-produto-preco">' + Number(p.preco).toLocaleString('pt-PT') + ' MZN</div>'
-        + '<button class="dia-btn-add" data-id="' + p.id + '">Adicionar ao carrinho</button>'
-        + '</div>';
-    }).join('');
-
-    var botoes = grelha.querySelectorAll('.dia-btn-add');
-    botoes.forEach(function(btn){
-      btn.addEventListener('click', function(){
-        var id = btn.getAttribute('data-id');
-        carrinho[id] = (carrinho[id] || 0) + 1;
-        guardarCarrinho();
-        renderCarrinho();
-        var textoOriginal = btn.textContent;
-        btn.textContent = 'Adicionado!';
-        setTimeout(function(){ btn.textContent = textoOriginal; }, 1200);
+    if (!slides.length) {
+      capa.innerHTML = '<div class="dia-capa-gerada"></div>'
+        + '<div class="dia-slide-texto"><h2 class="dia-slide-titulo">' + esc(loja.nome || 'A nossa loja') + '</h2>'
+        + '<p class="dia-slide-sub">' + (produtos.length ? esc(produtos.length + ' produtos à tua espera. Escolhe, encomenda e recebe.') : 'Descobre os nossos produtos.') + '</p>'
+        + '<button class="dia-slide-btn" data-ir-catalogo>Ver produtos ' + ICONES.seta + '</button></div>';
+    } else {
+      var html = slides.map(function(s, i){
+        var temTexto = s.titulo || s.subtitulo || s.botao;
+        return '<div class="dia-slide' + (i === 0 ? ' dia-activo' : '') + '">'
+          + '<img src="' + esc(s.imagem) + '" alt="' + esc(s.titulo || loja.nome) + '"' + (i === 0 ? '' : ' loading="lazy"') + '>'
+          + (temTexto ? '<div class="dia-slide-texto">'
+            + (s.titulo ? '<h2 class="dia-slide-titulo">' + esc(s.titulo) + '</h2>' : '')
+            + (s.subtitulo ? '<p class="dia-slide-sub">' + esc(s.subtitulo) + '</p>' : '')
+            + (s.botao ? '<button class="dia-slide-btn" data-ir-catalogo>' + esc(s.botao) + ' ' + ICONES.seta + '</button>' : '')
+            + '</div>' : '')
+          + '</div>';
+      }).join('');
+      if (slides.length > 1) {
+        html += '<button class="dia-capa-seta dia-esq" aria-label="Anterior">' + ICONES.seta + '</button>'
+          + '<button class="dia-capa-seta dia-dir" aria-label="Seguinte">' + ICONES.seta + '</button>'
+          + '<div class="dia-capa-pontos">' + slides.map(function(s, i){
+            return '<button class="dia-ponto' + (i === 0 ? ' dia-activo' : '') + '" data-i="' + i + '" aria-label="Imagem ' + (i + 1) + '"></button>';
+          }).join('') + '</div>';
+      }
+      capa.innerHTML = html;
+      if (slides.length > 1) ligarCarrossel(capa, slides.length);
+    }
+    Array.prototype.forEach.call(capa.querySelectorAll('[data-ir-catalogo]'), function(b){
+      b.addEventListener('click', function(){
+        var alvo = $('dia-destaques').firstChild ? $('dia-destaques') : $('dia-catalogo');
+        alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
   }
 
-  function itensDoCarrinho(){
-    return Object.keys(carrinho)
-      .filter(function(id){ return carrinho[id] > 0; })
-      .map(function(id){
-        var produto = produtosCache.filter(function(p){ return p.id === id; })[0];
-        return produto ? { produto: produto, quantidade: carrinho[id] } : null;
-      })
-      .filter(function(x){ return x; });
+  function ligarCarrossel(capa, total){
+    function irPara(i){
+      slideActual = (i + total) % total;
+      Array.prototype.forEach.call(capa.querySelectorAll('.dia-slide'), function(el, j){ el.classList.toggle('dia-activo', j === slideActual); });
+      Array.prototype.forEach.call(capa.querySelectorAll('.dia-ponto'), function(el, j){ el.classList.toggle('dia-activo', j === slideActual); });
+    }
+    function reiniciar(){
+      clearInterval(temporizadorCapa);
+      temporizadorCapa = setInterval(function(){ irPara(slideActual + 1); }, 5500);
+    }
+    capa.querySelector('.dia-esq').addEventListener('click', function(){ irPara(slideActual - 1); reiniciar(); });
+    capa.querySelector('.dia-dir').addEventListener('click', function(){ irPara(slideActual + 1); reiniciar(); });
+    Array.prototype.forEach.call(capa.querySelectorAll('.dia-ponto'), function(el){
+      el.addEventListener('click', function(){ irPara(Number(el.getAttribute('data-i'))); reiniciar(); });
+    });
+    var inicioX = null;
+    capa.addEventListener('touchstart', function(e){ inicioX = e.touches[0].clientX; }, { passive: true });
+    capa.addEventListener('touchend', function(e){
+      if (inicioX === null) return;
+      var dx = e.changedTouches[0].clientX - inicioX;
+      if (Math.abs(dx) > 40) { irPara(slideActual + (dx < 0 ? 1 : -1)); reiniciar(); }
+      inicioX = null;
+    });
+    reiniciar();
   }
 
+  // ======================================================
+  // Categorias, destaques e catálogo
+  // ======================================================
+  function categorias(){
+    var mapa = {}, ordem = [];
+    produtos.forEach(function(p){
+      var c = p.categoria || 'Outros';
+      if (!mapa[c]) { mapa[c] = 0; ordem.push(c); }
+      mapa[c]++;
+    });
+    // "Outros" vai sempre para o fim
+    ordem.sort(function(a, b){ return (a === 'Outros') - (b === 'Outros'); });
+    return ordem.map(function(c){ return { nome: c, total: mapa[c] }; });
+  }
+
+  function renderCategorias(){
+    var el = $('dia-categorias');
+    if (!el) return;
+    var cats = categorias();
+    if (cats.length < 2) { el.innerHTML = ''; el.style.display = 'none'; return; }
+    el.style.display = 'flex';
+    var html = '<button class="dia-chip' + (!filtro.categoria ? ' dia-activo' : '') + '" data-cat="">Tudo <small>' + produtos.length + '</small></button>';
+    html += cats.map(function(c){
+      return '<button class="dia-chip' + (filtro.categoria === c.nome ? ' dia-activo' : '') + '" data-cat="' + esc(c.nome) + '">' + esc(c.nome) + ' <small>' + c.total + '</small></button>';
+    }).join('');
+    el.innerHTML = html;
+    Array.prototype.forEach.call(el.querySelectorAll('.dia-chip'), function(b){
+      b.addEventListener('click', function(){
+        filtro.categoria = b.getAttribute('data-cat');
+        renderCategorias();
+        renderCatalogo();
+        var cat = $('dia-catalogo');
+        if (cat && cat.getBoundingClientRect().top < 0) cat.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
+  function cartao(p){
+    var d = desconto(p);
+    return '<article class="dia-produto-card" data-id="' + esc(p.id) + '" tabindex="0">'
+      + '<div class="dia-produto-media">'
+      + (p.imagem ? '<img class="dia-produto-img" src="' + esc(p.imagem) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
+      + (d > 0 ? '<span class="dia-badge">-' + d + '%</span>' : '')
+      + (p.destaque ? '<span class="dia-badge-destaque" title="Em destaque">' + ICONES.estrela + '</span>' : '')
+      + '</div>'
+      + '<div class="dia-produto-corpo">'
+      + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
+      + '<div class="dia-produto-nome">' + esc(p.nome) + '</div>'
+      + '<div class="dia-produto-precos"><span class="dia-produto-preco">' + mzn(p.preco) + '</span>'
+      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s>' : '') + '</div>'
+      + '</div>'
+      + '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="Adicionar ' + esc(p.nome) + ' ao carrinho">' + ICONES.mais + '</button>'
+      + '</article>';
+  }
+
+  function ligarCartoes(raiz){
+    Array.prototype.forEach.call(raiz.querySelectorAll('.dia-produto-card'), function(card){
+      card.addEventListener('click', function(e){
+        var add = e.target.closest ? e.target.closest('[data-add]') : null;
+        if (add) { e.stopPropagation(); adicionar(add.getAttribute('data-add'), 1); return; }
+        abrirProduto(card.getAttribute('data-id'));
+      });
+      card.addEventListener('keydown', function(e){
+        if (e.key === 'Enter') abrirProduto(card.getAttribute('data-id'));
+      });
+    });
+  }
+
+  function renderDestaques(){
+    var el = $('dia-destaques');
+    if (!el) return;
+    var lista = produtos.filter(function(p){ return p.destaque; });
+    if (!lista.length || filtro.texto || filtro.categoria) { el.innerHTML = ''; return; }
+    el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + ICONES.estrela + 'Em destaque</h3></div>'
+      + '<div class="dia-fila">' + lista.map(cartao).join('') + '</div></section>';
+    ligarCartoes(el);
+  }
+
+  function renderCatalogo(){
+    var el = $('dia-catalogo');
+    if (!el) return;
+    renderDestaques();
+    if (!produtos.length) {
+      el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>Ainda não há produtos à venda aqui.</div></div>';
+      return;
+    }
+    var texto = normalizar(filtro.texto.trim());
+    var lista = produtos.filter(function(p){
+      if (filtro.categoria && (p.categoria || 'Outros') !== filtro.categoria) return false;
+      if (texto && normalizar(p.nome + ' ' + (p.categoria || '') + ' ' + (p.descricao || '')).indexOf(texto) === -1) return false;
+      return true;
+    });
+
+    if (!lista.length) {
+      el.innerHTML = '<div class="dia-vazio">' + ICONES.lupa + '<div>Nenhum produto encontrado' + (filtro.texto ? ' para "' + esc(filtro.texto.trim()) + '"' : '') + '.</div></div>';
+      return;
+    }
+
+    // Sem filtros e com várias categorias: uma secção por categoria (estilo
+    // marketplace). Com filtro ou pesquisa: uma grelha só com os resultados.
+    var cats = categorias();
+    if (!texto && !filtro.categoria && cats.length > 1) {
+      el.innerHTML = cats.map(function(c){
+        var daCat = lista.filter(function(p){ return (p.categoria || 'Outros') === c.nome; });
+        return '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(c.nome) + '</h3>'
+          + (daCat.length > 4 ? '<button class="dia-ver-todos" data-cat="' + esc(c.nome) + '">Ver todos ' + ICONES.seta + '</button>' : '')
+          + '</div><div class="dia-grelha">' + daCat.slice(0, 8).map(cartao).join('') + '</div></section>';
+      }).join('');
+      Array.prototype.forEach.call(el.querySelectorAll('.dia-ver-todos'), function(b){
+        b.addEventListener('click', function(){
+          filtro.categoria = b.getAttribute('data-cat');
+          renderCategorias();
+          renderCatalogo();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
+    } else {
+      var titulo = filtro.categoria || (texto ? 'Resultados' : 'Produtos');
+      el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(titulo) + '</h3>'
+        + '<span class="dia-ver-todos" style="cursor:default">' + lista.length + ' produto' + (lista.length === 1 ? '' : 's') + '</span></div>'
+        + '<div class="dia-grelha">' + lista.map(cartao).join('') + '</div></section>';
+    }
+    ligarCartoes(el);
+  }
+
+  // ======================================================
+  // Janelas (produto e checkout)
+  // ======================================================
+  function abrirJanela(html, classeExtra){
+    fecharJanela();
+    var overlay = document.createElement('div');
+    overlay.className = 'dia-overlay';
+    overlay.id = 'dia-janela';
+    overlay.innerHTML = '<div class="dia-modal ' + (classeExtra || '') + '" role="dialog" aria-modal="true">'
+      + '<button class="dia-icone-btn dia-fechar" aria-label="Fechar">' + ICONES.fechar + '</button>' + html + '</div>';
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) fecharJanela(); });
+    overlay.querySelector('.dia-fechar').addEventListener('click', fecharJanela);
+    return overlay;
+  }
+  function fecharJanela(){
+    var j = $('dia-janela');
+    if (j) j.remove();
+    document.body.style.overflow = '';
+  }
+
+  function abrirProduto(id){
+    var p = produtoPorId(id);
+    if (!p) return;
+    var d = desconto(p);
+    var qtd = 1;
+    var j = abrirJanela(''
+      + '<div class="dia-detalhe-media">' + (p.imagem ? '<img src="' + esc(p.imagem) + '" alt="' + esc(p.nome) + '">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
+      + (d > 0 ? '<span class="dia-badge">-' + d + '%</span>' : '') + '</div>'
+      + '<div class="dia-detalhe-info">'
+      + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
+      + '<h3 class="dia-detalhe-nome">' + esc(p.nome) + '</h3>'
+      + '<div class="dia-detalhe-precos"><span class="dia-detalhe-preco">' + mzn(p.preco) + '</span>'
+      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s><span class="dia-detalhe-poupa">Poupas ' + mzn(p.preco_antigo - p.preco) + '</span>' : '') + '</div>'
+      + (p.descricao ? '<p class="dia-detalhe-desc">' + esc(p.descricao) + '</p>' : '')
+      + '<div class="dia-detalhe-qtd">Quantidade <div class="dia-qtd"><button data-q="-1" aria-label="Menos">−</button><span id="dia-det-qtd">1</span><button data-q="1" aria-label="Mais">+</button></div></div>'
+      + '<button class="dia-btn-principal" id="dia-det-add">' + ICONES.carrinho + ' Adicionar ao carrinho</button>'
+      + '<button class="dia-btn-sec" id="dia-det-comprar">Comprar agora</button>'
+      + '</div>', 'dia-detalhe');
+    Array.prototype.forEach.call(j.querySelectorAll('[data-q]'), function(b){
+      b.addEventListener('click', function(){
+        qtd = Math.max(1, Math.min(99, qtd + Number(b.getAttribute('data-q'))));
+        $('dia-det-qtd').textContent = qtd;
+      });
+    });
+    $('dia-det-add').addEventListener('click', function(){ adicionar(p.id, qtd); fecharJanela(); });
+    $('dia-det-comprar').addEventListener('click', function(){ adicionar(p.id, qtd); fecharJanela(); abrirCheckout(); });
+  }
+
+  // ======================================================
+  // Carrinho (painel)
+  // ======================================================
   function renderCarrinho(){
     var itens = itensDoCarrinho();
-    var contagem = itens.reduce(function(total, item){ return total + item.quantidade; }, 0);
-    var elContagem = document.getElementById('dia-carrinho-contagem');
-    if (elContagem) elContagem.textContent = contagem;
-
-    var container = document.getElementById('dia-itens-carrinho');
-    var elTotal = document.getElementById('dia-total-carrinho');
-    var btnFinalizar = document.getElementById('dia-btn-finalizar');
-    if (!container) return;
-
-    if (itens.length === 0) {
-      container.innerHTML = '<p class="dia-vazio">O carrinho está vazio.</p>';
-      elTotal.textContent = '';
-      btnFinalizar.disabled = true;
-      return;
-    }
-
+    var contagem = itens.reduce(function(t, i){ return t + i.quantidade; }, 0);
+    var elC = $('dia-carrinho-contagem');
+    if (elC) elC.textContent = contagem;
+    var cont = $('dia-itens-carrinho');
+    if (!cont) return;
     var total = 0;
-    container.innerHTML = itens.map(function(item){
-      var subtotal = item.produto.preco * item.quantidade;
-      total += subtotal;
-      return ''
-        + '<div class="dia-item-carrinho">'
-        + '<div>' + escaparHtml(item.produto.nome) + ' x' + item.quantidade + '</div>'
-        + '<div>' + subtotal.toLocaleString('pt-PT') + ' MZN<br><button class="dia-remover" data-id="' + item.produto.id + '">Remover</button></div>'
-        + '</div>';
-    }).join('');
-    elTotal.textContent = 'Total: ' + total.toLocaleString('pt-PT') + ' MZN';
-    btnFinalizar.disabled = false;
-
-    container.querySelectorAll('.dia-remover').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        delete carrinho[btn.getAttribute('data-id')];
-        guardarCarrinho();
-        renderCarrinho();
-      });
+    if (!itens.length) {
+      cont.innerHTML = '<div class="dia-carrinho-vazio">' + ICONES.carrinho + '<div>O teu carrinho está vazio.</div></div>';
+    } else {
+      cont.innerHTML = itens.map(function(i){
+        var sub = i.produto.preco * i.quantidade;
+        total += sub;
+        return '<div class="dia-item-carrinho">'
+          + (i.produto.imagem ? '<img class="dia-item-img" src="' + esc(i.produto.imagem) + '" alt="">' : '<div class="dia-item-img"></div>')
+          + '<div class="dia-item-info"><div class="dia-item-nome">' + esc(i.produto.nome) + '</div>'
+          + '<div class="dia-item-linha"><div class="dia-qtd"><button data-menos="' + esc(i.produto.id) + '" aria-label="Menos">−</button><span>' + i.quantidade + '</span><button data-mais="' + esc(i.produto.id) + '" aria-label="Mais">+</button></div>'
+          + '<span class="dia-item-preco">' + mzn(sub) + '</span></div>'
+          + '<button class="dia-remover" data-remover="' + esc(i.produto.id) + '">Remover</button></div></div>';
+      }).join('');
+    }
+    $('dia-total-carrinho').textContent = mzn(total);
+    $('dia-btn-finalizar').disabled = !itens.length;
+    Array.prototype.forEach.call(cont.querySelectorAll('[data-mais]'), function(b){
+      b.addEventListener('click', function(){ var id = b.getAttribute('data-mais'); carrinho[id] = Math.min(99, (carrinho[id] || 0) + 1); guardarCarrinho(); renderCarrinho(); });
+    });
+    Array.prototype.forEach.call(cont.querySelectorAll('[data-menos]'), function(b){
+      b.addEventListener('click', function(){ var id = b.getAttribute('data-menos'); carrinho[id] = (carrinho[id] || 0) - 1; if (carrinho[id] <= 0) delete carrinho[id]; guardarCarrinho(); renderCarrinho(); });
+    });
+    Array.prototype.forEach.call(cont.querySelectorAll('[data-remover]'), function(b){
+      b.addEventListener('click', function(){ delete carrinho[b.getAttribute('data-remover')]; guardarCarrinho(); renderCarrinho(); });
     });
   }
 
   // ======================================================
-  // Checkout (nome, telefone, método, e o pagamento a sério)
+  // Checkout - adapta-se ao modo da loja
   // ======================================================
   var metodoSeleccionado = '';
 
   function abrirCheckout(){
     var itens = itensDoCarrinho();
-    if (itens.length === 0) return;
+    if (!itens.length) return;
+    var total = itens.reduce(function(t, i){ return t + i.produto.preco * i.quantidade; }, 0);
+    var qtd = itens.reduce(function(t, i){ return t + i.quantidade; }, 0);
+    var modo = loja.modo;
 
-    var overlay = document.createElement('div');
-    overlay.className = 'dia-overlay';
-    overlay.id = 'dia-overlay-checkout';
-    overlay.innerHTML = ''
-      + '<div class="dia-modal">'
+    var blocoModo = '';
+    var textoBotao = 'Confirmar encomenda';
+    var classeBotao = 'dia-btn-principal';
+    var iconeBotao = '';
+    if (modo === 'daniel') {
+      var nomesMetodos = { mpesa: ['M-Pesa', 'Vodacom'], emola: ['e-Mola', 'Movitel'], cartao: ['Cartão', 'Visa / Mastercard'] };
+      blocoModo = '<div class="dia-campo"><label>Como queres pagar?</label><div class="dia-metodos">'
+        + loja.metodos.map(function(m){ return '<div class="dia-metodo" data-metodo="' + m + '">' + nomesMetodos[m][0] + '<small>' + nomesMetodos[m][1] + '</small></div>'; }).join('')
+        + '</div></div>';
+      textoBotao = 'Pagar ' + mzn(total);
+    } else if (modo === 'manual' && loja.manual) {
+      blocoModo = '<div class="dia-pagar-para"><p>Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:</p>'
+        + (loja.manual.mpesa ? '<div class="dia-numero"><span>M-Pesa <b>' + esc(loja.manual.mpesa) + '</b></span></div>' : '')
+        + (loja.manual.emola ? '<div class="dia-numero"><span>e-Mola <b>' + esc(loja.manual.emola) + '</b></span></div>' : '')
+        + (loja.manual.titular ? '<p style="margin:10px 0 0">Em nome de <b>' + esc(loja.manual.titular) + '</b></p>' : '')
+        + '</div>';
+    } else if (modo === 'whatsapp') {
+      textoBotao = 'Encomendar pelo WhatsApp';
+      classeBotao += ' dia-wa';
+      iconeBotao = ICONES.whatsapp;
+    } else {
+      textoBotao = 'Enviar encomenda';
+    }
+
+    var j = abrirJanela('<div class="dia-modal-corpo">'
       + '<h3>Finalizar compra</h3>'
+      + '<p class="dia-modal-sub">' + (modo === 'whatsapp' ? 'Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.' : (modo === 'pedido' ? 'A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.' : 'Só falta isto para receberes a tua encomenda.')) + '</p>'
       + '<div id="dia-checkout-form">'
-      + '<div class="dia-campo"><label>O teu nome</label><input type="text" id="dia-cliente-nome" maxlength="100"></div>'
-      + '<div class="dia-campo"><label>Telefone</label><input type="text" id="dia-cliente-telefone" maxlength="20" placeholder="84xxxxxxx"></div>'
-      + '<div class="dia-campo"><label>Email (opcional, para receberes o recibo)</label><input type="email" id="dia-cliente-email" maxlength="150" placeholder="teu@email.com"></div>'
-      + '<div class="dia-campo"><label>Método de pagamento</label>'
-      + '<div class="dia-metodos">'
-      + '<div class="dia-metodo" data-metodo="mpesa">M-Pesa</div>'
-      + '<div class="dia-metodo" data-metodo="emola">e-Mola</div>'
-      + '<div class="dia-metodo" data-metodo="cartao">Cartão (Visa / Mastercard)</div>'
-      + '</div></div>'
-      + '<button class="dia-btn-principal" id="dia-btn-pagar" style="margin:0;width:100%;">Pagar</button>'
+      + '<div class="dia-resumo"><span>' + qtd + ' artigo' + (qtd === 1 ? '' : 's') + '</span><strong>' + mzn(total) + '</strong></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-nome">O teu nome</label><input type="text" id="dia-cliente-nome" maxlength="100" autocomplete="name"></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-telefone">Telefone' + (modo === 'daniel' ? ' (o mesmo da carteira, para M-Pesa/e-Mola)' : '') + '</label><input type="tel" id="dia-cliente-telefone" maxlength="20" placeholder="84 123 4567" autocomplete="tel"></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-email">Email (opcional, para receberes a confirmação)</label><input type="email" id="dia-cliente-email" maxlength="150" autocomplete="email"></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-notas">Morada de entrega / notas (opcional)</label><textarea id="dia-cliente-notas" rows="2" maxlength="500"></textarea></div>'
+      + blocoModo
+      + '<button class="' + classeBotao + '" id="dia-btn-pagar">' + iconeBotao + '<span>' + textoBotao + '</span></button>'
       + '<div class="dia-msg-erro" id="dia-checkout-erro"></div>'
       + '</div>'
       + '<div id="dia-checkout-estado" style="display:none"></div>'
-      + '<button class="dia-fechar-modal" id="dia-fechar-checkout">Fechar</button>'
-      + '</div>';
-    document.body.appendChild(overlay);
+      + '</div>');
 
     metodoSeleccionado = '';
-    overlay.querySelectorAll('.dia-metodo').forEach(function(el){
+    Array.prototype.forEach.call(j.querySelectorAll('.dia-metodo'), function(el){
       el.addEventListener('click', function(){
-        overlay.querySelectorAll('.dia-metodo').forEach(function(x){ x.classList.remove('seleccionado'); });
+        Array.prototype.forEach.call(j.querySelectorAll('.dia-metodo'), function(x){ x.classList.remove('seleccionado'); });
         el.classList.add('seleccionado');
         metodoSeleccionado = el.getAttribute('data-metodo');
       });
     });
+    $('dia-btn-pagar').addEventListener('click', function(){ confirmar(itens, modo, textoBotao); });
+  }
 
-    document.getElementById('dia-fechar-checkout').addEventListener('click', function(){
-      overlay.remove();
-    });
+  function confirmar(itens, modo, textoBotao){
+    var nome = $('dia-cliente-nome').value.trim();
+    var telefone = $('dia-cliente-telefone').value.trim();
+    var email = $('dia-cliente-email').value.trim();
+    var notas = $('dia-cliente-notas').value.trim();
+    var elErro = $('dia-checkout-erro');
+    elErro.textContent = '';
+    if (nome.length < 2) { elErro.textContent = 'Escreve o teu nome.'; return; }
+    if (soDigitos(telefone).length < 9) { elErro.textContent = 'Escreve o teu número de telefone.'; return; }
+    if (email && !emailValido(email)) { elErro.textContent = 'Esse email não parece válido - podes deixá-lo em branco.'; return; }
+    if (modo === 'daniel' && !metodoSeleccionado) { elErro.textContent = 'Escolhe como queres pagar.'; return; }
 
-    document.getElementById('dia-btn-pagar').addEventListener('click', function(){
-      iniciarPagamento(overlay, itens);
+    var btn = $('dia-btn-pagar');
+    btn.disabled = true;
+    btn.querySelector('span').textContent = 'A processar...';
+
+    // Para o WhatsApp abrir sem ser bloqueado como pop-up, abrimos já uma
+    // janela em branco no próprio clique e só depois lhe damos o endereço.
+    var janelaWa = null;
+    if (modo === 'whatsapp') {
+      try { janelaWa = window.open('', '_blank'); } catch (e) { janelaWa = null; }
+    }
+
+    post('/loja-encomenda', {
+      site_id: SITE_ID,
+      cliente_nome: nome,
+      cliente_telefone: telefone,
+      cliente_email: email,
+      notas: notas,
+      itens: itens.map(function(i){ return { produto_id: i.produto.id, quantidade: i.quantidade }; })
+    }).then(function(r){
+      if (r.status !== 'success') throw new Error(r.message || 'Não foi possível criar a encomenda.');
+      var enc = r.response;
+      if (enc.modo === 'daniel') {
+        return post('/loja-pagar', { encomenda_id: enc.encomenda_id, metodo: metodoSeleccionado }).then(function(rp){
+          if (rp.status !== 'success') throw new Error(rp.message || 'Não foi possível iniciar o pagamento.');
+          if (rp.response.tipo === 'cartao') { window.location.href = rp.response.checkout_url; return; }
+          limparCarrinho(); renderCarrinho();
+          esperarPagamento(enc.encomenda_id, enc.referencia);
+        });
+      }
+      limparCarrinho(); renderCarrinho();
+      if (enc.modo === 'whatsapp' && enc.whatsapp_url) {
+        if (janelaWa) { janelaWa.location.href = enc.whatsapp_url; } else { window.location.href = enc.whatsapp_url; }
+      } else if (janelaWa) {
+        janelaWa.close();
+      }
+      mostrarSucesso(enc);
+    }).catch(function(erro){
+      if (janelaWa) { try { janelaWa.close(); } catch (e) {} }
+      btn.disabled = false;
+      btn.querySelector('span').textContent = textoBotao;
+      elErro.textContent = erro.message || 'Algo correu mal. Tenta novamente.';
     });
   }
 
-  function iniciarPagamento(overlay, itens){
-    var nome = document.getElementById('dia-cliente-nome').value.trim();
-    var telefone = document.getElementById('dia-cliente-telefone').value.trim();
-    var email = document.getElementById('dia-cliente-email').value.trim();
-    var elErro = document.getElementById('dia-checkout-erro');
-    elErro.textContent = '';
+  function mostrarEstado(html){
+    $('dia-checkout-form').style.display = 'none';
+    var el = $('dia-checkout-estado');
+    el.style.display = 'block';
+    el.innerHTML = html;
+    return el;
+  }
 
-    if (!nome) { elErro.textContent = 'Escreve o teu nome.'; return; }
-    if (!telefone) { elErro.textContent = 'Escreve o teu telefone.'; return; }
-    if (email && !/\S+@\S+\.\S+/.test(email)) { elErro.textContent = 'Esse email não parece válido - podes deixar em branco se preferires.'; return; }
-    if (!metodoSeleccionado) { elErro.textContent = 'Escolhe um método de pagamento.'; return; }
-
-    var btnPagar = document.getElementById('dia-btn-pagar');
-    btnPagar.disabled = true;
-    btnPagar.textContent = 'A processar...';
-
-    var itensParaEnviar = itens.map(function(item){
-      return { produto_id: item.produto.id, quantidade: item.quantidade };
+  function mostrarSucesso(enc){
+    var html = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div>'
+      + '<h3>Encomenda enviada!</h3><div class="dia-ref">' + esc(enc.referencia) + '</div>';
+    if (enc.modo === 'manual' && enc.manual) {
+      html += '<p>Para concluir, paga <b>' + mzn(enc.valor_total) + '</b> com a referência <b>' + esc(enc.referencia) + '</b>:</p>'
+        + (enc.manual.mpesa ? '<div class="dia-numero"><span>M-Pesa <b>' + esc(enc.manual.mpesa) + '</b></span><button class="dia-copiar" data-copiar="' + esc(enc.manual.mpesa) + '">' + ICONES.copiar + 'Copiar</button></div>' : '')
+        + (enc.manual.emola ? '<div class="dia-numero"><span>e-Mola <b>' + esc(enc.manual.emola) + '</b></span><button class="dia-copiar" data-copiar="' + esc(enc.manual.emola) + '">' + ICONES.copiar + 'Copiar</button></div>' : '')
+        + (enc.manual.titular ? '<p>Em nome de <b>' + esc(enc.manual.titular) + '</b>. A loja confirma o pagamento e prepara a tua encomenda.</p>' : '<p>A loja confirma o pagamento e prepara a tua encomenda.</p>');
+      if (enc.whatsapp_url) html += '<a class="dia-btn-principal dia-wa" style="margin-top:16px;text-decoration:none" href="' + esc(enc.whatsapp_url) + '" target="_blank" rel="noopener">' + ICONES.whatsapp + '<span>Enviar comprovativo no WhatsApp</span></a>';
+    } else if (enc.modo === 'whatsapp') {
+      html += '<p>Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.</p>'
+        + '<a class="dia-btn-principal dia-wa" style="margin-top:16px;text-decoration:none" href="' + esc(enc.whatsapp_url) + '" target="_blank" rel="noopener">' + ICONES.whatsapp + '<span>Abrir o WhatsApp outra vez</span></a>';
+    } else {
+      html += '<p>A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.</p>';
+    }
+    html += '<button class="dia-btn-sec" data-fechar-final>Continuar a comprar</button></div>';
+    var el = mostrarEstado(html);
+    el.querySelector('[data-fechar-final]').addEventListener('click', fecharJanela);
+    Array.prototype.forEach.call(el.querySelectorAll('[data-copiar]'), function(b){
+      b.addEventListener('click', function(){
+        var v = b.getAttribute('data-copiar');
+        try { navigator.clipboard.writeText(v); } catch (e) {}
+        b.innerHTML = ICONES.certo + 'Copiado';
+      });
     });
+  }
 
-    fetch(CONTAINER_URL + '/loja-encomenda', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        site_id: SITE_ID,
-        cliente_nome: nome,
-        cliente_telefone: telefone,
-        cliente_email: email,
-        itens: itensParaEnviar
-      })
-    }).then(function(r){ return r.json(); })
-      .then(function(rEncomenda){
-        if (rEncomenda.status !== 'success') {
-          throw new Error(rEncomenda.message || 'Não foi possível criar a encomenda.');
-        }
-        var encomendaId = rEncomenda.response.encomenda_id;
-        return fetch(CONTAINER_URL + '/loja-pagar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ encomenda_id: encomendaId, metodo: metodoSeleccionado })
-        }).then(function(r){ return r.json(); })
-          .then(function(rPagar){
-            if (rPagar.status !== 'success') {
-              throw new Error(rPagar.message || 'Não foi possível iniciar o pagamento.');
-            }
-            return { encomendaId: encomendaId, pagamento: rPagar.response };
-          });
-      })
-      .then(function(resultado){
-        if (resultado.pagamento.tipo === 'cartao') {
-          // Pagamento por cartão: sai desta página para a MozPayment, e
-          // volta automaticamente à loja depois (via /loja-obrigado).
-          window.location.href = resultado.pagamento.checkout_url;
+  function esperarPagamento(encomendaId, referencia){
+    var el = mostrarEstado('<div class="dia-estado-pagamento"><div class="dia-spinner"></div><h3>Confirma no teu telemóvel</h3>'
+      + '<p id="dia-estado-texto">Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.</p></div>');
+    var tentativas = 0;
+    function verificar(){
+      post('/loja-estado', { encomenda_id: encomendaId }).then(function(r){
+        if (r.status === 'success' && r.response.estado === 'Pago') {
+          el.innerHTML = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div><h3>Pagamento confirmado!</h3>'
+            + '<div class="dia-ref">' + esc(referencia) + '</div><p>Obrigado pela tua compra. A loja já recebeu a tua encomenda.</p>'
+            + '<button class="dia-btn-sec" data-fechar-final>Continuar a comprar</button></div>';
+          el.querySelector('[data-fechar-final]').addEventListener('click', fecharJanela);
           return;
         }
-        // M-Pesa / e-Mola: fica aqui a aguardar a confirmação no telemóvel.
-        limparCarrinho();
-        renderCarrinho();
-        mostrarEstadoPagamento(overlay, resultado.encomendaId);
-      })
-      .catch(function(erro){
-        btnPagar.disabled = false;
-        btnPagar.textContent = 'Pagar';
-        elErro.textContent = erro.message || 'Algo correu mal. Tenta novamente.';
+        tentativas++;
+        if (tentativas >= 25) {
+          var t = $('dia-estado-texto');
+          if (t) t.textContent = 'Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.';
+          return;
+        }
+        setTimeout(verificar, 3000);
+      }).catch(function(){
+        tentativas++;
+        if (tentativas < 25) setTimeout(verificar, 3000);
       });
-  }
-
-  function mostrarEstadoPagamento(overlay, encomendaId){
-    document.getElementById('dia-checkout-form').style.display = 'none';
-    var elEstado = document.getElementById('dia-checkout-estado');
-    elEstado.style.display = 'block';
-    elEstado.innerHTML = ''
-      + '<div class="dia-estado-pagamento">'
-      + '<div class="dia-spinner"></div>'
-      + '<div id="dia-estado-texto">Confirma o pagamento no teu telemóvel...</div>'
-      + '</div>';
-
-    var tentativas = 0;
-    var MAX_TENTATIVAS = 20;
-
-    function verificar(){
-      fetch(CONTAINER_URL + '/loja-estado', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ encomenda_id: encomendaId })
-      }).then(function(r){ return r.json(); })
-        .then(function(r){
-          if (r.status === 'success' && r.response.estado === 'Pago') {
-            elEstado.innerHTML = '<div class="dia-estado-pagamento"><strong>Pagamento confirmado!</strong><br>Obrigado pela tua compra.</div>';
-            return;
-          }
-          tentativas++;
-          if (tentativas >= MAX_TENTATIVAS) {
-            elEstado.innerHTML = '<div class="dia-estado-pagamento">Ainda não recebemos a confirmação. Se já pagaste, aguarda mais um pouco - vais receber a confirmação normalmente.</div>';
-            return;
-          }
-          setTimeout(verificar, 3000);
-        })
-        .catch(function(){
-          tentativas++;
-          if (tentativas >= MAX_TENTATIVAS) {
-            elEstado.innerHTML = '<div class="dia-estado-pagamento">Não foi possível confirmar o pagamento agora. Verifica mais tarde.</div>';
-            return;
-          }
-          setTimeout(verificar, 3000);
-        });
     }
     verificar();
   }
@@ -2109,28 +2645,20 @@ const LOJA_CART_JS = `/*
   // ======================================================
   function iniciar(){
     injectarEstilos();
-    montarUI();
+    if (!montarUI()) return;
     renderCarrinho();
-
-    fetch(CONTAINER_URL + '/loja-produtos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ site_id: SITE_ID })
-    }).then(function(r){ return r.json(); })
-      .then(function(r){
-        if (r.status === 'success') {
-          produtosCache = r.response.produtos || [];
-          renderGrelha();
-          renderCarrinho();
-        } else {
-          var grelha = document.getElementById('dia-grelha');
-          if (grelha) grelha.innerHTML = '<p class="dia-vazio">Não foi possível carregar os produtos.</p>';
-        }
-      })
-      .catch(function(){
-        var grelha = document.getElementById('dia-grelha');
-        if (grelha) grelha.innerHTML = '<p class="dia-vazio">Não foi possível ligar ao servidor.</p>';
-      });
+    post('/loja-produtos', { site_id: SITE_ID }).then(function(r){
+      if (r.status !== 'success') throw new Error();
+      produtos = r.response.produtos || [];
+      if (r.response.loja) loja = r.response.loja;
+      renderCapa();
+      renderCategorias();
+      renderCatalogo();
+      renderCarrinho();
+    }).catch(function(){
+      renderCapa();
+      $('dia-catalogo').innerHTML = '<div class="dia-vazio">Não foi possível carregar os produtos. Recarrega a página.</div>';
+    });
   }
 
   if (document.readyState === 'loading') {
@@ -2196,34 +2724,37 @@ const GALERIA_VIEWER_JS = `/*
   // ======================================================
   function injectarEstilos(){
     var css = ''
-      + '.dig-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:20px;margin:0;padding:0;}'
-      + '.dig-album-card{cursor:pointer;border-radius:14px;overflow:hidden;background:#15151b;position:relative;font-family:inherit;}'
-      + '.dig-album-capa{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#1f1f27;transition:transform .35s ease;}'
-      + '.dig-album-card:hover .dig-album-capa{transform:scale(1.04);}'
-      + '.dig-album-capa-vazia{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;}'
-      + '.dig-album-info{position:absolute;left:0;right:0;bottom:0;padding:14px 16px;background:linear-gradient(to top,rgba(0,0,0,.78),rgba(0,0,0,0));}'
-      + '.dig-album-titulo{color:#fff;font-weight:700;font-size:15px;margin-bottom:2px;}'
-      + '.dig-album-meta{color:#d6d6de;font-size:12px;}'
-      + '.dig-vazio{color:#777;font-size:13px;}'
-      + '.dig-lightbox{position:fixed;inset:0;background:rgba(6,6,10,.96);z-index:100000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s ease;font-family:inherit;}'
+      + '.dig-grelha{--_s:var(--dia-superficie,color-mix(in srgb,currentColor 5%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:20px;margin:0;padding:0;}'
+      + '.dig-album-card{cursor:pointer;border-radius:var(--_r);overflow:hidden;background:color-mix(in srgb,currentColor 8%,transparent);position:relative;font-family:inherit;isolation:isolate;transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .35s ease;}'
+      + '.dig-album-card:hover{transform:translateY(-5px);box-shadow:0 26px 50px -22px rgba(0,0,0,.65);}'
+      + '.dig-album-card::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px rgba(255,255,255,.09);pointer-events:none;}'
+      + '.dig-album-capa{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:color-mix(in srgb,currentColor 10%,transparent);transition:transform .7s cubic-bezier(.2,.8,.2,1);}'
+      + '.dig-album-card:hover .dig-album-capa{transform:scale(1.07);}'
+      + '.dig-album-capa-vazia{display:flex;align-items:center;justify-content:center;color:var(--_ts);font-size:13px;}'
+      + '.dig-album-info{position:absolute;left:0;right:0;bottom:0;padding:46px 18px 16px;background:linear-gradient(to top,rgba(0,0,0,.85),rgba(0,0,0,0));}'
+      + '.dig-album-titulo{font-family:var(--_ft);color:#fff;font-weight:700;font-size:16.5px;letter-spacing:-.01em;margin-bottom:3px;}'
+      + '.dig-album-meta{color:rgba(255,255,255,.76);font-size:12px;letter-spacing:.02em;}'
+      + '.dig-vazio{color:var(--_ts);font-size:13px;}'
+      + '.dig-lightbox{position:fixed;inset:0;background:rgba(6,6,10,.94);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);z-index:100000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .3s ease;font-family:inherit;}'
       + '.dig-lightbox.dig-aberto{opacity:1;pointer-events:auto;}'
-      + '.dig-lightbox-topo{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:18px 20px;color:#eee;z-index:2;}'
-      + '.dig-lightbox-titulo-album{font-size:14px;font-weight:600;color:#fff;}'
-      + '.dig-lightbox-contador{font-size:12px;color:#aaa;margin-top:2px;}'
-      + '.dig-lightbox-fechar{background:rgba(255,255,255,.08);border:none;color:#fff;font-size:20px;line-height:1;width:38px;height:38px;border-radius:50%;cursor:pointer;}'
-      + '.dig-lightbox-fechar:hover{background:rgba(255,255,255,.18);}'
-      + '.dig-lightbox-palco{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:70px 70px;box-sizing:border-box;position:relative;}'
-      + '.dig-lightbox-conteudo{max-width:100%;max-height:100%;opacity:0;transform:scale(.97);transition:opacity .22s ease,transform .22s ease;display:flex;align-items:center;justify-content:center;}'
+      + '.dig-lightbox-topo{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:18px 20px;color:#eee;z-index:2;background:linear-gradient(to bottom,rgba(0,0,0,.5),rgba(0,0,0,0));}'
+      + '.dig-lightbox-titulo-album{font-family:var(--dia-fonte-titulos,inherit);font-size:15px;font-weight:700;color:#fff;}'
+      + '.dig-lightbox-contador{font-size:12px;color:rgba(255,255,255,.65);margin-top:2px;letter-spacing:.04em;}'
+      + '.dig-lightbox-fechar{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);color:#fff;font-size:20px;line-height:1;width:40px;height:40px;border-radius:50%;cursor:pointer;transition:background .15s,transform .15s;}'
+      + '.dig-lightbox-fechar:hover{background:rgba(255,255,255,.22);transform:rotate(90deg);}'
+      + '.dig-lightbox-palco{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:70px 76px;box-sizing:border-box;position:relative;}'
+      + '.dig-lightbox-conteudo{max-width:100%;max-height:100%;opacity:0;transform:scale(.97);transition:opacity .25s ease,transform .25s ease;display:flex;align-items:center;justify-content:center;}'
       + '.dig-lightbox-conteudo.dig-visivel{opacity:1;transform:scale(1);}'
-      + '.dig-lightbox-conteudo img,.dig-lightbox-conteudo video{max-width:100%;max-height:78vh;border-radius:6px;display:block;background:#000;}'
-      + '.dig-lightbox-spinner{width:32px;height:32px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;animation:dig-girar .8s linear infinite;}'
+      + '.dig-lightbox-conteudo img,.dig-lightbox-conteudo video{max-width:100%;max-height:80vh;border-radius:10px;display:block;background:#000;box-shadow:0 30px 80px rgba(0,0,0,.6);}'
+      + '.dig-lightbox-spinner{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.18);border-top-color:#fff;animation:dig-girar .8s linear infinite;}'
       + '@keyframes dig-girar{to{transform:rotate(360deg);}}'
-      + '.dig-lightbox-seta{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.08);border:none;color:#fff;width:46px;height:46px;border-radius:50%;font-size:20px;cursor:pointer;z-index:2;}'
-      + '.dig-lightbox-seta:hover{background:rgba(255,255,255,.2);}'
-      + '.dig-lightbox-seta.dig-esquerda{left:14px;}'
-      + '.dig-lightbox-seta.dig-direita{right:14px;}'
+      + '.dig-lightbox-seta{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);color:#fff;width:48px;height:48px;border-radius:50%;font-size:20px;cursor:pointer;z-index:2;transition:background .15s;}'
+      + '.dig-lightbox-seta:hover{background:rgba(255,255,255,.24);}'
+      + '.dig-lightbox-seta.dig-esquerda{left:16px;}'
+      + '.dig-lightbox-seta.dig-direita{right:16px;}'
       + '.dig-lightbox-vazio{color:#ccc;font-size:14px;text-align:center;}'
-      + '@media(max-width:640px){.dig-lightbox-palco{padding:70px 16px;}.dig-lightbox-seta{width:38px;height:38px;font-size:17px;}.dig-lightbox-seta.dig-esquerda{left:6px;}.dig-lightbox-seta.dig-direita{right:6px;}}';
+      + '@media(max-width:640px){.dig-lightbox-palco{padding:70px 14px;}.dig-lightbox-seta{width:40px;height:40px;font-size:17px;}.dig-lightbox-seta.dig-esquerda{left:6px;}.dig-lightbox-seta.dig-direita{right:6px;}}'
+      + '@media (prefers-reduced-motion:reduce){.dig-album-card,.dig-album-capa,.dig-lightbox,.dig-lightbox-conteudo{transition:none !important;animation:none !important;}}';
     var style = document.createElement('style');
     style.setAttribute('data-daniel-ia', 'galeria');
     style.textContent = css;
@@ -2532,26 +3063,28 @@ const PORTFOLIO_VIEWER_JS = `/*
 
   function injectarEstilos(){
     var css = ''
-      + '.dip-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:22px;margin:0;padding:0;}'
-      + '.dip-card{cursor:pointer;border-radius:14px;overflow:hidden;background:#15151b;font-family:inherit;}'
-      + '.dip-card-img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:#1f1f27;transition:transform .35s ease;}'
-      + '.dip-card:hover .dip-card-img{transform:scale(1.04);}'
-      + '.dip-card-img-vazia{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;}'
-      + '.dip-card-corpo{padding:16px;}'
-      + '.dip-card-titulo{font-weight:700;font-size:15px;margin-bottom:6px;color:#fff;}'
-      + '.dip-card-desc{font-size:13px;color:#b9b9c2;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}'
-      + '.dip-vazio{color:#777;font-size:13px;}'
-      + '.dip-overlay{position:fixed;inset:0;background:rgba(6,6,10,.92);z-index:100000;display:flex;align-items:center;justify-content:center;padding:24px;opacity:0;pointer-events:none;transition:opacity .22s ease;font-family:inherit;}'
+      + '.dip-grelha{--_s:var(--dia-superficie,color-mix(in srgb,currentColor 5%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:22px;margin:0;padding:0;}'
+      + '.dip-card{cursor:pointer;border-radius:var(--_r);overflow:hidden;background:var(--_s);border:1px solid var(--_b);color:var(--_t);font-family:inherit;transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .35s ease,border-color .35s ease;}'
+      + '.dip-card:hover{transform:translateY(-5px);box-shadow:0 26px 50px -24px rgba(0,0,0,.55);border-color:color-mix(in srgb,currentColor 24%,transparent);}'
+      + '.dip-card-img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:color-mix(in srgb,currentColor 8%,transparent);transition:transform .7s cubic-bezier(.2,.8,.2,1);}'
+      + '.dip-card:hover .dip-card-img{transform:scale(1.06);}'
+      + '.dip-card-img-vazia{display:flex;align-items:center;justify-content:center;color:var(--_ts);font-size:13px;}'
+      + '.dip-card-corpo{padding:18px;}'
+      + '.dip-card-titulo{font-family:var(--_ft);font-weight:700;font-size:16px;letter-spacing:-.01em;margin-bottom:6px;color:var(--_t);}'
+      + '.dip-card-desc{font-size:13.5px;color:var(--_ts);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}'
+      + '.dip-vazio{color:var(--_ts);font-size:13px;}'
+      + '.dip-overlay{--_f:var(--dia-fundo,#121218);--_t:var(--dia-texto,#fff);--_ts:var(--dia-texto-suave,rgba(255,255,255,.72));--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);--_p:var(--dia-primaria,#fff);position:fixed;inset:0;background:rgba(6,6,10,.72);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);z-index:100000;display:flex;align-items:center;justify-content:center;padding:24px;opacity:0;pointer-events:none;transition:opacity .25s ease;font-family:inherit;}'
       + '.dip-overlay.dip-aberto{opacity:1;pointer-events:auto;}'
-      + '.dip-modal{background:#15151b;border-radius:16px;max-width:620px;width:100%;max-height:88vh;overflow-y:auto;position:relative;transform:scale(.97);opacity:0;transition:opacity .22s ease,transform .22s ease;}'
-      + '.dip-overlay.dip-aberto .dip-modal{transform:scale(1);opacity:1;}'
-      + '.dip-modal-img{width:100%;max-height:360px;object-fit:cover;display:block;background:#1f1f27;}'
-      + '.dip-modal-corpo{padding:22px;}'
-      + '.dip-modal-titulo{font-weight:700;font-size:19px;color:#fff;margin-bottom:10px;}'
-      + '.dip-modal-desc{font-size:14px;color:#c6c6cf;line-height:1.6;white-space:pre-wrap;}'
-      + '.dip-modal-link{display:inline-block;margin-top:16px;color:#fff;font-size:13px;font-weight:600;text-decoration:underline;}'
-      + '.dip-fechar{position:absolute;top:14px;right:14px;background:rgba(255,255,255,.1);border:none;color:#fff;font-size:20px;line-height:1;width:36px;height:36px;border-radius:50%;cursor:pointer;z-index:2;}'
-      + '.dip-fechar:hover{background:rgba(255,255,255,.2);}';
+      + '.dip-modal{background:var(--_f);color:var(--_t);border-radius:calc(var(--_r) + 8px);max-width:660px;width:100%;max-height:88vh;overflow-y:auto;position:relative;transform:translateY(14px) scale(.98);opacity:0;transition:opacity .3s ease,transform .3s cubic-bezier(.2,.8,.2,1);box-shadow:0 40px 90px rgba(0,0,0,.5);}'
+      + '.dip-overlay.dip-aberto .dip-modal{transform:none;opacity:1;}'
+      + '.dip-modal-img{width:100%;max-height:380px;object-fit:cover;display:block;background:color-mix(in srgb,var(--_t) 8%,transparent);}'
+      + '.dip-modal-corpo{padding:26px;}'
+      + '.dip-modal-titulo{font-family:var(--_ft);font-weight:800;font-size:22px;letter-spacing:-.02em;color:var(--_t);margin-bottom:12px;}'
+      + '.dip-modal-desc{font-size:14.5px;color:var(--_ts);line-height:1.7;white-space:pre-wrap;}'
+      + '.dip-modal-link{display:inline-flex;align-items:center;gap:6px;margin-top:18px;color:var(--_p);font-size:14px;font-weight:700;text-decoration:none;border-bottom:2px solid currentColor;padding-bottom:2px;}'
+      + '.dip-fechar{position:absolute;top:14px;right:14px;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:20px;line-height:1;width:38px;height:38px;border-radius:50%;cursor:pointer;z-index:2;transition:background .15s,transform .15s;}'
+      + '.dip-fechar:hover{background:rgba(0,0,0,.7);transform:rotate(90deg);}'
+      + '@media (prefers-reduced-motion:reduce){.dip-card,.dip-card-img,.dip-overlay,.dip-modal{transition:none !important;animation:none !important;}}';
     var style = document.createElement('style');
     style.setAttribute('data-daniel-ia', 'portfolio');
     style.textContent = css;
@@ -2727,27 +3260,30 @@ const BLOG_VIEWER_JS = `/*
 
   function injectarEstilos(){
     var css = ''
-      + '.dib-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:24px;margin:0;padding:0;}'
-      + '.dib-card{cursor:pointer;border-radius:14px;overflow:hidden;background:#15151b;font-family:inherit;}'
-      + '.dib-card-img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#1f1f27;transition:transform .35s ease;}'
-      + '.dib-card:hover .dib-card-img{transform:scale(1.04);}'
-      + '.dib-card-img-vazia{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;}'
-      + '.dib-card-corpo{padding:18px;}'
-      + '.dib-card-data{font-size:12px;color:#8a8a94;margin-bottom:6px;text-transform:capitalize;}'
-      + '.dib-card-titulo{font-weight:700;font-size:16px;margin-bottom:8px;color:#fff;}'
-      + '.dib-card-resumo{font-size:13px;color:#b9b9c2;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}'
-      + '.dib-vazio{color:#777;font-size:13px;}'
-      + '.dib-overlay{position:fixed;inset:0;background:rgba(6,6,10,.94);z-index:100000;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;opacity:0;pointer-events:none;transition:opacity .22s ease;font-family:inherit;}'
+      + '.dib-grelha{--_s:var(--dia-superficie,color-mix(in srgb,currentColor 5%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:24px;margin:0;padding:0;}'
+      + '.dib-card{cursor:pointer;border-radius:var(--_r);overflow:hidden;background:var(--_s);border:1px solid var(--_b);color:var(--_t);font-family:inherit;transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .35s ease,border-color .35s ease;}'
+      + '.dib-card:hover{transform:translateY(-5px);box-shadow:0 26px 50px -24px rgba(0,0,0,.5);border-color:color-mix(in srgb,currentColor 24%,transparent);}'
+      + '.dib-card-img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:color-mix(in srgb,currentColor 8%,transparent);transition:transform .7s cubic-bezier(.2,.8,.2,1);}'
+      + '.dib-card:hover .dib-card-img{transform:scale(1.06);}'
+      + '.dib-card-img-vazia{display:flex;align-items:center;justify-content:center;color:var(--_ts);font-size:13px;}'
+      + '.dib-card-corpo{padding:20px;}'
+      + '.dib-card-data{font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--_ts);margin-bottom:8px;}'
+      + '.dib-card-titulo{font-family:var(--_ft);font-weight:800;font-size:18px;line-height:1.3;letter-spacing:-.015em;margin-bottom:8px;color:var(--_t);}'
+      + '.dib-card-resumo{font-size:13.5px;color:var(--_ts);line-height:1.6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}'
+      + '.dib-vazio{color:var(--_ts);font-size:13px;}'
+      + '.dib-overlay{--_f:var(--dia-fundo,#121218);--_t:var(--dia-texto,#fff);--_ts:var(--dia-texto-suave,rgba(255,255,255,.72));--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);--_p:var(--dia-primaria,#fff);position:fixed;inset:0;background:rgba(6,6,10,.75);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);z-index:100000;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;opacity:0;pointer-events:none;transition:opacity .25s ease;font-family:inherit;}'
       + '.dib-overlay.dib-aberto{opacity:1;pointer-events:auto;}'
-      + '.dib-artigo{background:#15151b;border-radius:16px;max-width:720px;width:100%;position:relative;transform:translateY(10px);opacity:0;transition:opacity .22s ease,transform .22s ease;margin-bottom:40px;}'
-      + '.dib-overlay.dib-aberto .dib-artigo{transform:translateY(0);opacity:1;}'
-      + '.dib-artigo-img{width:100%;max-height:360px;object-fit:cover;display:block;background:#1f1f27;border-radius:16px 16px 0 0;}'
-      + '.dib-artigo-corpo{padding:30px;}'
-      + '.dib-artigo-data{font-size:12px;color:#8a8a94;margin-bottom:10px;text-transform:capitalize;}'
-      + '.dib-artigo-titulo{font-weight:700;font-size:24px;color:#fff;margin-bottom:18px;line-height:1.3;}'
-      + '.dib-artigo-conteudo{font-size:15px;color:#c6c6cf;line-height:1.75;white-space:pre-wrap;}'
-      + '.dib-fechar{position:absolute;top:14px;right:14px;background:rgba(255,255,255,.1);border:none;color:#fff;font-size:20px;line-height:1;width:36px;height:36px;border-radius:50%;cursor:pointer;z-index:2;}'
-      + '.dib-fechar:hover{background:rgba(255,255,255,.2);}';
+      + '.dib-artigo{background:var(--_f);color:var(--_t);border-radius:calc(var(--_r) + 8px);max-width:740px;width:100%;position:relative;transform:translateY(16px);opacity:0;transition:opacity .3s ease,transform .3s cubic-bezier(.2,.8,.2,1);margin-bottom:40px;box-shadow:0 40px 90px rgba(0,0,0,.5);}'
+      + '.dib-overlay.dib-aberto .dib-artigo{transform:none;opacity:1;}'
+      + '.dib-artigo-img{width:100%;max-height:400px;object-fit:cover;display:block;background:color-mix(in srgb,var(--_t) 8%,transparent);border-radius:calc(var(--_r) + 8px) calc(var(--_r) + 8px) 0 0;}'
+      + '.dib-artigo-corpo{padding:34px 34px 40px;}'
+      + '.dib-artigo-data{font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--_ts);margin-bottom:12px;}'
+      + '.dib-artigo-titulo{font-family:var(--_ft);font-weight:800;font-size:clamp(24px,4vw,32px);color:var(--_t);margin-bottom:20px;line-height:1.2;letter-spacing:-.02em;}'
+      + '.dib-artigo-conteudo{font-size:16px;color:var(--_ts);line-height:1.85;white-space:pre-wrap;}'
+      + '.dib-fechar{position:absolute;top:14px;right:14px;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:20px;line-height:1;width:38px;height:38px;border-radius:50%;cursor:pointer;z-index:2;transition:background .15s,transform .15s;}'
+      + '.dib-fechar:hover{background:rgba(0,0,0,.7);transform:rotate(90deg);}'
+      + '@media(max-width:640px){.dib-artigo-corpo{padding:24px 20px 30px;}}'
+      + '@media (prefers-reduced-motion:reduce){.dib-card,.dib-card-img,.dib-overlay,.dib-artigo{transition:none !important;animation:none !important;}}';
     var style = document.createElement('style');
     style.setAttribute('data-daniel-ia', 'blog');
     style.textContent = css;
@@ -2903,20 +3439,21 @@ const CONTACTO_FORM_JS = `/*
 
   function injectarEstilos(){
     var css = ''
-      + '.dic-caixa{background:#15151b;border-radius:14px;padding:28px;font-family:inherit;}'
-      + '.dic-titulo{font-weight:700;font-size:20px;color:#fff;margin:0 0 6px 0;}'
-      + '.dic-sub{font-size:13px;color:#b9b9c2;margin:0 0 20px 0;line-height:1.5;}'
+      + '.dic-caixa{--_s:var(--dia-superficie,color-mix(in srgb,currentColor 5%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);--_p:var(--dia-primaria,currentColor);background:var(--_s);border:1px solid var(--_b);border-radius:calc(var(--_r) + 4px);padding:30px;color:var(--_t);font-family:inherit;}'
+      + '.dic-titulo{font-family:var(--_ft);font-weight:800;font-size:22px;letter-spacing:-.02em;color:var(--_t);margin:0 0 6px 0;}'
+      + '.dic-sub{font-size:14px;color:var(--_ts);margin:0 0 22px 0;line-height:1.55;}'
       + '.dic-campo{margin-bottom:14px;}'
-      + '.dic-label{display:block;font-size:12.5px;color:#b9b9c2;margin-bottom:6px;}'
-      + '.dic-input,.dic-textarea{width:100%;box-sizing:border-box;background:#1f1f27;border:1px solid #2c2c36;border-radius:10px;padding:11px 13px;color:#fff;font-size:14px;font-family:inherit;outline:none;}'
-      + '.dic-input:focus,.dic-textarea:focus{border-color:#6366F1;}'
-      + '.dic-textarea{resize:vertical;min-height:100px;}'
-      + '.dic-botao{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#6366F1;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;}'
-      + '.dic-botao:hover{background:#4f52d6;}'
-      + '.dic-botao:disabled{opacity:.6;cursor:default;}'
-      + '.dic-msg{font-size:13.5px;margin-top:14px;padding:11px 13px;border-radius:10px;display:none;}'
-      + '.dic-msg.dic-sucesso{display:block;background:rgba(122,196,35,.12);color:#9fdb5a;}'
-      + '.dic-msg.dic-erro{display:block;background:rgba(192,57,43,.12);color:#ff8a7a;}';
+      + '.dic-label{display:block;font-size:12.5px;font-weight:700;color:var(--_ts);margin-bottom:7px;}'
+      + '.dic-input,.dic-textarea{width:100%;box-sizing:border-box;background:color-mix(in srgb,currentColor 4%,transparent);border:1px solid var(--_b);border-radius:calc(var(--_r) - 4px);padding:13px 14px;color:var(--_t);font-size:15px;font-family:inherit;outline:none;transition:border-color .15s,box-shadow .15s,background .15s;}'
+      + '.dic-input:focus,.dic-textarea:focus{border-color:var(--_p);box-shadow:0 0 0 3px color-mix(in srgb,var(--_p) 22%,transparent);background:transparent;}'
+      + '.dic-textarea{resize:vertical;min-height:120px;}'
+      + '.dic-botao{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--dia-primaria,transparent);color:var(--dia-primaria-texto,currentColor);border:none;border-radius:calc(var(--_r) - 4px);padding:14px 26px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;box-shadow:inset 0 0 0 1.5px var(--_p),0 14px 28px -16px color-mix(in srgb,var(--_p) 70%,transparent);transition:transform .15s ease,filter .15s ease;}'
+      + '.dic-botao:hover{filter:brightness(1.1);transform:translateY(-1px);}'
+      + '.dic-botao:disabled{opacity:.6;cursor:default;transform:none;}'
+      + '.dic-msg{font-size:14px;margin-top:14px;padding:12px 14px;border-radius:calc(var(--_r) - 4px);display:none;line-height:1.5;}'
+      + '.dic-msg.dic-sucesso{display:block;background:rgba(122,196,35,.12);color:inherit;border:1px solid rgba(122,196,35,.4);}'
+      + '.dic-msg.dic-erro{display:block;background:rgba(214,69,69,.1);color:inherit;border:1px solid rgba(214,69,69,.4);}'
+      + '@media (prefers-reduced-motion:reduce){.dic-input,.dic-textarea,.dic-botao{transition:none !important;animation:none !important;}}';
     var style = document.createElement('style');
     style.setAttribute('data-daniel-ia', 'contacto');
     style.textContent = css;
@@ -3524,25 +4061,36 @@ app.post('/loja-produtos', async (req, res) => {
       return res.json({ status: 'error', message: 'Falta o site_id.' });
     }
 
-    const produtos = await bubbleList(
-      'produto',
-      [
-        { key: 'Site', constraint_type: 'equals', value: site_id },
-        { key: 'Is Active', constraint_type: 'equals', value: true }
-      ],
-      'Created Date',
-      false
-    );
+    const [site, produtos] = await Promise.all([
+      bubbleGet('site', site_id).catch(() => null),
+      bubbleList(
+        'produto',
+        [
+          { key: 'Site', constraint_type: 'equals', value: site_id },
+          { key: 'Is Active', constraint_type: 'equals', value: true }
+        ],
+        'Created Date',
+        false
+      )
+    ]);
 
-    const lista = produtos.map(p => ({
-      id: p._id,
-      nome: p['Nome'],
-      preco: p['Preco MZN'],
-      descricao: p['Descricao'] || '',
-      imagem: p['Imagem URL'] || ''
-    }));
+    // Dados da montra: capa, modo de pagamento efectivo e contactos
+    // públicos (números de pagamento manual / WhatsApp são públicos por
+    // natureza - os clientes precisam deles).
+    let loja = { nome: '', capa: [], modo: 'pedido', metodos: [], manual: null, whatsapp: '' };
+    if (site) {
+      const { modo, cfg } = await modoEfectivoLoja(site);
+      loja = {
+        nome: site['Nome'] || '',
+        capa: capaLoja(site),
+        modo: modo,
+        metodos: modo === 'daniel' ? ['mpesa', 'emola', 'cartao'] : [],
+        manual: modo === 'manual' ? { mpesa: cfg.mpesa, emola: cfg.emola, titular: cfg.titular } : null,
+        whatsapp: cfg.whatsapp
+      };
+    }
 
-    return res.json({ status: 'success', response: { produtos: lista } });
+    return res.json({ status: 'success', response: { produtos: produtos.map(produtoParaLista), loja } });
   } catch (erro) {
     console.error('Erro em /loja-produtos:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os produtos.' });
@@ -3555,7 +4103,7 @@ app.post('/loja-produtos', async (req, res) => {
 // a uma loja que não é sua.
 app.post('/loja-produto-criar', async (req, res) => {
   try {
-    const { owner, site_id, nome, preco, descricao, imagem_url } = req.body;
+    const { owner, site_id, nome, preco, descricao, imagem_url, imagem_data_url, categoria, preco_antigo, destaque } = req.body;
 
     if (!owner || !site_id || !nome || preco === undefined || preco === null || preco === '') {
       return res.json({ status: 'error', message: 'Faltam dados: site_id, nome e preco são obrigatórios.' });
@@ -3571,15 +4119,28 @@ app.post('/loja-produto-criar', async (req, res) => {
       return res.json({ status: 'error', message: 'Não tens permissão para adicionar produtos a este projecto.' });
     }
 
-    const produtoId = await bubbleCreate('produto', {
+    const dados = {
       'Site': site_id,
-      'Nome': nome,
+      'Nome': String(nome).trim().slice(0, 120),
       'Preco MZN': precoNum,
       'Descricao': descricao || '',
       'Imagem URL': imagem_url || '',
       'Is Active': true
-    });
+    };
+    // Campos da loja v2 (categoria, promoção, destaque) - todos opcionais.
+    if (categoria !== undefined) dados['Categoria'] = String(categoria || '').trim().slice(0, 40);
+    if (destaque !== undefined) dados['Destaque'] = !!destaque;
+    if (preco_antigo !== undefined) {
+      const antigo = Number(preco_antigo) || 0;
+      dados['Preco Antigo MZN'] = antigo > 0 ? antigo : 0;
+    }
+    if (imagem_data_url) {
+      const up = await uploadImagemBase64('produtos', owner, imagem_data_url);
+      if (up.erro) return res.json({ status: 'error', message: up.erro });
+      dados['Imagem URL'] = up.url;
+    }
 
+    const produtoId = await bubbleCreate('produto', dados);
     return res.json({ status: 'success', response: { produto_id: produtoId } });
   } catch (erro) {
     console.error('Erro em /loja-produto-criar:', erro);
@@ -3609,12 +4170,8 @@ app.post('/loja-meus-produtos', async (req, res) => {
       true
     );
 
-    const lista = produtos.map(p => ({
-      id: p._id,
-      nome: p['Nome'],
-      preco: p['Preco MZN'],
-      descricao: p['Descricao'] || '',
-      imagem: p['Imagem URL'] || '',
+    const lista = produtos.map(p => Object.assign(produtoParaLista(p), {
+      preco_antigo: Number(p['Preco Antigo MZN']) || 0,
       activo: !!p['Is Active']
     }));
 
@@ -3629,7 +4186,7 @@ app.post('/loja-meus-produtos', async (req, res) => {
 // Site a que o produto pertence pode editá-lo.
 app.post('/loja-produto-editar', async (req, res) => {
   try {
-    const { owner, produto_id, nome, preco, descricao, imagem_url, activo } = req.body;
+    const { owner, produto_id, nome, preco, descricao, imagem_url, imagem_data_url, activo, categoria, preco_antigo, destaque } = req.body;
     if (!owner || !produto_id) {
       return res.json({ status: 'error', message: 'Faltam dados: produto_id é obrigatório.' });
     }
@@ -3645,7 +4202,7 @@ app.post('/loja-produto-editar', async (req, res) => {
     }
 
     const dados = {};
-    if (nome !== undefined) dados['Nome'] = nome;
+    if (nome !== undefined) dados['Nome'] = String(nome).trim().slice(0, 120);
     if (descricao !== undefined) dados['Descricao'] = descricao;
     if (imagem_url !== undefined) dados['Imagem URL'] = imagem_url;
     if (activo !== undefined) dados['Is Active'] = !!activo;
@@ -3656,9 +4213,21 @@ app.post('/loja-produto-editar', async (req, res) => {
       }
       dados['Preco MZN'] = precoNum;
     }
+    // Campos da loja v2 (categoria, promoção, destaque) - todos opcionais.
+    if (categoria !== undefined) dados['Categoria'] = String(categoria || '').trim().slice(0, 40);
+    if (destaque !== undefined) dados['Destaque'] = !!destaque;
+    if (preco_antigo !== undefined) {
+      const antigo = Number(preco_antigo) || 0;
+      dados['Preco Antigo MZN'] = antigo > 0 ? antigo : 0;
+    }
+    if (imagem_data_url) {
+      const up = await uploadImagemBase64('produtos', owner, imagem_data_url);
+      if (up.erro) return res.json({ status: 'error', message: up.erro });
+      dados['Imagem URL'] = up.url;
+    }
 
     await bubblePatch('produto', produto_id, dados);
-    return res.json({ status: 'success' });
+    return res.json({ status: 'success', response: { imagem: dados['Imagem URL'] !== undefined ? dados['Imagem URL'] : (produto['Imagem URL'] || '') } });
   } catch (erro) {
     console.error('Erro em /loja-produto-editar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível actualizar o produto.' });
@@ -4543,6 +5112,7 @@ app.post('/galeria-media-apagar', async (req, res) => {
 app.post('/loja-encomenda', async (req, res) => {
   try {
     const { site_id, cliente_nome, cliente_telefone, cliente_email, itens } = req.body;
+    const notas = String(req.body.notas || '').trim().slice(0, 500);
 
     if (!site_id || !cliente_nome || !cliente_telefone || !Array.isArray(itens) || itens.length === 0) {
       return res.json({ status: 'error', message: 'Faltam dados: site_id, cliente_nome, cliente_telefone e itens são obrigatórios.' });
@@ -4585,21 +5155,51 @@ app.post('/loja-encomenda', async (req, res) => {
       return res.json({ status: 'error', message: 'O valor da encomenda tem de ser maior que zero.' });
     }
 
+    // Modo efectivo da loja: decide se a encomenda fica à espera de um
+    // pagamento online (Daniel IA) ou se é registada já como recebida.
+    const site = await bubbleGet('site', site_id);
+    if (!site) {
+      return res.json({ status: 'error', message: 'Loja não encontrada.' });
+    }
+    const { modo, cfg } = await modoEfectivoLoja(site);
+    const estadoInicial = modo === 'daniel' ? 'Pendente' : (modo === 'manual' ? 'Aguarda pagamento' : 'Encomenda recebida');
+
     const encomendaId = await bubbleCreate('encomenda', {
       'Site': site_id,
       'Produtos Json': JSON.stringify(itensCalculados),
-      'Cliente Nome': cliente_nome,
-      'Cliente Telefone': cliente_telefone,
+      'Cliente Nome': String(cliente_nome).trim().slice(0, 100),
+      'Cliente Telefone': String(cliente_telefone).trim().slice(0, 20),
       'Cliente Email': emailValido ? String(cliente_email).trim() : '',
       'Valor Total': valorTotal,
-      'Metodo': '',
+      'Metodo': modo === 'daniel' ? '' : modo,
       'ID Pagamento': '',
-      'Estado': 'Pendente',
+      'Estado': estadoInicial,
       'Transaction ID': '',
-      'Webhook Processado': false
+      'Webhook Processado': false,
+      'Notas': notas
     });
 
-    return res.json({ status: 'success', response: { encomenda_id: encomendaId, valor_total: valorTotal } });
+    const referencia = referenciaEncomenda(encomendaId);
+    const resposta = { encomenda_id: encomendaId, valor_total: valorTotal, modo, referencia };
+
+    if (modo !== 'daniel') {
+      // Sem pagamento online: o dono recebe já a encomenda por email.
+      avisarEncomenda(site, encomendaId, modo, cfg);
+      if (modo === 'manual') {
+        resposta.manual = { mpesa: cfg.mpesa, emola: cfg.emola, titular: cfg.titular };
+      }
+      if (cfg.whatsapp) {
+        const linhas = itensCalculados.map(i => '• ' + i.quantidade + 'x ' + i.nome + ' - ' + (i.preco_unitario * i.quantidade).toLocaleString('pt-PT') + ' MZN');
+        const texto = 'Olá! Quero fazer esta encomenda (' + referencia + '):\n\n' + linhas.join('\n')
+          + '\n\nTotal: ' + valorTotal.toLocaleString('pt-PT') + ' MZN'
+          + '\n\nNome: ' + String(cliente_nome).trim()
+          + '\nTelefone: ' + String(cliente_telefone).trim()
+          + (notas ? '\nMorada/notas: ' + notas : '');
+        resposta.whatsapp_url = 'https://wa.me/' + cfg.whatsapp + '?text=' + encodeURIComponent(texto);
+      }
+    }
+
+    return res.json({ status: 'success', response: resposta });
   } catch (erro) {
     console.error('Erro em /loja-encomenda:', erro);
     return res.json({ status: 'error', message: 'Não foi possível criar a encomenda.' });
@@ -4628,6 +5228,13 @@ app.post('/loja-pagar', async (req, res) => {
     }
     if (encomenda['Estado'] !== 'Pendente') {
       return res.json({ status: 'error', message: 'Esta encomenda já foi paga ou já não está disponível para pagamento.' });
+    }
+
+    // Pagamentos pela conta do Daniel IA só para lojas com KYC aprovado.
+    const sitePagar = await bubbleGet('site', encomenda['Site']).catch(() => null);
+    const modoPagar = sitePagar ? (await modoEfectivoLoja(sitePagar)).modo : 'pedido';
+    if (modoPagar !== 'daniel') {
+      return res.json({ status: 'error', message: 'Esta loja não aceita pagamentos online neste momento.' });
     }
 
     const valor = encomenda['Valor Total'];
@@ -4981,6 +5588,14 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     });
 
     console.log('Encomenda marcada como paga:', encomenda._id);
+
+    // Avisar o dono da loja (não bloqueia nada se falhar).
+    try {
+      const siteDono = encomenda['Site'] ? await bubbleGet('site', encomenda['Site']) : null;
+      if (siteDono) avisarEncomenda(siteDono, encomenda._id, 'daniel', configLoja(siteDono));
+    } catch (e) {
+      console.error('Aviso ao dono falhou:', e.message);
+    }
 
     // ---- Recibo por email ao comprador (não bloqueia nem desfaz nada se falhar) ----
     try {
@@ -5888,8 +6503,9 @@ function emailDoUsuario(usuario) {
 
 // Email simples na identidade Daniel IA (mesmo cabeçalho dos outros).
 function templateEmailKyc(titulo, saudacao, paragrafos, botao) {
-  const corpo = paragrafos.map(p =>
-    `<p style="margin:0 0 14px 0;color:#6F5E81;font-size:14px;line-height:1.6;">${p}</p>`).join('\n');
+  const corpo = paragrafos.map(p => (p.indexOf('<table') === 0 || p.indexOf('<span') === 0)
+    ? '<div style="margin:0 0 14px 0;">' + p + '</div>'
+    : `<p style="margin:0 0 14px 0;color:#6F5E81;font-size:14px;line-height:1.6;">${p}</p>`).join('\n');
   const btn = botao
     ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding-top:12px;">
 <a href="${escaparHtml(botao.url)}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:14px;padding:13px 28px;border-radius:10px;">${escaparHtml(botao.texto)}</a>
@@ -6141,6 +6757,286 @@ app.get('/admin-kyc', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.set('X-Robots-Tag', 'noindex, nofollow');
   return res.send(PAGINA_ADMIN_KYC);
+});
+
+// ======================================================
+// Loja v2 (14/10/2026) - capa, categorias, destaques, promoções e os três
+// modos de receber: pagamentos Daniel IA, pagamento manual, ou WhatsApp
+// ======================================================
+// Campos novos no Bubble antes disto funcionar:
+//   Produto:   Categoria (text), Preco Antigo MZN (number), Destaque (yes/no)
+//   Site:      Loja Capa Json (text), Loja Config Json (text)
+//   Encomenda: Notas (text)
+//
+// Loja Config Json guarda { modo, whatsapp, mpesa, emola, titular, email }.
+// modo: "daniel"  - M-Pesa, e-Mola e cartão pela conta MozPayment do Daniel
+//                   IA. SÓ funciona se o dono tiver o KYC aprovado.
+//       "manual"  - o cliente paga directamente para os números do dono e
+//                   o dono confirma (a loja só mostra os números).
+//       "whatsapp"- sem pagamento no site: a encomenda abre no WhatsApp do
+//                   dono, já escrita, e chega também por email.
+// Se o modo escolhido não puder funcionar (ex: "daniel" sem KYC aprovado,
+// ou WhatsApp sem número), a loja passa sozinha para "pedido": a encomenda
+// é registada e chega ao dono por email, e o dono contacta o cliente.
+// Em TODOS os modos, cada encomenda chega por email ao dono.
+
+function lerJsonSeguro(texto, padrao) {
+  try {
+    const v = JSON.parse(texto || '');
+    return v == null ? padrao : v;
+  } catch (e) {
+    return padrao;
+  }
+}
+
+function soDigitos(texto) {
+  return String(texto || '').replace(/[^0-9]/g, '');
+}
+
+// Número para o wa.me: só dígitos, com o indicativo de Moçambique se a
+// pessoa escreveu o número local (9 dígitos a começar por 8).
+function numeroWhatsApp(texto) {
+  let n = soDigitos(texto);
+  if (n.length === 9 && n[0] === '8') n = '258' + n;
+  return n.length >= 9 && n.length <= 15 ? n : '';
+}
+
+function configLoja(site) {
+  const c = lerJsonSeguro(site && site['Loja Config Json'], {}) || {};
+  return {
+    modo: ['daniel', 'manual', 'whatsapp'].includes(c.modo) ? c.modo : 'daniel',
+    whatsapp: numeroWhatsApp(c.whatsapp),
+    mpesa: soDigitos(c.mpesa).slice(0, 12),
+    emola: soDigitos(c.emola).slice(0, 12),
+    titular: String(c.titular || '').trim().slice(0, 80),
+    email: /\S+@\S+\.\S+/.test(String(c.email || '')) ? String(c.email).trim().slice(0, 150) : ''
+  };
+}
+
+function capaLoja(site) {
+  const lista = lerJsonSeguro(site && site['Loja Capa Json'], []);
+  return (Array.isArray(lista) ? lista : []).filter(s => s && s.imagem).slice(0, 3).map(s => ({
+    imagem: String(s.imagem),
+    titulo: String(s.titulo || '').slice(0, 80),
+    subtitulo: String(s.subtitulo || '').slice(0, 140),
+    botao: String(s.botao || '').slice(0, 30)
+  }));
+}
+
+// O KYC é consultado em cada visita à loja - guardamos o resultado 60s em
+// memória para não fazer um pedido ao Bubble por cada cliente.
+const cacheKycLoja = new Map();
+async function kycAprovadoCache(owner) {
+  const agora = Date.now();
+  const c = cacheKycLoja.get(owner);
+  if (c && agora - c.t < 60000) return c.v;
+  const v = await kycAprovado(owner);
+  cacheKycLoja.set(owner, { v, t: agora });
+  return v;
+}
+
+async function modoEfectivoLoja(site) {
+  const cfg = configLoja(site);
+  let modo = cfg.modo;
+  const alternativa = cfg.whatsapp ? 'whatsapp' : 'pedido';
+  if (modo === 'daniel' && !(await kycAprovadoCache(site['Owner']))) modo = alternativa;
+  if (modo === 'manual' && !cfg.mpesa && !cfg.emola) modo = alternativa;
+  if (modo === 'whatsapp' && !cfg.whatsapp) modo = 'pedido';
+  return { modo, cfg };
+}
+
+async function emailDonoLoja(site, cfg) {
+  if (cfg && cfg.email) return cfg.email;
+  const dono = await bubbleGet('user', site['Owner']).catch(() => null);
+  return emailDoUsuario(dono);
+}
+
+function referenciaEncomenda(id) {
+  return 'ENC-' + String(id || '').replace(/[^0-9a-z]/gi, '').slice(-6).toUpperCase();
+}
+
+function produtoParaLista(p) {
+  const preco = Number(p['Preco MZN']) || 0;
+  const antigo = Number(p['Preco Antigo MZN']) || 0;
+  return {
+    id: p._id,
+    nome: p['Nome'],
+    preco: preco,
+    preco_antigo: antigo > preco ? antigo : 0,
+    categoria: String(p['Categoria'] || '').trim(),
+    destaque: !!p['Destaque'],
+    descricao: p['Descricao'] || '',
+    imagem: p['Imagem URL'] || ''
+  };
+}
+
+// Email ao dono com a encomenda (todos os modos).
+function templateEmailEncomendaDono(nomeLoja, encomenda, itens, modo, cfg) {
+  const ref = referenciaEncomenda(encomenda._id);
+  const total = Number(encomenda['Valor Total'] || 0).toLocaleString('pt-PT') + ' MZN';
+  const estados = {
+    daniel: 'Paga pelo Daniel IA (' + formatarMetodoPagamento(encomenda['Metodo']) + ')',
+    manual: 'À espera do pagamento manual - confirma no teu M-Pesa/e-Mola antes de enviar',
+    whatsapp: 'Recebida pelo WhatsApp - combina o pagamento com o cliente',
+    pedido: 'Recebida - contacta o cliente para combinar o pagamento'
+  };
+  const linhas = itens.map(i => `<tr>
+<td style="padding:9px 0;border-bottom:1px solid #EAE2F2;color:#1A0A27;font-size:13.5px;">${escaparHtml(i.nome)} <span style="color:#9A8CAB;">x${Number(i.quantidade || 1)}</span></td>
+<td style="padding:9px 0;border-bottom:1px solid #EAE2F2;color:#1A0A27;font-size:13.5px;font-weight:700;text-align:right;">${escaparHtml((Number(i.preco_unitario) * Number(i.quantidade || 1)).toLocaleString('pt-PT'))} MZN</td>
+</tr>`).join('');
+  const linhaDado = (rotulo, valor) => valor ? `<p style="margin:0 0 6px 0;color:#1A0A27;font-size:13.5px;"><span style="color:#9A8CAB;">${rotulo}:</span> ${escaparHtml(valor)}</p>` : '';
+  const telLimpo = numeroWhatsApp(encomenda['Cliente Telefone']);
+  return templateEmailKyc(
+    'Nova encomenda ' + ref,
+    `Nova encomenda em ${escaparHtml(nomeLoja)}`,
+    [
+      `<strong>${escaparHtml(ref)}</strong> · ${escaparHtml(total)}<br><span style="color:#430960;font-weight:700;">${escaparHtml(estados[modo] || estados.pedido)}</span>`,
+      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${linhas}
+<tr><td style="padding:12px 0 0 0;color:#1A0A27;font-size:15px;font-weight:800;">Total</td><td style="padding:12px 0 0 0;color:#1A0A27;font-size:15px;font-weight:800;text-align:right;">${escaparHtml(total)}</td></tr></table>`,
+      '<span style="display:block;margin-top:6px;"></span>'
+        + linhaDado('Cliente', encomenda['Cliente Nome'])
+        + linhaDado('Telefone', encomenda['Cliente Telefone'])
+        + linhaDado('Email', encomenda['Cliente Email'])
+        + linhaDado('Morada / notas', encomenda['Notas'])
+    ],
+    telLimpo ? { texto: 'Falar com o cliente no WhatsApp', url: 'https://wa.me/' + telLimpo } : null
+  );
+}
+
+// Email ao cliente a confirmar que a encomenda foi recebida (modos sem
+// pagamento online - no modo "daniel" o recibo continua a ir no webhook).
+function templateEmailEncomendaCliente(nomeLoja, encomenda, modo, cfg) {
+  const ref = referenciaEncomenda(encomenda._id);
+  const total = Number(encomenda['Valor Total'] || 0).toLocaleString('pt-PT') + ' MZN';
+  const primeiro = escaparHtml(String(encomenda['Cliente Nome'] || '').split(' ')[0]);
+  const paragrafos = [`Recebemos a tua encomenda <strong>${escaparHtml(ref)}</strong> em ${escaparHtml(nomeLoja)}, no valor de <strong>${escaparHtml(total)}</strong>.`];
+  if (modo === 'manual') {
+    const formas = [];
+    if (cfg.mpesa) formas.push('M-Pesa: <strong>' + escaparHtml(cfg.mpesa) + '</strong>');
+    if (cfg.emola) formas.push('e-Mola: <strong>' + escaparHtml(cfg.emola) + '</strong>');
+    paragrafos.push('Para concluir, envia o pagamento para ' + formas.join(' ou ') + (cfg.titular ? ' (em nome de ' + escaparHtml(cfg.titular) + ')' : '') + ', com a referência <strong>' + escaparHtml(ref) + '</strong>.');
+    paragrafos.push('A loja confirma o pagamento e prepara a tua encomenda.');
+  } else {
+    paragrafos.push('A loja vai contactar-te em breve para combinar o pagamento e a entrega.');
+  }
+  return templateEmailKyc('Encomenda ' + ref, `Olá, ${primeiro}.`, paragrafos,
+    cfg.whatsapp ? { texto: 'Falar com a loja no WhatsApp', url: 'https://wa.me/' + cfg.whatsapp + '?text=' + encodeURIComponent('Olá! Sobre a encomenda ' + ref) } : null);
+}
+
+async function avisarEncomenda(site, encomendaId, modo, cfg) {
+  try {
+    const encomenda = await bubbleGet('encomenda', encomendaId);
+    if (!encomenda) return;
+    const itens = lerJsonSeguro(encomenda['Produtos Json'], []);
+    const nomeLoja = site['Nome'] || 'a tua loja';
+    const emailDono = await emailDonoLoja(site, cfg);
+    if (emailDono) {
+      await enviarEmail(emailDono, `Nova encomenda ${referenciaEncomenda(encomendaId)} - ${nomeLoja}`,
+        templateEmailEncomendaDono(nomeLoja, encomenda, itens, modo, cfg));
+    }
+    if (modo !== 'daniel' && encomenda['Cliente Email']) {
+      await enviarEmail(encomenda['Cliente Email'], `Recebemos a tua encomenda - ${nomeLoja}`,
+        templateEmailEncomendaCliente(nomeLoja, encomenda, modo, cfg));
+    }
+  } catch (erro) {
+    console.error('Aviso de encomenda por email falhou:', erro.message);
+  }
+}
+
+// ---- Dono: ler as definições da loja ----
+app.post('/loja-config-ler', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = site_id ? await bubbleGet('site', site_id) : null;
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para ver esta loja.' });
+    }
+    const cfg = configLoja(site);
+    const kyc = await kycDoOwner(owner).catch(() => null);
+    const { modo } = await modoEfectivoLoja(site);
+    return res.json({
+      status: 'success',
+      response: {
+        nome: site['Nome'] || '',
+        cdn_url: site['CDN URL'] || '',
+        config: cfg,
+        capa: capaLoja(site),
+        modo_efectivo: modo,
+        kyc_estado: kyc ? (kyc['Estado'] || 'Pendente') : 'Nenhum'
+      }
+    });
+  } catch (erro) {
+    console.error('Erro em /loja-config-ler:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar as definições da loja.' });
+  }
+});
+
+// ---- Dono: guardar as definições da loja (capa + pagamentos) ----
+// Cada slide da capa pode trazer "imagem" (link já guardado) ou
+// "imagem_data_url" (imagem nova, que sobe aqui para o Bunny).
+app.post('/loja-config-guardar', async (req, res) => {
+  try {
+    const { owner, site_id, config, capa } = req.body;
+    const site = site_id ? await bubbleGet('site', site_id) : null;
+    if (!site || site['Owner'] !== owner) {
+      return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    }
+    const dados = {};
+
+    if (config) {
+      const c = {
+        modo: ['daniel', 'manual', 'whatsapp'].includes(config.modo) ? config.modo : 'daniel',
+        whatsapp: String(config.whatsapp || '').trim(),
+        mpesa: String(config.mpesa || '').trim(),
+        emola: String(config.emola || '').trim(),
+        titular: String(config.titular || '').trim(),
+        email: String(config.email || '').trim()
+      };
+      if (c.modo === 'daniel' && !(await kycAprovado(owner))) {
+        return res.json({ status: 'error', codigo: 'kyc', message: 'Para usares os pagamentos do Daniel IA tens de verificar a tua identidade primeiro.' });
+      }
+      if (c.modo === 'whatsapp' && !numeroWhatsApp(c.whatsapp)) {
+        return res.json({ status: 'error', message: 'Escreve o número de WhatsApp da loja.' });
+      }
+      if (c.modo === 'manual' && !soDigitos(c.mpesa) && !soDigitos(c.emola)) {
+        return res.json({ status: 'error', message: 'Escreve pelo menos um número (M-Pesa ou e-Mola) para os clientes pagarem.' });
+      }
+      if (c.email && !/\S+@\S+\.\S+/.test(c.email)) {
+        return res.json({ status: 'error', message: 'O email para receber encomendas não parece válido.' });
+      }
+      dados['Loja Config Json'] = JSON.stringify(c);
+      cacheKycLoja.delete(owner);
+    }
+
+    if (Array.isArray(capa)) {
+      const slides = [];
+      for (const s of capa.slice(0, 3)) {
+        if (!s) continue;
+        let imagem = String(s.imagem || '');
+        if (s.imagem_data_url) {
+          const up = await uploadImagemBase64('loja-capa', owner, s.imagem_data_url);
+          if (up.erro) return res.json({ status: 'error', message: up.erro });
+          imagem = up.url;
+        }
+        if (!imagem) continue;
+        slides.push({
+          imagem,
+          titulo: String(s.titulo || '').trim().slice(0, 80),
+          subtitulo: String(s.subtitulo || '').trim().slice(0, 140),
+          botao: String(s.botao || '').trim().slice(0, 30)
+        });
+      }
+      dados['Loja Capa Json'] = JSON.stringify(slides);
+    }
+
+    if (Object.keys(dados).length) await bubblePatch('site', site_id, dados);
+    const actualizado = await bubbleGet('site', site_id);
+    const { modo } = await modoEfectivoLoja(actualizado);
+    return res.json({ status: 'success', response: { capa: capaLoja(actualizado), config: configLoja(actualizado), modo_efectivo: modo } });
+  } catch (erro) {
+    console.error('Erro em /loja-config-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar as definições da loja.' });
+  }
 });
 
 const PAGINA_ADMIN_KYC = "<!DOCTYPE html>\n<html lang=\"pt\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<meta name=\"robots\" content=\"noindex, nofollow\">\n<title>KYC · Daniel IA</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2216%22%20fill%3D%22%23430960%22%2F%3E%3Cg%20transform%3D%22translate%2811.52%2011.52%29%20scale%280.16384%29%20translate%28-111%20-492.5%29%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M148.0%20738.1C142.7%20737.4%20139.2%20736.1%20135.6%20733.7C128.3%20728.8%20123.9%20721.8%20122.6%20713.1C122.1%20709.4%20122.1%20707.5%20122.7%20704.0C123.8%20697.6%20126.3%20692.6%20130.6%20688.3C133.2%20685.6%20136.0%20683.8%20141.9%20680.7C150.6%20676.1%20156.0%20672.8%20160.9%20669.2C172.2%20660.9%20180.7%20651.9%20187.8%20640.6C188.3%20639.9%20188.8%20639.4%20189.0%20639.4C189.4%20639.4%20189.5%20702.5%20189.0%20705.6C187.7%20714.1%20184.5%20720.7%20178.6%20726.7C172.9%20732.7%20168.0%20735.6%20160.8%20737.5C158.3%20738.2%20157.3%20738.3%20154.1%20738.4C151.7%20738.4%20149.5%20738.4%20148.0%20738.1ZM183.5%20737.9C183.5%20737.7%20184.1%20737.1%20184.9%20736.6C189.2%20733.9%20194.3%20728.3%20197.4%20723.0C202.1%20715.1%20203.7%20708.5%20203.7%20698.0C203.7%20694.3%20203.8%20692.7%20204.1%20692.4C204.3%20692.1%20206.1%20692.0%20222.0%20691.9C238.3%20691.8%20239.9%20691.8%20243.0%20691.3C254.0%20689.6%20263.9%20685.6%20273.4%20679.0C281.6%20673.4%20288.9%20665.8%20294.0%20657.5C298.3%20650.5%20301.7%20642.5%20303.3%20635.4C306.8%20619.6%20305.5%20604.6%20299.3%20589.3C296.5%20582.2%20293.0%20576.6%20286.9%20569.6C282.9%20564.8%20279.8%20562.0%20274.4%20558.1C264.1%20550.6%20251.7%20545.8%20240.8%20545.0C238.8%20544.8%20228.4%20544.8%20215.6%20544.8L193.8%20544.9L192.7%20545.6C191.4%20546.5%20190.1%20548.2%20189.7%20549.4C189.5%20550.1%20189.4%20555.5%20189.4%20571.2C189.4%20582.6%20189.3%20592.1%20189.2%20592.2C188.9%20592.4%20188.0%20591.4%20188.0%20590.9C188.0%20590.0%20185.1%20584.4%20182.5%20580.6C179.3%20575.7%20171.4%20568.0%20165.1%20563.7C161.4%20561.2%20152.2%20556.2%20143.4%20551.9C134.1%20547.4%20130.6%20544.8%20127.0%20540.0C124.6%20536.8%20123.4%20533.6%20122.6%20529.1C122.2%20526.2%20122.2%20523.9%20122.6%20520.6C123.1%20517.2%20123.8%20514.9%20125.2%20512.1C128.5%20505.5%20134.2%20500.8%20141.6%20498.7C146.7%20497.2%20146.0%20497.2%20196.5%20497.3C246.4%20497.4%20244.5%20497.4%20253.4%20498.8C268.8%20501.2%20287.7%20509.1%20301.3%20518.9C312.8%20527.0%20323.6%20538.1%20330.9%20549.1C335.2%20555.5%20337.8%20560.2%20340.5%20566.0C344.7%20575.1%20347.2%20582.3%20349.5%20592.4C351.4%20600.7%20352.0%20605.8%20352.2%20615.9C352.4%20628.3%20351.3%20638.6%20348.6%20648.9C345.6%20660.5%20339.4%20674.8%20333.6%20684.0C323.4%20700.1%20309.0%20713.7%20292.2%20723.3C282.4%20728.9%20271.5%20733.1%20261.5%20735.3C248.6%20738.2%20247.4%20738.2%20211.8%20738.2C186.7%20738.2%20183.5%20738.2%20183.5%20737.9Z%22%2F%3E%3Ccircle%20fill%3D%22%2389C804%22%20cx%3D%22149.1%22%20cy%3D%22612.7%22%20r%3D%2229.7%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E\">\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n<link href=\"https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700;800&family=JetBrains+Mono:wght@500&display=swap\" rel=\"stylesheet\">\n<style>\n  :root{\n    --bg:#07030C;--card:#110A1B;--card-alt:#170E25;--border:#2A1B3D;--text:#F6F2FB;--text-dim:#A89BBA;\n    --lime:#89C804;--lime-bright:#B4F02B;--purple:#430960;--purple-bright:#A35BE0;--on-accent:#140620;\n    --error:#FF5C7A;--warning:#F5A623;\n    --grad-accent:linear-gradient(135deg,#C8F84A 0%,#89C804 100%);\n  }\n  *{box-sizing:border-box;}\n  body{margin:0;min-height:100vh;color:var(--text);font-family:\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;\n    background:radial-gradient(1100px 600px at 10% -14%, rgba(67,9,96,.9), rgba(67,9,96,0) 62%),\n      radial-gradient(800px 500px at 108% 6%, rgba(137,200,4,.10), rgba(137,200,4,0) 60%),#07030C;background-attachment:fixed;}\n  button,input,textarea{font-family:inherit;}\n  h1,h2,h3{font-family:\"Sora\",\"Manrope\",sans-serif;letter-spacing:-.025em;margin:0;}\n  .topo{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.08);\n    background:rgba(17,10,27,.6);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);position:sticky;top:0;z-index:10;}\n  .brand-logo{height:28px;width:auto;display:block;}\n  .brand-logo .bl-ink{fill:#FFFFFF;}\n  .brand-logo .bl-lime{fill:var(--lime);}\n  .etiqueta{font-family:\"JetBrains Mono\",monospace;font-size:12px;color:var(--lime);letter-spacing:.14em;}\n  .main{max-width:1100px;margin:0 auto;padding:32px 24px 80px;}\n  .caixa-chave{max-width:420px;margin:12vh auto 0;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:30px;}\n  .caixa-chave p{color:var(--text-dim);font-size:14px;line-height:1.6;margin:8px 0 20px;}\n  input[type=password],textarea{width:100%;background:var(--card-alt);border:1px solid var(--border);color:var(--text);border-radius:11px;padding:12px 14px;font-size:14px;outline:none;}\n  input:focus,textarea:focus{border-color:var(--lime);}\n  .btn{border:none;border-radius:11px;padding:11px 18px;font-size:13.5px;font-weight:700;cursor:pointer;transition:transform .15s,opacity .15s;}\n  .btn:disabled{opacity:.5;cursor:default;}\n  .btn-principal{background:var(--grad-accent);color:var(--on-accent);box-shadow:0 8px 24px rgba(137,200,4,.25);}\n  .btn-principal:hover:not(:disabled){transform:translateY(-1px);}\n  .btn-sec{background:transparent;color:var(--text);border:1px solid var(--border);}\n  .btn-sec:hover{border-color:var(--lime);}\n  .btn-perigo{background:rgba(255,92,122,.12);color:var(--error);border:1px solid rgba(255,92,122,.35);}\n  .erro{color:var(--error);font-size:13px;margin-top:12px;min-height:18px;}\n  .cabecalho{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:24px;}\n  .cabecalho p{color:var(--text-dim);margin:6px 0 0;font-size:14px;}\n  .tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:4px;}\n  .tab{background:transparent;border:none;color:var(--text-dim);padding:8px 14px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;}\n  .tab.activa{background:var(--card-alt);color:var(--text);box-shadow:inset 0 0 0 1px rgba(137,200,4,.35);}\n  .vazio{color:var(--text-dim);text-align:center;padding:60px 0;font-size:14px;}\n  .pedido{background:rgba(17,10,27,.7);border:1px solid var(--border);border-radius:18px;padding:22px;margin-bottom:16px;}\n  .pedido-topo{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;}\n  .pedido h3{font-size:18px;}\n  .dados{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:8px;font-size:13px;color:var(--text-dim);}\n  .dados b{color:var(--text);font-weight:600;font-family:\"JetBrains Mono\",monospace;font-size:12.5px;}\n  .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid var(--border);}\n  .pill.Pendente{color:var(--warning);border-color:rgba(245,166,35,.35);background:rgba(245,166,35,.1);}\n  .pill.Aprovado{color:var(--lime);border-color:rgba(137,200,4,.35);background:rgba(137,200,4,.1);}\n  .pill.Rejeitado{color:var(--error);border-color:rgba(255,92,122,.35);background:rgba(255,92,122,.1);}\n  .fotos{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;}\n  .foto{background:var(--card-alt);border:1px solid var(--border);border-radius:12px;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;\n    overflow:hidden;position:relative;color:var(--text-dim);font-size:12.5px;}\n  .foto img{width:100%;height:100%;object-fit:contain;cursor:zoom-in;background:#000;}\n  .foto .rotulo{position:absolute;left:8px;top:8px;font-family:\"JetBrains Mono\",monospace;font-size:10.5px;letter-spacing:.08em;\n    background:rgba(7,3,12,.75);color:var(--lime);padding:3px 7px;border-radius:6px;}\n  .accoes{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;align-items:center;}\n  .rejeitar-caixa{display:none;margin-top:14px;}\n  .rejeitar-caixa.aberta{display:block;}\n  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}\n  .chip{background:var(--card-alt);border:1px solid var(--border);color:var(--text-dim);border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer;}\n  .chip:hover{color:var(--text);border-color:var(--purple-bright);}\n  .motivo{color:var(--error);font-size:13px;margin-top:10px;}\n  .zoom{position:fixed;inset:0;background:rgba(7,3,12,.92);display:none;align-items:center;justify-content:center;z-index:100;cursor:zoom-out;padding:24px;}\n  .zoom.aberto{display:flex;}\n  .zoom img{max-width:100%;max-height:100%;border-radius:10px;}\n  @media (max-width:700px){.fotos{grid-template-columns:1fr;}.topo{padding:12px 16px;}}\n</style>\n</head>\n<body>\n<div class=\"topo\">\n  <svg class=\"brand-logo\" viewBox=\"112 489 1060 257\" role=\"img\" aria-label=\"Daniel IA\" xmlns=\"http://www.w3.org/2000/svg\"><path class=\"bl-ink\" d=\"M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z\"/><circle class=\"bl-lime\" cx=\"149.1\" cy=\"612.7\" r=\"29.7\"/><path class=\"bl-ink\" d=\"M583.7 695.1C577.0 694.2 572.3 692.2 567.6 688.5C561.0 683.2 557.4 673.0 558.6 663.1C559.4 656.8 561.1 652.6 564.5 648.3C567.6 644.6 571.5 642.0 577.4 639.7C580.8 638.4 581.6 638.1 585.4 637.3C591.0 636.0 596.6 635.5 608.5 635.3C614.7 635.2 619.0 635.1 619.2 634.9C619.4 634.8 619.5 633.9 619.5 632.5C619.5 625.7 617.7 621.5 613.8 618.7C610.5 616.5 606.0 615.2 601.4 615.2C598.3 615.2 596.0 615.8 593.1 617.1C589.4 618.9 587.1 621.5 585.5 625.7C584.8 627.6 584.5 627.8 583.1 627.7C581.5 627.5 576.4 626.8 574.1 626.5C572.5 626.2 566.0 625.3 564.0 625.1C562.2 624.9 562.0 624.8 562.0 624.1C562.0 623.1 563.0 619.4 563.8 617.0C565.5 612.6 568.3 608.5 571.9 605.4C573.6 603.9 576.3 602.0 576.7 602.0C576.8 602.0 577.0 601.8 577.2 601.7C578.0 600.9 581.6 599.2 584.1 598.4C590.2 596.3 595.4 595.5 602.5 595.5C616.5 595.5 627.3 599.3 635.0 607.0C639.5 611.5 641.5 615.3 643.3 622.5L643.9 624.9L643.9 659.2L643.9 693.6L632.7 693.7C622.5 693.7 621.5 693.7 621.0 693.3C620.5 692.9 620.5 692.6 620.5 687.1C620.4 684.0 620.4 681.2 620.3 681.1C620.1 680.4 619.5 680.8 617.7 683.1C615.1 686.3 614.3 687.2 612.5 688.6C609.1 691.3 605.3 693.1 600.4 694.5C596.9 695.4 588.4 695.8 583.7 695.1ZM853.4 695.1C849.2 694.6 845.0 693.5 840.4 691.6C832.6 688.3 826.5 683.4 822.1 676.7C820.0 673.5 817.6 669.2 816.8 667.1C815.3 663.1 814.4 659.3 813.7 654.6C813.3 651.3 813.2 650.1 813.3 644.1C813.4 637.0 813.6 635.6 814.9 630.6C815.5 628.4 816.9 624.2 817.5 622.9C820.4 616.5 823.3 612.2 827.7 608.0C833.0 602.8 839.6 599.2 847.5 597.1C859.0 594.2 871.8 595.1 881.2 599.7C889.1 603.5 895.4 609.2 899.6 616.4C902.9 622.0 905.4 630.2 906.0 637.2C906.1 638.8 906.2 642.6 906.2 645.5C906.2 650.1 906.2 651.0 905.9 651.3C905.6 651.5 899.0 651.6 872.4 651.5C840.3 651.5 839.3 651.5 838.9 652.0C838.5 652.4 838.5 652.7 838.8 654.9C839.2 658.9 840.9 663.5 842.9 666.3C846.2 670.7 852.0 674.2 858.0 675.3C860.2 675.7 864.7 675.6 867.0 675.2C871.8 674.1 876.0 671.7 878.7 668.4C879.7 667.1 881.3 664.3 881.6 663.3C881.8 662.2 882.1 662.2 889.6 664.2C900.7 667.0 903.5 667.8 903.8 668.3C904.2 668.9 902.1 673.8 899.8 677.4C897.5 681.0 892.8 685.8 889.1 688.2C885.3 690.7 879.8 693.0 874.4 694.2C869.4 695.4 859.5 695.8 853.4 695.1ZM430.3 693.3C429.9 692.5 429.9 561.5 430.3 561.1C430.7 560.7 482.3 560.6 487.3 561.0C492.7 561.4 498.2 562.6 505.7 565.2C508.2 566.0 513.4 568.4 514.9 569.4C515.3 569.7 516.6 570.5 517.8 571.3C526.0 576.6 531.8 583.4 536.7 593.1C540.0 599.7 541.8 605.0 543.2 612.9C545.1 623.1 544.8 638.6 542.4 647.9C539.5 659.3 533.8 669.5 526.3 676.8C522.2 680.7 521.1 681.7 517.5 683.8C510.6 687.9 504.6 690.3 496.7 692.0C488.9 693.6 489.4 693.6 458.6 693.7C430.8 693.8 430.5 693.8 430.3 693.3ZM663.9 693.4C663.4 693.1 663.4 692.2 663.4 645.6C663.4 598.5 663.4 598.2 663.9 597.8C664.3 597.5 666.0 597.5 675.9 597.5C683.0 597.6 687.5 597.7 687.7 597.9C687.9 598.1 688.0 599.4 688.1 604.2C688.2 611.5 688.2 611.5 690.3 608.6C695.1 601.8 703.7 596.8 712.4 595.8C715.6 595.4 720.8 595.4 723.9 595.9C732.9 597.2 741.5 602.4 746.0 609.2C748.5 613.0 749.9 616.2 751.1 621.0C752.6 626.6 752.5 625.9 752.6 660.7C752.7 692.0 752.7 692.8 752.3 693.2C751.8 693.7 751.2 693.7 740.0 693.7C729.3 693.8 728.1 693.7 727.7 693.3C727.3 692.9 727.2 691.9 727.2 664.8C727.2 646.1 727.2 635.7 727.0 633.8C726.4 627.8 724.1 623.2 720.6 620.7C717.2 618.4 713.5 617.2 709.0 617.2C703.2 617.2 698.2 619.4 694.2 623.7C691.3 626.8 689.4 631.5 688.8 637.3C688.6 638.9 688.5 648.8 688.5 666.5C688.5 681.6 688.4 693.3 688.3 693.4C688.2 693.4 682.7 693.6 676.2 693.6C666.2 693.8 664.3 693.7 663.9 693.4ZM772.1 693.3C771.8 693.0 771.8 687.9 771.8 645.5C771.8 603.7 771.8 598.0 772.1 597.8C772.4 597.5 775.2 597.5 784.5 597.5C795.8 597.6 796.6 597.7 796.9 598.1C797.2 598.5 797.2 606.7 797.2 645.8C797.3 688.7 797.2 693.0 796.9 693.4C796.5 693.7 795.1 693.8 784.5 693.7C774.1 693.7 772.5 693.7 772.1 693.3ZM922.8 693.4C922.4 693.0 922.2 561.6 922.6 561.1C922.8 560.8 924.9 560.8 935.1 560.7C943.9 560.7 947.4 560.8 947.6 561.0C948.2 561.4 948.1 692.4 947.6 693.2L947.2 693.8L935.1 693.8C925.6 693.8 923.0 693.7 922.8 693.4ZM604.4 675.8C608.3 674.7 611.3 672.9 614.3 669.8C617.0 667.0 618.6 663.7 619.2 660.0C619.6 657.4 619.7 652.3 619.3 652.0C618.4 651.5 604.6 651.6 600.2 652.1C597.6 652.5 593.5 653.3 592.1 653.8C587.7 655.3 584.6 657.9 583.5 661.2C582.7 663.4 582.9 668.0 583.7 669.9C584.9 672.5 587.0 674.4 590.1 675.5C592.5 676.3 593.8 676.5 598.2 676.4C601.5 676.3 602.8 676.2 604.4 675.8ZM486.9 670.3C495.8 668.6 501.6 665.8 506.8 660.4C510.0 657.1 513.1 652.2 514.4 648.1C515.5 645.1 516.7 639.3 517.1 635.6C517.6 631.5 517.5 622.1 517.0 618.5C514.5 601.5 506.4 590.5 492.7 586.0C487.4 584.3 485.4 584.0 474.9 583.7C462.7 583.4 456.6 583.5 456.2 584.0C456.1 584.2 456.0 600.8 456.0 627.4C456.0 661.5 456.1 670.5 456.3 670.7C456.6 671.0 459.5 671.0 470.4 670.9C482.9 670.8 484.4 670.8 486.9 670.3ZM882.0 634.8C882.3 634.3 882.1 633.0 881.4 630.3C880.3 626.3 877.5 622.1 874.0 619.4C868.1 614.8 858.4 613.9 851.3 617.2C847.5 619.0 844.6 621.6 842.4 625.0C841.1 627.0 840.5 628.3 839.6 631.1C838.9 633.4 838.8 634.9 839.3 635.1C839.5 635.2 849.1 635.2 860.7 635.2C881.2 635.2 881.7 635.2 882.0 634.8ZM782.2 583.2C778.2 582.6 774.0 579.9 771.9 576.5C769.8 573.2 769.3 567.7 770.6 563.1C773.2 554.3 784.5 550.4 792.5 555.5C795.7 557.6 798.2 561.2 799.0 564.8C799.5 566.9 799.2 571.7 798.5 573.6C797.3 576.9 794.3 580.4 791.2 581.8C788.5 583.1 785.0 583.7 782.2 583.2Z\"/><path class=\"bl-lime\" d=\"M999.8 693.4C999.4 692.9 999.4 561.8 999.8 561.2C1000.1 560.8 1001.4 560.8 1012.7 560.7C1019.6 560.7 1025.3 560.8 1025.5 560.9C1025.7 561.0 1025.8 580.3 1025.8 626.8C1025.8 683.3 1025.7 692.7 1025.4 693.1C1025.1 693.6 1024.6 693.6 1012.6 693.7C1002.0 693.8 1000.0 693.7 999.8 693.4ZM1039.6 693.6C1039.4 693.5 1039.2 693.2 1039.2 693.0C1039.2 692.5 1041.1 686.8 1041.5 685.9C1041.6 685.6 1041.9 684.9 1042.1 684.2C1042.3 683.6 1043.0 681.7 1043.6 679.9C1045.8 673.7 1046.5 671.6 1047.5 668.8C1048.0 667.2 1048.9 664.6 1049.5 663.0C1050.1 661.4 1050.7 659.5 1051.0 658.8C1051.3 658.0 1051.9 656.1 1052.5 654.5C1053.5 651.9 1054.1 650.2 1056.5 643.2C1056.9 642.1 1058.0 638.9 1059.0 636.1C1061.4 629.1 1063.3 623.7 1065.6 617.1C1066.3 615.3 1067.1 612.9 1067.5 611.6C1067.9 610.4 1068.7 608.4 1069.1 607.2C1069.6 606.1 1070.3 603.9 1070.8 602.5C1071.3 601.1 1072.4 597.9 1073.2 595.5C1074.1 593.1 1075.2 590.0 1075.6 588.6C1076.1 587.2 1076.8 585.3 1077.2 584.4C1077.6 583.4 1078.2 581.6 1078.6 580.4C1079.5 577.4 1080.3 575.0 1081.1 572.9C1082.3 569.7 1082.8 568.4 1083.6 565.9C1084.6 562.9 1085.4 561.1 1085.7 560.9C1085.9 560.8 1093.2 560.7 1102.0 560.7C1116.7 560.7 1118.1 560.8 1118.5 561.2C1118.8 561.4 1119.0 561.7 1119.0 561.9C1119.0 562.1 1119.7 564.2 1120.5 566.7C1121.3 569.1 1122.1 571.5 1122.2 572.0C1122.4 572.8 1123.6 576.1 1125.3 580.8C1125.6 581.5 1126.2 583.4 1126.7 585.0C1127.3 586.6 1128.4 589.8 1129.2 592.1C1130.0 594.5 1131.2 597.8 1131.7 599.5C1132.3 601.2 1133.1 603.5 1133.5 604.5C1135.0 608.5 1138.0 617.1 1140.0 622.9C1141.1 626.2 1142.6 630.7 1143.4 632.9C1144.1 635.1 1145.8 639.9 1147.1 643.6C1148.4 647.3 1150.1 652.2 1150.9 654.4C1152.3 658.3 1154.8 665.7 1160.6 682.6C1162.2 687.3 1163.7 691.5 1163.9 692.1C1164.2 692.7 1164.2 693.1 1164.1 693.3C1163.9 693.6 1160.9 693.6 1150.4 693.7C1137.8 693.8 1137.1 693.8 1136.6 693.3C1136.2 693.0 1135.3 690.7 1133.4 684.9C1132.0 680.5 1130.2 675.2 1129.6 673.2C1128.9 671.3 1128.0 668.6 1127.6 667.4C1127.3 666.1 1126.8 664.7 1126.5 664.2L1126.1 663.4L1123.6 663.2C1122.2 663.1 1111.2 663.0 1099.1 663.0C1077.3 663.0 1077.0 663.0 1076.5 663.5C1076.2 663.8 1076.0 664.2 1076.0 664.4C1076.0 664.7 1073.0 673.9 1071.3 678.9C1070.4 681.4 1069.4 684.3 1068.9 685.8C1068.6 686.6 1068.0 688.4 1067.6 689.6C1066.7 692.7 1066.5 693.2 1066.2 693.4C1065.8 693.6 1040.1 693.8 1039.6 693.6ZM1119.4 641.6C1119.6 641.2 1118.2 636.6 1116.2 631.1C1115.4 628.6 1114.6 626.1 1112.0 618.1C1109.8 611.4 1108.3 606.4 1107.1 602.6C1106.5 600.4 1105.4 596.9 1104.7 594.9C1104.0 592.8 1103.2 590.2 1102.9 589.1C1102.5 587.6 1102.3 587.1 1101.9 587.0C1101.3 586.9 1101.0 587.4 1101.0 588.4C1101.0 588.8 1100.2 591.4 1099.2 594.3C1097.2 600.3 1092.6 613.9 1091.6 617.1C1090.7 620.0 1089.0 625.3 1086.9 631.5C1084.4 638.7 1083.6 641.5 1084.0 641.8C1084.2 641.9 1092.2 642.0 1101.8 642.0C1117.3 642.0 1119.3 642.0 1119.4 641.6Z\"/></svg>\n  <span class=\"etiqueta\">// PAINEL KYC</span>\n</div>\n\n<div class=\"main\">\n  <div class=\"caixa-chave\" id=\"vista-chave\">\n    <h2>Acesso restrito</h2>\n    <p>Escreve a chave de administração (a mesma ADMIN_SECRET das variáveis do container). Fica guardada só nesta aba.</p>\n    <input type=\"password\" id=\"chave\" placeholder=\"Chave de administração\" autocomplete=\"off\">\n    <div style=\"margin-top:14px;\"><button class=\"btn btn-principal\" id=\"btn-entrar\" style=\"width:100%;\">Entrar</button></div>\n    <div class=\"erro\" id=\"erro-chave\"></div>\n  </div>\n\n  <div id=\"vista-painel\" style=\"display:none;\">\n    <div class=\"cabecalho\">\n      <div>\n        <h1>Verificações de identidade</h1>\n        <p id=\"resumo\">A carregar...</p>\n      </div>\n      <div class=\"tabs\">\n        <button class=\"tab activa\" data-estado=\"Pendente\">Pendentes</button>\n        <button class=\"tab\" data-estado=\"Aprovado\">Aprovados</button>\n        <button class=\"tab\" data-estado=\"Rejeitado\">Rejeitados</button>\n      </div>\n    </div>\n    <div id=\"lista\"></div>\n    <div style=\"text-align:center;margin-top:24px;\"><button class=\"btn btn-sec\" id=\"btn-sair\">Sair do painel</button></div>\n  </div>\n</div>\n\n<div class=\"zoom\" id=\"zoom\"><img id=\"zoom-img\" alt=\"\"></div>\n\n<script>\n(function(){\n  'use strict';\n  var chave = '';\n  var estadoActual = 'Pendente';\n  try { chave = sessionStorage.getItem('dia_admin_kyc') || ''; } catch (e) {}\n\n  function post(caminho, dados){\n    dados.key = chave;\n    return fetch(caminho, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify(dados)\n    }).then(function(r){ return r.json(); });\n  }\n\n  function esc(t){\n    return String(t == null ? '' : t).replace(/[&<>\"']/g, function(c){\n      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c];\n    });\n  }\n\n  function data(iso){\n    if (!iso) return '—';\n    var d = new Date(iso);\n    if (isNaN(d.getTime())) return '—';\n    return d.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });\n  }\n\n  var elChave = document.getElementById('chave');\n  var elErroChave = document.getElementById('erro-chave');\n  var elLista = document.getElementById('lista');\n  var elResumo = document.getElementById('resumo');\n\n  function entrar(){\n    chave = elChave.value.trim();\n    if (!chave) { elErroChave.textContent = 'Escreve a chave.'; return; }\n    carregar(true);\n  }\n  document.getElementById('btn-entrar').addEventListener('click', entrar);\n  elChave.addEventListener('keydown', function(e){ if (e.key === 'Enter') entrar(); });\n\n  document.getElementById('btn-sair').addEventListener('click', function(){\n    try { sessionStorage.removeItem('dia_admin_kyc'); } catch (e) {}\n    chave = '';\n    elChave.value = '';\n    document.getElementById('vista-painel').style.display = 'none';\n    document.getElementById('vista-chave').style.display = 'block';\n  });\n\n  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(tab){\n    tab.addEventListener('click', function(){\n      Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(t){ t.classList.remove('activa'); });\n      tab.classList.add('activa');\n      estadoActual = tab.getAttribute('data-estado');\n      carregar(false);\n    });\n  });\n\n  function carregar(daChave){\n    elResumo.textContent = 'A carregar...';\n    elLista.innerHTML = '';\n    post('/admin-kyc-lista', { estado: estadoActual }).then(function(r){\n      if (r.status !== 'success') {\n        if (daChave || r.message === 'Chave inválida.') {\n          elErroChave.textContent = r.message || 'Não foi possível entrar.';\n          document.getElementById('vista-painel').style.display = 'none';\n          document.getElementById('vista-chave').style.display = 'block';\n          try { sessionStorage.removeItem('dia_admin_kyc'); } catch (e) {}\n        } else {\n          elResumo.textContent = r.message || 'Erro ao carregar.';\n        }\n        return;\n      }\n      try { sessionStorage.setItem('dia_admin_kyc', chave); } catch (e) {}\n      elErroChave.textContent = '';\n      document.getElementById('vista-chave').style.display = 'none';\n      document.getElementById('vista-painel').style.display = 'block';\n      var pedidos = r.response.pedidos || [];\n      var nomes = { Pendente: 'pendente', Aprovado: 'aprovado', Rejeitado: 'rejeitado' };\n      elResumo.textContent = pedidos.length + ' pedido' + (pedidos.length === 1 ? '' : 's') + ' ' + nomes[estadoActual] + (pedidos.length === 1 ? '' : 's') + '.';\n      if (!pedidos.length) {\n        elLista.innerHTML = '<div class=\"vazio\">Nada por aqui.</div>';\n        return;\n      }\n      pedidos.forEach(function(p){ elLista.appendChild(cartao(p)); });\n    }).catch(function(){\n      elErroChave.textContent = 'Não foi possível ligar ao servidor.';\n    });\n  }\n\n  var MOTIVOS = [\n    'A selfie está desfocada ou escura.',\n    'O B.I. está ilegível.',\n    'A selfie não corresponde à foto do B.I.',\n    'O B.I. está fora do prazo de validade.',\n    'Os dados escritos não batem certo com o B.I.'\n  ];\n\n  function cartao(p){\n    var el = document.createElement('div');\n    el.className = 'pedido';\n    var html = ''\n      + '<div class=\"pedido-topo\"><div>'\n      + '<h3>' + esc(p.nome) + '</h3>'\n      + '<div class=\"dados\">'\n      + '<span>B.I. <b>' + esc(p.numero_bi) + '</b></span>'\n      + '<span>Tel. <b>' + esc(p.telefone) + '</b></span>'\n      + '<span>Email <b>' + esc(p.email || '—') + '</b></span>'\n      + '<span>Enviado <b>' + esc(data(p.enviado)) + '</b></span>'\n      + (p.revisto ? '<span>Revisto <b>' + esc(data(p.revisto)) + '</b></span>' : '')\n      + '</div></div>'\n      + '<div><span class=\"pill ' + esc(p.estado) + '\">' + esc(p.estado) + '</span></div></div>'\n      + (p.motivo ? '<div class=\"motivo\">Motivo: ' + esc(p.motivo) + '</div>' : '')\n      + '<div class=\"fotos\">'\n      + '<div class=\"foto\" data-tipo=\"selfie\"><span class=\"rotulo\">SELFIE</span>A carregar...</div>'\n      + '<div class=\"foto\" data-tipo=\"frente\"><span class=\"rotulo\">B.I. FRENTE</span>A carregar...</div>'\n      + '<div class=\"foto\" data-tipo=\"verso\"><span class=\"rotulo\">B.I. VERSO</span>A carregar...</div>'\n      + '</div>';\n    if (p.estado === 'Pendente') {\n      html += '<div class=\"accoes\">'\n        + '<button class=\"btn btn-principal\" data-acao=\"aprovar\">Aprovar</button>'\n        + '<button class=\"btn btn-perigo\" data-acao=\"rejeitar\">Rejeitar</button>'\n        + '<span class=\"erro\" data-erro></span></div>'\n        + '<div class=\"rejeitar-caixa\"><div class=\"chips\">'\n        + MOTIVOS.map(function(m){ return '<button class=\"chip\" type=\"button\">' + esc(m) + '</button>'; }).join('')\n        + '</div><textarea rows=\"3\" placeholder=\"Motivo da rejeição (vai por email ao cliente)\"></textarea>'\n        + '<div class=\"accoes\"><button class=\"btn btn-perigo\" data-acao=\"confirmar-rejeicao\">Confirmar rejeição</button>'\n        + '<button class=\"btn btn-sec\" data-acao=\"cancelar\">Cancelar</button></div></div>';\n    }\n    el.innerHTML = html;\n\n    Array.prototype.forEach.call(el.querySelectorAll('.foto'), function(caixa){\n      var tipo = caixa.getAttribute('data-tipo');\n      post('/admin-kyc-imagem', { id: p.id, tipo: tipo }).then(function(r){\n        var rotulo = caixa.querySelector('.rotulo').outerHTML;\n        if (r.status !== 'success') { caixa.innerHTML = rotulo + esc(r.message || 'Erro'); return; }\n        caixa.innerHTML = rotulo + '<img alt=\"' + tipo + '\">';\n        var img = caixa.querySelector('img');\n        img.src = r.response.data;\n        img.addEventListener('click', function(){\n          document.getElementById('zoom-img').src = img.src;\n          document.getElementById('zoom').classList.add('aberto');\n        });\n      }).catch(function(){ caixa.lastChild.textContent = 'Erro de ligação'; });\n    });\n\n    if (p.estado === 'Pendente') {\n      var caixaRej = el.querySelector('.rejeitar-caixa');\n      var txt = caixaRej.querySelector('textarea');\n      var elErro = el.querySelector('[data-erro]');\n      Array.prototype.forEach.call(caixaRej.querySelectorAll('.chip'), function(chip){\n        chip.addEventListener('click', function(){ txt.value = chip.textContent; txt.focus(); });\n      });\n      el.querySelector('[data-acao=\"rejeitar\"]').addEventListener('click', function(){ caixaRej.classList.add('aberta'); txt.focus(); });\n      el.querySelector('[data-acao=\"cancelar\"]').addEventListener('click', function(){ caixaRej.classList.remove('aberta'); });\n\n      function decidir(decisao, motivo, botao){\n        botao.disabled = true;\n        elErro.textContent = '';\n        post('/admin-kyc-decidir', { id: p.id, decisao: decisao, motivo: motivo }).then(function(r){\n          if (r.status !== 'success') { botao.disabled = false; elErro.textContent = r.message || 'Erro.'; return; }\n          el.style.transition = 'opacity .3s';\n          el.style.opacity = '0';\n          setTimeout(function(){ carregar(false); }, 320);\n        }).catch(function(){ botao.disabled = false; elErro.textContent = 'Erro de ligação.'; });\n      }\n      el.querySelector('[data-acao=\"aprovar\"]').addEventListener('click', function(){\n        if (!window.confirm('Aprovar a verificação de ' + p.nome + '?')) return;\n        decidir('Aprovado', '', this);\n      });\n      el.querySelector('[data-acao=\"confirmar-rejeicao\"]').addEventListener('click', function(){\n        decidir('Rejeitado', txt.value.trim(), this);\n      });\n    }\n    return el;\n  }\n\n  document.getElementById('zoom').addEventListener('click', function(){ this.classList.remove('aberto'); });\n\n  if (chave) { elChave.value = chave; carregar(true); }\n})();\n</script>\n</body>\n</html>\n";
