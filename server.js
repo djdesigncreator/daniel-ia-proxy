@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.53.0'; // 15/10/2026 - loja v3: montra por blocos, várias fotos, opções e stock, avaliações
+const VERSION = '1.54.0'; // 15/10/2026 - loja v3 + arrumação automática (categorias por IA, sugestões ao dono)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -56,6 +56,8 @@ const BUNNY_API_KEY = clean(process.env.BUNNY_API_KEY);
 const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
 const OPENAI_MODEL = clean(process.env.OPENAI_MODEL) || 'gpt-5.6-sol';
 const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'low';
+// Modelo para tarefas pequenas (arrumar a loja). Se não existir, usa o principal.
+const OPENAI_MODEL_RAPIDO = clean(process.env.OPENAI_MODEL_RAPIDO) || '';
 // Subido de 16000 para 32000 a 12/10/2026: com a instrução "capricha
 // sempre, nunca curto" (pedida depois), o raciocínio interno do modelo
 // passou a gastar o tecto todo antes de sobrar espaço para o HTML visível,
@@ -145,7 +147,7 @@ const ROTAS_PRIVADAS = new Set([
   '/galeria-album-criar', '/galeria-meus-albuns', '/galeria-album-editar', '/galeria-album-media',
   '/galeria-foto-adicionar', '/galeria-video-iniciar', '/galeria-video-estado', '/galeria-media-apagar',
   '/assinatura-iniciar', '/assinatura-pagar', '/assinatura-estado',
-  '/loja-config-ler', '/loja-config-guardar', '/loja-montra-guardar', '/loja-avaliacoes-gerir', '/loja-avaliacao-decidir',
+  '/loja-config-ler', '/loja-config-guardar', '/loja-montra-guardar', '/loja-avaliacoes-gerir', '/loja-avaliacao-decidir', '/loja-organizar', '/loja-organizar-aplicar',
   '/kyc-estado', '/kyc-enviar', '/sair'
 ]);
 // Sem sessão (ainda não há conta entrada), mas só a partir das nossas
@@ -227,6 +229,8 @@ const LIMITES = {
   '/loja-pagar': [['ip', 10, 10 * MIN]],
   '/loja-avaliar': [['ip', 5, 60 * MIN]],
   '/loja-montra-guardar': [['owner', 40, 10 * MIN]],
+  '/loja-organizar': [['owner', 12, 60 * MIN]],
+  '/loja-organizar-aplicar': [['owner', 30, 10 * MIN]],
   '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
   '/editar': [['owner', 15, 10 * MIN]],
   '/kyc-enviar': [['owner', 5, 60 * MIN], ['ip', 10, 60 * MIN]],
@@ -2074,7 +2078,7 @@ const LOJA_CART_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left."}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock."}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\"."}};
+  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos"}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -2162,6 +2166,12 @@ const LOJA_CART_JS = `/*
       novosCache = { lista: produtos, ids: ids };
     }
     return !!novosCache.ids[p.id];
+  }
+  // Fundo desfocado feito com a própria foto: a foto aparece inteira (sem
+  // cortes) e todas as fotos da loja ficam com o mesmo formato.
+  function fundoDe(src){
+    var u = String(src || '').replace(/["\\\\\\n\\r]/g, function(c){ return encodeURIComponent(c); });
+    return '<span class="dia-img-fundo" style="background-image:url(&quot;' + esc(u) + '&quot;)"></span>';
   }
   function imagemDe(p){ return (p.imagens && p.imagens[0]) || p.imagem || ''; }
   // Preço e stock de uma opção (ou do produto, sem opções).
@@ -2406,7 +2416,8 @@ const LOJA_CART_JS = `/*
       '.dia-cartao-minimal .dia-produto-corpo{padding:10px 2px 4px;}',
       '.dia-cartao-minimal .dia-btn-add{bottom:auto;top:calc(100% - 128px);}',
       '.dia-produto-media{position:relative;aspect-ratio:1/1;overflow:hidden;background:color-mix(in srgb,currentColor 6%,transparent);}',
-      '.dia-produto-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s ease,opacity .4s ease;}',
+      '.dia-produto-img{position:relative;width:100%;height:100%;object-fit:contain;display:block;transition:transform .5s ease,opacity .4s ease;}',
+      '.dia-img-fundo{position:absolute;inset:-14%;background-size:cover;background-position:center;filter:blur(24px) saturate(1.2);opacity:.6;pointer-events:none;}',
       '.dia-produto-img.dia-segunda{position:absolute;inset:0;opacity:0;}',
       '.dia-produto-card:hover .dia-produto-img{transform:scale(1.05);}',
       '.dia-produto-card:hover .dia-produto-img.dia-segunda{opacity:1;}',
@@ -2439,6 +2450,7 @@ const LOJA_CART_JS = `/*
       '.dia-esqueleto{border-radius:var(--_r);aspect-ratio:3/4;background:linear-gradient(90deg,color-mix(in srgb,currentColor 5%,transparent) 25%,color-mix(in srgb,currentColor 11%,transparent) 50%,color-mix(in srgb,currentColor 5%,transparent) 75%);background-size:200% 100%;animation:dia-brilho 1.4s linear infinite;}',
       '@keyframes dia-brilho{from{background-position:200% 0;}to{background-position:-200% 0;}}',
       /* botão flutuante + toast */
+      '.dia-com-selo .dia-carrinho-botao{bottom:68px !important;}',
       '.dia-carrinho-botao{position:fixed;right:18px;bottom:18px;z-index:99998;display:flex;align-items:center;gap:10px;background:var(--_p);color:var(--_pt);border:none;border-radius:999px;padding:14px 20px 14px 18px;font-size:14.5px;font-weight:800;cursor:pointer;box-shadow:0 16px 36px -10px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.12);font-family:inherit;transition:transform .2s ease;}',
       '.dia-carrinho-botao:hover{transform:translateY(-2px);}',
       '.dia-carrinho-botao svg{width:20px;height:20px;}',
@@ -2501,7 +2513,7 @@ const LOJA_CART_JS = `/*
       '.dia-gal-trilho{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;aspect-ratio:1/1;}',
       '.dia-gal-trilho::-webkit-scrollbar{display:none;}',
       '.dia-gal-foto{flex:0 0 100%;scroll-snap-align:start;overflow:hidden;position:relative;cursor:zoom-in;}',
-      '.dia-gal-foto img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s ease;}',
+      '.dia-gal-foto img{position:relative;width:100%;height:100%;object-fit:contain;display:block;transition:transform .2s ease;}',
       '.dia-gal-foto.dia-zoom img{transform:scale(2.1);}',
       '.dia-gal-seta{position:absolute;top:calc(50% - 40px);z-index:2;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,.9);color:#111;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(0,0,0,.18);}',
       '.dia-gal-seta.dia-esq{left:12px;}.dia-gal-seta.dia-dir{right:12px;}',
@@ -2652,11 +2664,45 @@ const LOJA_CART_JS = `/*
     if (f) f.classList.remove('aberto');
   }
 
+  function marcarSelo(){
+    var com = !!document.getElementById('daniel-ia-marca-dagua');
+    document.documentElement.classList.toggle('dia-com-selo', com);
+  }
+  window.addEventListener('load', marcarSelo);
+
   function montra(){ return (loja.montra && loja.montra.blocos && loja.montra.blocos.length) ? loja.montra : MONTRA_PADRAO; }
 
   // ======================================================
   // Dados para os blocos
   // ======================================================
+  // ======================================================
+  // Arrumação automática: a loja fica arrumada mesmo que o dono não a arrume
+  //   - esgotados no fim; destaques, mais vendidos e com foto primeiro
+  //   - destaques com limite (cerca de 1/4 da loja)
+  //   - loja pequena: sem filas, só a grelha (nada de repetir)
+  //   - filas só com produtos suficientes para encher
+  //   - o catálogo não repete o que as filas de cima já mostraram
+  // ======================================================
+  var LOJA_PEQUENA = 8;
+  var SEM_REPETIR_ATE = 30;
+  var mostrados = {};
+  function ordenar(lista){
+    return lista.slice().sort(function(a, b){
+      var ea = a.esgotado ? 1 : 0, eb = b.esgotado ? 1 : 0;
+      if (ea !== eb) return ea - eb;
+      var da = a.destaque ? 1 : 0, db = b.destaque ? 1 : 0;
+      if (da !== db) return db - da;
+      var va = a.vendidos || 0, vb = b.vendidos || 0;
+      if (va !== vb) return vb - va;
+      var fa = imagemDe(a) ? 1 : 0, fb = imagemDe(b) ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return String(b.criado || '').localeCompare(String(a.criado || ''));
+    });
+  }
+  function limiteDestaques(){ return Math.max(4, Math.ceil(produtos.length / 4)); }
+  function disponiveis(lista){ return lista.filter(function(p){ return !p.esgotado; }); }
+  function marcarMostrados(lista){ lista.forEach(function(p){ mostrados[p.id] = true; }); }
+
   function categorias(){
     var mapa = {}, ordem = [];
     produtos.forEach(function(p){
@@ -2665,16 +2711,19 @@ const LOJA_CART_JS = `/*
       mapa[c].total++;
       if (!mapa[c].imagem && imagemDe(p)) mapa[c].imagem = imagemDe(p);
     });
-    ordem.sort(function(a, b){ return (a === OUTROS) - (b === OUTROS); });
+    ordem.sort(function(a, b){
+      if ((a === OUTROS) !== (b === OUTROS)) return (a === OUTROS) - (b === OUTROS);
+      return mapa[b].total - mapa[a].total || a.localeCompare(b);
+    });
     return ordem.map(function(c){ return mapa[c]; });
   }
   function listaDaFonte(fonte, categoria){
-    var l = produtos.slice();
+    var l = disponiveis(produtos);
     if (fonte === 'novidades') return l.sort(function(a, b){ return String(b.criado).localeCompare(String(a.criado)); }).slice(0, 14);
     if (fonte === 'promocoes') return l.filter(function(p){ return desconto(p) > 0; }).sort(function(a, b){ return desconto(b) - desconto(a); }).slice(0, 14);
     if (fonte === 'mais_vendidos') return l.filter(function(p){ return p.vendidos > 0; }).sort(function(a, b){ return b.vendidos - a.vendidos; }).slice(0, 14);
-    if (fonte === 'categoria') return l.filter(function(p){ return (p.categoria || OUTROS) === categoria; }).slice(0, 14);
-    return l.filter(function(p){ return p.destaque; }).slice(0, 14);
+    if (fonte === 'categoria') return ordenar(produtos.filter(function(p){ return (p.categoria || OUTROS) === categoria; })).slice(0, 14);
+    return ordenar(l.filter(function(p){ return p.destaque; })).slice(0, Math.min(14, limiteDestaques()));
   }
   function tituloDaFonte(b){
     if (b.titulo) return b.titulo;
@@ -2699,7 +2748,7 @@ const LOJA_CART_JS = `/*
       ? '<div class="dia-produto-aval">' + estrelas(p.avaliacao.media) + '<span>(' + p.avaliacao.total + ')</span></div>' : '';
     return '<article class="dia-produto-card" data-id="' + esc(p.id) + '" tabindex="0">'
       + '<div class="dia-produto-media">'
-      + (img ? '<img class="dia-produto-img" src="' + esc(img) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
+      + (img ? fundoDe(img) + '<img class="dia-produto-img" src="' + esc(img) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
       + (segunda ? '<img class="dia-produto-img dia-segunda" src="' + esc(segunda) + '" alt="" loading="lazy">' : '')
       + (badges ? '<div class="dia-badges">' + badges + '</div>' : '')
       + (p.destaque ? '<span class="dia-badge-destaque" title="' + esc(tx('Em destaque')) + '">' + ICONES.estrela + '</span>' : '')
@@ -2781,8 +2830,10 @@ const LOJA_CART_JS = `/*
       });
     },
     fila: function(b, el){
+      if (produtos.length < LOJA_PEQUENA) return false;
       var lista = listaDaFonte(b.fonte, b.categoria);
-      if (!lista.length) return false;
+      if (lista.length < (b.fonte === 'categoria' ? 3 : 4)) return false;
+      marcarMostrados(lista);
       var verTodos = b.fonte === 'categoria' && b.categoria
         ? '<button class="dia-ver-todos" data-ver-cat="' + esc(b.categoria) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '';
       var icone = b.fonte === 'destaques' ? ICONES.estrela : (b.fonte === 'promocoes' ? ICONES.raio : '');
@@ -2811,7 +2862,9 @@ const LOJA_CART_JS = `/*
       var lista = b.fonte === 'escolher'
         ? (b.produtos || []).map(produtoPorId).filter(function(p){ return p; })
         : listaDaFonte('promocoes');
+      lista = disponiveis(lista);
       if (!lista.length) return false;
+      marcarMostrados(lista);
       var id = 'dia-cd-' + Math.random().toString(36).slice(2, 8);
       var topo = '<div class="dia-oferta-topo"><h3 class="dia-oferta-titulo">' + ICONES.raio + esc(b.titulo || tx('Oferta relâmpago')) + '</h3>'
         + '<div class="dia-contagem-reg" id="' + id + '"></div></div>';
@@ -2836,17 +2889,24 @@ const LOJA_CART_JS = `/*
         return;
       }
       var cats = categorias();
+      // Numa loja pequena ou média, o que as filas de cima já mostraram não se repete aqui.
+      var semRepetir = produtos.length <= SEM_REPETIR_ATE;
+      var resto = ordenar(produtos).filter(function(p){ return !semRepetir || !mostrados[p.id]; });
+      if (!resto.length) return false;
+      var cortou = resto.length < produtos.length;
       if (cats.length > 1) {
-        el.innerHTML = (b.titulo ? '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(b.titulo) + '</h3></div>' : '')
-          + cats.map(function(c){
-            var daCat = produtos.filter(function(p){ return (p.categoria || OUTROS) === c.nome; });
-            return '<section class="dia-bloco"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(c.nome) + '</h3>'
-              + (daCat.length > 8 ? '<button class="dia-ver-todos" data-ver-cat="' + esc(c.nome) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '')
-              + '</div><div class="dia-grelha">' + daCat.slice(0, 8).map(cartao).join('') + '</div></section>';
-          }).join('');
+        var seccoes = cats.map(function(c){
+          var todosDaCat = produtos.filter(function(p){ return (p.categoria || OUTROS) === c.nome; });
+          var daCat = resto.filter(function(p){ return (p.categoria || OUTROS) === c.nome; });
+          if (!daCat.length) return '';
+          return '<section class="dia-bloco"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(c.nome) + '</h3>'
+            + (todosDaCat.length > Math.min(8, daCat.length) ? '<button class="dia-ver-todos" data-ver-cat="' + esc(c.nome) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '')
+            + '</div><div class="dia-grelha">' + daCat.slice(0, 8).map(cartao).join('') + '</div></section>';
+        }).join('');
+        el.innerHTML = (b.titulo ? '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(b.titulo) + '</h3></div>' : '') + seccoes;
       } else {
-        el.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(b.titulo || tx('Todos os produtos')) + '</h3></div>'
-          + '<div class="dia-grelha">' + produtos.map(cartao).join('') + '</div>';
+        el.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(b.titulo || (cortou ? tx('Mais produtos') : tx('Todos os produtos'))) + '</h3></div>'
+          + '<div class="dia-grelha">' + resto.map(cartao).join('') + '</div>';
       }
       ligarCartoes(el);
       cada(el.querySelectorAll('[data-ver-cat]'), function(x){
@@ -2871,6 +2931,8 @@ const LOJA_CART_JS = `/*
   function renderMontra(){
     temporizadores.forEach(clearInterval);
     temporizadores = [];
+    mostrados = {};
+    marcarSelo();
     var m = montra();
     var raiz = $('dia-loja');
     if (!raiz) return;
@@ -2970,7 +3032,7 @@ const LOJA_CART_JS = `/*
     var titulo = filtro.categoria || tx('Resultados');
     corpo.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(titulo) + '</h3>'
       + '<span class="dia-ver-todos" style="cursor:default">' + tx(lista.length === 1 ? '{n} produto' : '{n} produtos', { n: lista.length }) + '</span></div>'
-      + '<div class="dia-grelha">' + lista.map(cartao).join('') + '</div>';
+      + '<div class="dia-grelha">' + ordenar(lista).map(cartao).join('') + '</div>';
     ligarCartoes(corpo);
   }
 
@@ -3084,7 +3146,7 @@ const LOJA_CART_JS = `/*
 
     var galeria = '<div class="dia-galeria">'
       + (imagens.length ? '<div class="dia-gal-trilho" id="dia-gal">' + imagens.map(function(src){
-        return '<div class="dia-gal-foto"><img src="' + esc(src) + '" alt="' + esc(p.nome) + '"></div>';
+        return '<div class="dia-gal-foto">' + fundoDe(src) + '<img src="' + esc(src) + '" alt="' + esc(p.nome) + '"></div>';
       }).join('') + '</div>' : '<div class="dia-gal-trilho"><div class="dia-gal-foto"><div class="dia-produto-vazio">' + ICONES.caixa + '</div></div></div>')
       + (imagens.length > 1 ? '<button class="dia-gal-seta dia-esq" data-gal="-1" aria-label="' + tx('Anterior') + '">' + ICONES.seta + '</button><button class="dia-gal-seta dia-dir" data-gal="1" aria-label="' + tx('Seguinte') + '">' + ICONES.seta + '</button>'
         + '<div class="dia-gal-miniaturas">' + imagens.map(function(src, i){
@@ -5086,6 +5148,8 @@ app.post('/loja-produto-criar', async (req, res) => {
     }
 
     const produtoId = await bubbleCreate('produto', dados);
+    // Sem categoria? A IA escolhe uma, por trás (o dono não espera por isso).
+    if (!dados['Categoria']) categorizarEmFundo(site_id, produtoId);
     return res.json({ status: 'success', response: { produto_id: produtoId } });
   } catch (erro) {
     console.error('Erro em /loja-produto-criar:', erro);
@@ -5199,6 +5263,8 @@ app.post('/loja-produto-editar', async (req, res) => {
     }
 
     await bubblePatch('produto', produto_id, dados);
+    const categoriaFinal = dados['Categoria'] !== undefined ? dados['Categoria'] : String(produto['Categoria'] || '').trim();
+    if (!categoriaFinal && (dados['Is Active'] !== undefined ? dados['Is Active'] : produto['Is Active'])) categorizarEmFundo(produto['Site'], produto_id);
     return res.json({ status: 'success', response: { imagem: dados['Imagem URL'] !== undefined ? dados['Imagem URL'] : (produto['Imagem URL'] || '') } });
   } catch (erro) {
     console.error('Erro em /loja-produto-editar:', erro);
@@ -8575,6 +8641,201 @@ app.post('/loja-avaliacao-decidir', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /loja-avaliacao-decidir:', erro);
     return res.json({ status: 'error', message: 'Não foi possível guardar.' });
+  }
+});
+
+
+// ======================================================
+// Loja: arrumação automática (1.54.0)
+// ------------------------------------------------------
+// A loja tem de ficar arrumada mesmo quando o dono não a arruma:
+//   - produto sem categoria -> a IA escolhe uma (em fundo, aos lotes)
+//   - /loja-organizar       -> analisa a loja e propõe correcções
+//                              (categorias, nomes, destaques a mais,
+//                              nomes repetidos, produtos sem foto)
+//   - /loja-organizar-aplicar -> aplica só o que o dono aprovou
+// ======================================================
+async function pedirJsonIA(sistema, pedido, maxTokens) {
+  if (!OPENAI_API_KEY) throw new Error('Sem OPENAI_API_KEY');
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL,
+        reasoning_effort: 'low',
+        max_completion_tokens: maxTokens || 6000,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: pedido }]
+      })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error('OpenAI falhou: ' + ((json.error && json.error.message) || res.status));
+    const texto = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+    const m = texto.match(/\{[\s\S]*\}/);
+    return JSON.parse(m ? m[0] : texto);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function nomeNormal(t) {
+  return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+const SISTEMA_ARRUMAR = 'És um especialista em lojas online em Moçambique e arrumas catálogos de produtos. '
+  + 'Respondes só com um objecto JSON válido, sem texto à volta.';
+
+// Pede à IA categorias (para os ids indicados) e, se pedido, nomes corrigidos.
+async function sugestoesIA(produtos, idsSemCategoria, comNomes) {
+  const existentes = [...new Set(produtos.map(p => String(p['Categoria'] || '').trim()).filter(Boolean))];
+  const lista = produtos.slice(0, 120).map(p => ({
+    id: p._id,
+    nome: String(p['Nome'] || '').slice(0, 120),
+    categoria: String(p['Categoria'] || '').trim(),
+    descricao: String(p['Descricao'] || '').replace(/\s+/g, ' ').slice(0, 140)
+  }));
+  const regras = [
+    'Loja com estes produtos (JSON abaixo). Categorias que a loja já usa: ' + (existentes.length ? existentes.join(', ') : 'nenhuma') + '.',
+    '1) "categorias": dá uma categoria a CADA produto destes ids: ' + JSON.stringify(idsSemCategoria) + '.',
+    '   - Reaproveita as categorias existentes quando servirem.',
+    '   - Nomes curtos (1 a 3 palavras), com a primeira letra maiúscula, na MESMA língua dos nomes dos produtos (ex: "Electrodomésticos", "Mobiliário", "Escritório").',
+    '   - A loja inteira deve ficar com 3 a 8 categorias no total. Junta produtos parecidos; nunca uma categoria por produto.',
+    '   - Usa o português de Moçambique/Portugal quando os nomes estiverem em português.'
+  ];
+  if (comNomes) {
+    regras.push(
+      '2) "nomes": só para produtos com problemas óbvios no nome: acentos em falta (Sofa -> Sofá), maiúsculas erradas (Tv Led -> TV LED, tudo em minúsculas ou tudo em MAIÚSCULAS), erros de escrita.',
+      '   - Mantém marcas, modelos e o sentido. Não acrescentes palavras de marketing. Não traduzas.',
+      '   - Se dois produtos têm o mesmo nome e a descrição diz o que os distingue (capacidade, tipo, tamanho), propõe nomes que os distingam usando SÓ essa informação.',
+      '   - Não incluas os produtos cujo nome já está bem.'
+    );
+  }
+  regras.push('Formato exacto: {"categorias":{"<id>":"Categoria"}' + (comNomes ? ',"nomes":{"<id>":"Nome corrigido"}' : '') + '}');
+  regras.push('PRODUTOS: ' + JSON.stringify(lista));
+  const r = await pedirJsonIA(SISTEMA_ARRUMAR, regras.join('\n'), comNomes ? 8000 : 4000);
+  const ids = new Set(produtos.map(p => p._id));
+  const categorias = {}, nomes = {};
+  Object.entries((r && r.categorias) || {}).forEach(([id, c]) => {
+    const v = textoLimpo(c, 40);
+    if (ids.has(id) && v) categorias[id] = v;
+  });
+  Object.entries((r && r.nomes) || {}).forEach(([id, n]) => {
+    const v = textoLimpo(n, 120);
+    if (ids.has(id) && v.length >= 2) nomes[id] = v;
+  });
+  return { categorias, nomes };
+}
+
+// Categoria automática em fundo, aos lotes por loja (espera 4 s para juntar
+// vários produtos criados de seguida num só pedido à IA).
+const filaCategorias = new Map();
+function categorizarEmFundo(siteId, produtoId) {
+  if (!OPENAI_API_KEY || !siteId || !produtoId) return;
+  let f = filaCategorias.get(siteId);
+  if (!f) { f = { ids: new Set(), timer: null }; filaCategorias.set(siteId, f); }
+  f.ids.add(produtoId);
+  clearTimeout(f.timer);
+  f.timer = setTimeout(async () => {
+    filaCategorias.delete(siteId);
+    try {
+      const produtos = await bubbleList('produto', [{ key: 'Site', constraint_type: 'equals', value: siteId }]);
+      const alvo = produtos.filter(p => f.ids.has(p._id) && !String(p['Categoria'] || '').trim()).map(p => p._id);
+      if (!alvo.length) return;
+      const { categorias } = await sugestoesIA(produtos, alvo, false);
+      for (const id of alvo) {
+        if (categorias[id]) await bubblePatch('produto', id, { 'Categoria': categorias[id] });
+      }
+    } catch (erro) {
+      console.error('Categoria automática falhou:', erro.message || erro);
+    }
+  }, 4000);
+}
+
+function limiteDestaques(total) { return Math.max(4, Math.ceil(total / 4)); }
+
+app.post('/loja-organizar', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const todos = await bubbleList('produto', [{ key: 'Site', constraint_type: 'equals', value: site_id }], 'Created Date', true);
+    const activos = todos.filter(p => p['Is Active']);
+    const resposta = { total: activos.length, categorias: [], nomes: [], destaques_a_mais: [], limite_destaques: limiteDestaques(activos.length), repetidos: [], sem_foto: [], ia_falhou: false };
+    if (!activos.length) return res.json({ status: 'success', response: resposta });
+
+    // 1) IA: categorias em falta e nomes a corrigir
+    const semCategoria = activos.filter(p => !String(p['Categoria'] || '').trim()).map(p => p._id);
+    try {
+      const ia = await sugestoesIA(activos, semCategoria, true);
+      resposta.categorias = semCategoria.filter(id => ia.categorias[id]).map(id => {
+        const p = activos.find(x => x._id === id);
+        return { id, nome: p['Nome'] || '', sugestao: ia.categorias[id] };
+      });
+      resposta.nomes = Object.keys(ia.nomes).map(id => {
+        const p = activos.find(x => x._id === id);
+        return { id, atual: p['Nome'] || '', sugestao: ia.nomes[id] };
+      }).filter(n => n.sugestao !== n.atual);
+    } catch (erro) {
+      console.error('Erro na IA de /loja-organizar:', erro.message || erro);
+      resposta.ia_falhou = true;
+    }
+
+    // 2) Destaques a mais: fica o limite, pelos que mais vendem e mais recentes
+    const destaques = activos.filter(p => p['Destaque']);
+    if (destaques.length > resposta.limite_destaques) {
+      const ordem = destaques.slice().sort((a, b) => {
+        const va = extraProduto(a).vendidos || 0, vb = extraProduto(b).vendidos || 0;
+        if (vb !== va) return vb - va;
+        return String(b['Created Date'] || '').localeCompare(String(a['Created Date'] || ''));
+      });
+      resposta.destaques_a_mais = ordem.slice(resposta.limite_destaques).map(p => ({ id: p._id, nome: p['Nome'] || '' }));
+      resposta.total_destaques = destaques.length;
+    }
+
+    // 3) Nomes repetidos (que a IA não resolveu) e produtos sem foto
+    const grupos = {};
+    activos.forEach(p => {
+      const nomeFinal = (resposta.nomes.find(n => n.id === p._id) || {}).sugestao || p['Nome'];
+      const k = nomeNormal(nomeFinal);
+      (grupos[k] = grupos[k] || []).push({ id: p._id, nome: p['Nome'] || '', preco: Number(p['Preco MZN']) || 0 });
+    });
+    resposta.repetidos = Object.values(grupos).filter(g => g.length > 1);
+    resposta.sem_foto = activos.filter(p => !p['Imagem URL']).map(p => ({ id: p._id, nome: p['Nome'] || '' }));
+    return res.json({ status: 'success', response: resposta });
+  } catch (erro) {
+    console.error('Erro em /loja-organizar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível analisar a loja.' });
+  }
+});
+
+app.post('/loja-organizar-aplicar', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const alteracoes = Array.isArray(req.body.alteracoes) ? req.body.alteracoes.slice(0, 200) : [];
+    if (!alteracoes.length) return res.json({ status: 'error', message: 'Pedido inválido.' });
+    const produtos = await bubbleList('produto', [{ key: 'Site', constraint_type: 'equals', value: site_id }]);
+    const daLoja = new Set(produtos.map(p => p._id));
+    let aplicadas = 0;
+    for (const a of alteracoes) {
+      if (!a || typeof a.produto_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(a.produto_id) || !daLoja.has(a.produto_id)) continue;
+      const dados = {};
+      if (typeof a.categoria === 'string' && textoLimpo(a.categoria, 40)) dados['Categoria'] = textoLimpo(a.categoria, 40);
+      if (typeof a.nome === 'string' && textoLimpo(a.nome, 120).length >= 2) dados['Nome'] = textoLimpo(a.nome, 120);
+      if (typeof a.destaque === 'boolean') dados['Destaque'] = a.destaque;
+      if (!Object.keys(dados).length) continue;
+      await bubblePatch('produto', a.produto_id, dados);
+      aplicadas++;
+    }
+    return res.json({ status: 'success', response: { aplicadas } });
+  } catch (erro) {
+    console.error('Erro em /loja-organizar-aplicar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível aplicar as correcções.' });
   }
 });
 
