@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.48.0'; // 14/10/2026 - visual livre: a descrição da pessoa manda, sem receitas por sector
+const VERSION = '1.50.0'; // 15/10/2026 - sites também em espanhol; app em pt/en/fr/es
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -1346,6 +1346,38 @@ async function mozpaymentToken() {
 // (produtos/carrinho, galeria, portefólio, blog, contacto): esses módulos
 // lêem estas variáveis e ficam com as cores, tipos e cantos do próprio
 // site, em vez de aparecerem com um visual à parte.
+// ======================================================
+// Idioma dos sites gerados: pt (por omissão), en, fr ou es
+// ======================================================
+// O idioma escolhido fica gravado no próprio HTML, em <html lang="..">.
+// Os módulos fixos (loja, galeria, portefólio, blog, contacto) e o selo
+// lêem esse atributo e mostram os seus textos no mesmo idioma - assim não
+// precisamos de nenhum campo novo no Bubble.
+const IDIOMAS_SITE = {
+  pt: { nome: 'português', instrucao: 'Todo o texto do site é em português de Moçambique (tom local mas correcto), mesmo que a descrição tenha sido escrita noutra língua.' },
+  en: { nome: 'inglês', instrucao: 'All text on the website must be in natural, fluent English (the person may have written the description in another language - translate the meaning, do not leave any other language on the page). Prices stay in MZN.' },
+  fr: { nome: 'francês', instrucao: "Tout le texte du site doit être en français naturel et soigné (la personne a peut-être écrit la description dans une autre langue - traduis le sens, ne laisse aucun mot d'une autre langue sur la page). Les prix restent en MZN." },
+  es: { nome: 'espanhol', instrucao: 'Todo el texto del sitio debe estar en español natural y cuidado (la persona puede haber escrito la descripción en otro idioma - traduce el sentido, no dejes palabras de otro idioma en la página). Los precios se mantienen en MZN.' }
+};
+function normalizarIdioma(v) {
+  const l = String(v || '').toLowerCase().slice(0, 2);
+  return IDIOMAS_SITE[l] ? l : 'pt';
+}
+function idiomaDoHtml(html) {
+  const m = /<html[^>]*\slang=["']?([a-zA-Z]{2})/i.exec(html || '');
+  return m && IDIOMAS_SITE[m[1].toLowerCase()] ? m[1].toLowerCase() : '';
+}
+function fixarIdiomaHtml(html, idioma) {
+  const l = normalizarIdioma(idioma);
+  if (/<html\b[^>]*>/i.test(html)) {
+    return html.replace(/<html\b([^>]*)>/i, (tudo, attrs) => {
+      const semLang = attrs.replace(/\slang=("[^"]*"|'[^']*'|[^\s>]+)/i, '');
+      return '<html lang="' + l + '"' + semLang + '>';
+    });
+  }
+  return html;
+}
+
 const DIRECAO_DE_ARTE = `
 PADRÃO VISUAL (obrigatório - nenhum site pode parecer um modelo repetido nem ter ar de "feito por IA"):
 0. A DESCRIÇÃO DA PESSOA MANDA. Lê-a com atenção antes de tudo e segue o que ela pede sobre estilo, cores, ambiente, quantidade de secções e tom. Se pedir algo simples, minimalista, limpo ou "só o essencial", faz um site simples a sério: poucas secções, muito espaço, uma ou duas cores, tipografia limpa - simples mas acabado com cuidado, nunca pobre. Se pedir algo ousado, colorido, divertido, escuro, clássico, luxuoso ou futurista, vai a fundo nessa direcção. Se der cores, referências ou um exemplo, usa-os. Só quando a descrição não disser nada sobre o visual é que decides tu, a partir do negócio e do público.
@@ -1404,7 +1436,8 @@ const GUIA_TIPO = {
   'Galeria': 'Site de fotógrafo, videógrafo ou de qualquer pessoa que mostra o seu trabalho em imagens. Obrigatório: o nome, a zona dos álbuns (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: hero, sobre, serviços ou pacotes, testemunhos, processo de trabalho. O estilo segue a descrição e não um molde: pode ser branco e silencioso para as fotos falarem sozinhas, cheio de cor e energia, escuro e cinematográfico, revista de moda, documental e cru, romântico e suave. As fotos são as protagonistas. NÃO desenhes álbuns, fotos ou vídeos falsos nem o visualizador - os álbuns a sério aparecem sozinhos, tratados à parte.'
 };
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma }) {
+  const lingua = normalizarIdioma(idioma);
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
@@ -1466,13 +1499,15 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
   const systemPrompt = `Você é o motor de geração de sites da Daniel IA, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
-O site deve ser responsivo, moderno e profissional, em português (de Moçambique, tom local mas correcto).
+O site deve ser responsivo, moderno e profissional.
+IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
 ${DIRECAO_DE_ARTE}${pontoDePartidaVisual()}
 IMPORTANTE: o site tem de parecer acabado e profissional - nunca com ar de esqueleto, com caixas vazias ou textos de enchimento. Acabado não quer dizer comprido: o tamanho e a quantidade de secções seguem a descrição. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, desenvolve o suficiente para aquele negócio, com textos com substância.
 ${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
+Idioma do site: ${IDIOMAS_SITE[lingua].nome}
 ${instrucaoLogo}${instrucaoImagens}
 Descrição pedida pela pessoa: ${prompt}`;
 
@@ -1522,6 +1557,7 @@ Descrição pedida pela pessoa: ${prompt}`;
     throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
   }
 
+  html = fixarIdiomaHtml(html, lingua);
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
@@ -1540,8 +1576,9 @@ Descrição pedida pela pessoa: ${prompt}`;
 function aplicarMarcaDeAgua(html, mostrar) {
   html = html.replace(/\s*<a[^>]*id=["']daniel-ia-marca-dagua["'][^>]*>[\s\S]*?<\/a>/i, '');
   if (!mostrar) return html;
+  const feitoCom = { pt: 'Feito com', en: 'Made with', fr: 'Créé avec', es: 'Hecho con' }[idiomaDoHtml(html) || 'pt'];
 
-  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.pro" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:8px;background:rgba(15,5,24,0.92);color:#F6F2FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:500;line-height:1;padding:8px 14px 8px 10px;border-radius:999px;text-decoration:none;border:1px solid rgba(137,200,4,0.35);box-shadow:0 8px 24px rgba(67,9,96,0.45);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);"><svg viewBox="111 492.5 250 250" width="16" height="16" aria-hidden="true" style="display:block;flex-shrink:0;"><path fill="#FFFFFF" d="M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z"/><circle fill="#89C804" cx="149.1" cy="612.7" r="29.7"/></svg><span>Feito com <strong style="font-weight:800;color:#FFFFFF;">Daniel <span style="color:#89C804;">IA</span></strong></span></a>\n`;
+  const selo = `\n<a id="daniel-ia-marca-dagua" href="https://daniel-ia.pro" target="_blank" rel="noopener" style="position:fixed;bottom:16px;right:16px;z-index:999999;display:inline-flex;align-items:center;gap:8px;background:rgba(15,5,24,0.92);color:#F6F2FB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:500;line-height:1;padding:8px 14px 8px 10px;border-radius:999px;text-decoration:none;border:1px solid rgba(137,200,4,0.35);box-shadow:0 8px 24px rgba(67,9,96,0.45);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);"><svg viewBox="111 492.5 250 250" width="16" height="16" aria-hidden="true" style="display:block;flex-shrink:0;"><path fill="#FFFFFF" d="M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z"/><circle fill="#89C804" cx="149.1" cy="612.7" r="29.7"/></svg><span>${feitoCom} <strong style="font-weight:800;color:#FFFFFF;">Daniel <span style="color:#89C804;">IA</span></strong></span></a>\n`;
   if (/<\/body>/i.test(html)) {
     return html.replace(/<\/body>/i, selo + '</body>');
   }
@@ -1718,13 +1755,16 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
 
   const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel IA"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
 
+  const linguaActual = idiomaDoHtml(htmlAtual) || 'pt';
+  const instrucaoIdioma = `\nIDIOMA: este site está em ${IDIOMAS_SITE[linguaActual].nome} (<html lang="${linguaActual}">). Mantém todo o texto nesse idioma, mesmo que o pedido de alteração esteja escrito em português - traduz para ${IDIOMAS_SITE[linguaActual].nome} qualquer texto novo. Só mudes de idioma se o pedido disser claramente para traduzir o site; nesse caso traduz o site todo e actualiza o atributo lang da tag <html> (pt, en, fr ou es).`;
+
   const systemPrompt = `Você é o motor de edição de sites da Daniel IA, uma plataforma moçambicana.
 Vais receber o código HTML completo de um site já existente, e um pedido de alteração.
 A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com a alteração pedida aplicada, mantendo tudo o resto exactamente igual ao original - mesma estrutura, mesmo estilo visual, mesmo conteúdo que não foi pedido para mudar.
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 IMPORTANTE: o site tem de continuar acabado e profissional depois da alteração - nunca partido, vazio ou com ar de esqueleto. Se a alteração implicar reescrever ou ampliar alguma secção, capricha nela. Se a pessoa pedir para simplificar ou tirar coisas, faz isso mesmo, sem voltar a encher.
 ${DIRECAO_DE_ARTE}
-NA EDIÇÃO: mantém a identidade visual que o site já tem, mas tudo o que mudares ou acrescentares tem de seguir este padrão de qualidade. Se o :root ainda não tiver as fichas --dia-*, acrescenta-as com os valores que o site já usa (sem mudar o visual). Se o pedido mudar cores ou tipos de letra, actualiza também as fichas.${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
+NA EDIÇÃO: mantém a identidade visual que o site já tem, mas tudo o que mudares ou acrescentares tem de seguir este padrão de qualidade. Se o :root ainda não tiver as fichas --dia-*, acrescenta-as com os valores que o site já usa (sem mudar o visual). Se o pedido mudar cores ou tipos de letra, actualiza também as fichas.${instrucaoIdioma}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -1777,6 +1817,7 @@ ${htmlAtual}`;
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = injectarContactoSeNecessario(html, siteId);
+  html = fixarIdiomaHtml(html, idiomaDoHtml(html) || linguaActual);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -1810,6 +1851,21 @@ const LOJA_CART_JS = `/*
 (function(){
   'use strict';
 
+  // ---- Idioma do site (lido do <html lang>): pt, en, fr ou es ----
+  var DIA_LANG = (function(){
+    var l = String(document.documentElement.getAttribute('lang') || 'pt').toLowerCase().slice(0, 2);
+    return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
+  })();
+  var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
+  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Produto": "Product", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Produto": "Produit", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Produto": "Producto", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente"}};
+  function tx(s, v){
+    var d = DIA_TXT[DIA_LANG];
+    var r = (d && d[s]) || s;
+    if (v) { for (var k in v) { r = r.split('{' + k + '}').join(String(v[k])); } }
+    return r;
+  }
+  var OUTROS = tx('Outros');
+
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
   if (!SITE_ID) {
@@ -1834,7 +1890,7 @@ const LOJA_CART_JS = `/*
       .split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;')
       .split('"').join('&quot;').split("'").join('&#39;');
   }
-  function mzn(v){ return Number(v || 0).toLocaleString('pt-PT') + ' MZN'; }
+  function mzn(v){ return Number(v || 0).toLocaleString(DIA_LOCALE) + ' MZN'; }
   function desconto(p){
     if (!p.preco_antigo || p.preco_antigo <= p.preco) return 0;
     return Math.round((1 - p.preco / p.preco_antigo) * 100);
@@ -1898,7 +1954,7 @@ const LOJA_CART_JS = `/*
     var b = $('dia-carrinho-botao');
     if (b) { b.classList.remove('dia-pulo'); void b.offsetWidth; b.classList.add('dia-pulo'); }
     var p = produtoPorId(id);
-    toast((p ? p.nome : 'Produto') + ' adicionado ao carrinho');
+    toast(tx('{nome} adicionado ao carrinho', { nome: p ? p.nome : tx('Produto') }));
   }
 
   var temporizadorToast = null;
@@ -1918,7 +1974,7 @@ const LOJA_CART_JS = `/*
     var css = [
       '.dia-loja,.dia-carrinho-botao,.dia-painel-carrinho,.dia-overlay,.dia-toast{--_p:var(--dia-primaria,#111);--_pt:var(--dia-primaria-texto,#fff);--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);}',
       '.dia-loja{--_p:var(--dia-primaria,currentColor);--_s:var(--dia-superficie,color-mix(in srgb,currentColor 4%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_f:var(--dia-fundo,Canvas);color:var(--_t);font-family:inherit;}',
-      '.dia-loja *{box-sizing:border-box;}',
+      '.dia-loja *,.dia-overlay,.dia-overlay *,.dia-painel-carrinho,.dia-painel-carrinho *,.dia-carrinho-botao,.dia-toast{box-sizing:border-box;}',
       /* capa */
       '.dia-capa{position:relative;border-radius:calc(var(--_r) + 8px);overflow:hidden;height:clamp(230px,44vw,480px);margin-bottom:22px;isolation:isolate;background:color-mix(in srgb,var(--_p) 18%,transparent);}',
       '.dia-slide{position:absolute;inset:0;opacity:0;transition:opacity .9s ease;}',
@@ -2109,7 +2165,7 @@ const LOJA_CART_JS = `/*
       + '<div class="dia-loja">'
       + '<div class="dia-capa" id="dia-capa"></div>'
       + '<div class="dia-barra">'
-      + '<label class="dia-pesquisa">' + ICONES.lupa + '<input type="search" id="dia-pesquisa" placeholder="Pesquisar produtos" autocomplete="off"></label>'
+      + '<label class="dia-pesquisa">' + ICONES.lupa + '<input type="search" id="dia-pesquisa" placeholder="' + tx('Pesquisar produtos') + '" autocomplete="off"></label>'
       + '<div class="dia-categorias" id="dia-categorias"></div>'
       + '</div>'
       + '<div id="dia-destaques"></div>'
@@ -2119,8 +2175,8 @@ const LOJA_CART_JS = `/*
     var botao = document.createElement('button');
     botao.id = 'dia-carrinho-botao';
     botao.className = 'dia-carrinho-botao';
-    botao.setAttribute('aria-label', 'Abrir carrinho');
-    botao.innerHTML = ICONES.carrinho + '<span>Carrinho</span><span class="dia-contagem" id="dia-carrinho-contagem">0</span>';
+    botao.setAttribute('aria-label', tx('Abrir carrinho'));
+    botao.innerHTML = ICONES.carrinho + '<span>' + tx('Carrinho') + '</span><span class="dia-contagem" id="dia-carrinho-contagem">0</span>';
     document.body.appendChild(botao);
 
     var fundo = document.createElement('div');
@@ -2132,11 +2188,11 @@ const LOJA_CART_JS = `/*
     painel.id = 'dia-painel-carrinho';
     painel.className = 'dia-painel-carrinho';
     painel.innerHTML = ''
-      + '<div class="dia-painel-cabeca"><strong>O teu carrinho</strong><button class="dia-icone-btn" id="dia-fechar-painel" aria-label="Fechar">' + ICONES.fechar + '</button></div>'
+      + '<div class="dia-painel-cabeca"><strong>' + tx('O teu carrinho') + '</strong><button class="dia-icone-btn" id="dia-fechar-painel" aria-label="' + tx('Fechar') + '">' + ICONES.fechar + '</button></div>'
       + '<div id="dia-itens-carrinho"></div>'
       + '<div class="dia-painel-rodape" id="dia-painel-rodape">'
-      + '<div class="dia-total"><span>Total</span><strong id="dia-total-carrinho">0 MZN</strong></div>'
-      + '<button id="dia-btn-finalizar" class="dia-btn-principal" disabled>Finalizar compra</button>'
+      + '<div class="dia-total"><span>' + tx('Total') + '</span><strong id="dia-total-carrinho">0 MZN</strong></div>'
+      + '<button id="dia-btn-finalizar" class="dia-btn-principal" disabled>' + tx('Finalizar compra') + '</button>'
       + '</div>';
     document.body.appendChild(painel);
 
@@ -2186,9 +2242,9 @@ const LOJA_CART_JS = `/*
     }
     if (!slides.length) {
       capa.innerHTML = '<div class="dia-capa-gerada"></div>'
-        + '<div class="dia-slide-texto"><h2 class="dia-slide-titulo">' + esc(loja.nome || 'A nossa loja') + '</h2>'
-        + '<p class="dia-slide-sub">' + (produtos.length ? esc(produtos.length + ' produtos à tua espera. Escolhe, encomenda e recebe.') : 'Descobre os nossos produtos.') + '</p>'
-        + '<button class="dia-slide-btn" data-ir-catalogo>Ver produtos ' + ICONES.seta + '</button></div>';
+        + '<div class="dia-slide-texto"><h2 class="dia-slide-titulo">' + esc(loja.nome || tx('A nossa loja')) + '</h2>'
+        + '<p class="dia-slide-sub">' + (produtos.length ? esc(tx('{n} produtos à tua espera. Escolhe, encomenda e recebe.', { n: produtos.length })) : tx('Descobre os nossos produtos.')) + '</p>'
+        + '<button class="dia-slide-btn" data-ir-catalogo>' + tx('Ver produtos') + ' ' + ICONES.seta + '</button></div>';
     } else {
       var html = slides.map(function(s, i){
         var temTexto = s.titulo || s.subtitulo || s.botao;
@@ -2202,10 +2258,10 @@ const LOJA_CART_JS = `/*
           + '</div>';
       }).join('');
       if (slides.length > 1) {
-        html += '<button class="dia-capa-seta dia-esq" aria-label="Anterior">' + ICONES.seta + '</button>'
-          + '<button class="dia-capa-seta dia-dir" aria-label="Seguinte">' + ICONES.seta + '</button>'
+        html += '<button class="dia-capa-seta dia-esq" aria-label="' + tx('Anterior') + '">' + ICONES.seta + '</button>'
+          + '<button class="dia-capa-seta dia-dir" aria-label="' + tx('Seguinte') + '">' + ICONES.seta + '</button>'
           + '<div class="dia-capa-pontos">' + slides.map(function(s, i){
-            return '<button class="dia-ponto' + (i === 0 ? ' dia-activo' : '') + '" data-i="' + i + '" aria-label="Imagem ' + (i + 1) + '"></button>';
+            return '<button class="dia-ponto' + (i === 0 ? ' dia-activo' : '') + '" data-i="' + i + '" aria-label="' + tx('Imagem {n}', { n: i + 1 }) + '"></button>';
           }).join('') + '</div>';
       }
       capa.innerHTML = html;
@@ -2251,12 +2307,12 @@ const LOJA_CART_JS = `/*
   function categorias(){
     var mapa = {}, ordem = [];
     produtos.forEach(function(p){
-      var c = p.categoria || 'Outros';
+      var c = p.categoria || OUTROS;
       if (!mapa[c]) { mapa[c] = 0; ordem.push(c); }
       mapa[c]++;
     });
     // "Outros" vai sempre para o fim
-    ordem.sort(function(a, b){ return (a === 'Outros') - (b === 'Outros'); });
+    ordem.sort(function(a, b){ return (a === OUTROS) - (b === OUTROS); });
     return ordem.map(function(c){ return { nome: c, total: mapa[c] }; });
   }
 
@@ -2266,7 +2322,7 @@ const LOJA_CART_JS = `/*
     var cats = categorias();
     if (cats.length < 2) { el.innerHTML = ''; el.style.display = 'none'; return; }
     el.style.display = 'flex';
-    var html = '<button class="dia-chip' + (!filtro.categoria ? ' dia-activo' : '') + '" data-cat="">Tudo <small>' + produtos.length + '</small></button>';
+    var html = '<button class="dia-chip' + (!filtro.categoria ? ' dia-activo' : '') + '" data-cat="">' + tx('Tudo') + ' <small>' + produtos.length + '</small></button>';
     html += cats.map(function(c){
       return '<button class="dia-chip' + (filtro.categoria === c.nome ? ' dia-activo' : '') + '" data-cat="' + esc(c.nome) + '">' + esc(c.nome) + ' <small>' + c.total + '</small></button>';
     }).join('');
@@ -2288,7 +2344,7 @@ const LOJA_CART_JS = `/*
       + '<div class="dia-produto-media">'
       + (p.imagem ? '<img class="dia-produto-img" src="' + esc(p.imagem) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
       + (d > 0 ? '<span class="dia-badge">-' + d + '%</span>' : '')
-      + (p.destaque ? '<span class="dia-badge-destaque" title="Em destaque">' + ICONES.estrela + '</span>' : '')
+      + (p.destaque ? '<span class="dia-badge-destaque" title="' + tx('Em destaque') + '">' + ICONES.estrela + '</span>' : '')
       + '</div>'
       + '<div class="dia-produto-corpo">'
       + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
@@ -2296,7 +2352,7 @@ const LOJA_CART_JS = `/*
       + '<div class="dia-produto-precos"><span class="dia-produto-preco">' + mzn(p.preco) + '</span>'
       + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s>' : '') + '</div>'
       + '</div>'
-      + '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="Adicionar ' + esc(p.nome) + ' ao carrinho">' + ICONES.mais + '</button>'
+      + '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="' + esc(tx('Adicionar {nome} ao carrinho', { nome: p.nome })) + '">' + ICONES.mais + '</button>'
       + '</article>';
   }
 
@@ -2318,7 +2374,7 @@ const LOJA_CART_JS = `/*
     if (!el) return;
     var lista = produtos.filter(function(p){ return p.destaque; });
     if (!lista.length || filtro.texto || filtro.categoria) { el.innerHTML = ''; return; }
-    el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + ICONES.estrela + 'Em destaque</h3></div>'
+    el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + ICONES.estrela + tx('Em destaque') + '</h3></div>'
       + '<div class="dia-fila">' + lista.map(cartao).join('') + '</div></section>';
     ligarCartoes(el);
   }
@@ -2328,18 +2384,18 @@ const LOJA_CART_JS = `/*
     if (!el) return;
     renderDestaques();
     if (!produtos.length) {
-      el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>Ainda não há produtos à venda aqui.</div></div>';
+      el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>' + tx('Ainda não há produtos à venda aqui.') + '</div></div>';
       return;
     }
     var texto = normalizar(filtro.texto.trim());
     var lista = produtos.filter(function(p){
-      if (filtro.categoria && (p.categoria || 'Outros') !== filtro.categoria) return false;
+      if (filtro.categoria && (p.categoria || OUTROS) !== filtro.categoria) return false;
       if (texto && normalizar(p.nome + ' ' + (p.categoria || '') + ' ' + (p.descricao || '')).indexOf(texto) === -1) return false;
       return true;
     });
 
     if (!lista.length) {
-      el.innerHTML = '<div class="dia-vazio">' + ICONES.lupa + '<div>Nenhum produto encontrado' + (filtro.texto ? ' para "' + esc(filtro.texto.trim()) + '"' : '') + '.</div></div>';
+      el.innerHTML = '<div class="dia-vazio">' + ICONES.lupa + '<div>' + (filtro.texto ? esc(tx('Nenhum produto encontrado para "{t}".', { t: filtro.texto.trim() })) : tx('Nenhum produto encontrado.')) + '</div></div>';
       return;
     }
 
@@ -2348,9 +2404,9 @@ const LOJA_CART_JS = `/*
     var cats = categorias();
     if (!texto && !filtro.categoria && cats.length > 1) {
       el.innerHTML = cats.map(function(c){
-        var daCat = lista.filter(function(p){ return (p.categoria || 'Outros') === c.nome; });
+        var daCat = lista.filter(function(p){ return (p.categoria || OUTROS) === c.nome; });
         return '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(c.nome) + '</h3>'
-          + (daCat.length > 4 ? '<button class="dia-ver-todos" data-cat="' + esc(c.nome) + '">Ver todos ' + ICONES.seta + '</button>' : '')
+          + (daCat.length > 4 ? '<button class="dia-ver-todos" data-cat="' + esc(c.nome) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '')
           + '</div><div class="dia-grelha">' + daCat.slice(0, 8).map(cartao).join('') + '</div></section>';
       }).join('');
       Array.prototype.forEach.call(el.querySelectorAll('.dia-ver-todos'), function(b){
@@ -2362,9 +2418,9 @@ const LOJA_CART_JS = `/*
         });
       });
     } else {
-      var titulo = filtro.categoria || (texto ? 'Resultados' : 'Produtos');
+      var titulo = filtro.categoria || (texto ? tx('Resultados') : tx('Produtos'));
       el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(titulo) + '</h3>'
-        + '<span class="dia-ver-todos" style="cursor:default">' + lista.length + ' produto' + (lista.length === 1 ? '' : 's') + '</span></div>'
+        + '<span class="dia-ver-todos" style="cursor:default">' + tx(lista.length === 1 ? '{n} produto' : '{n} produtos', { n: lista.length }) + '</span></div>'
         + '<div class="dia-grelha">' + lista.map(cartao).join('') + '</div></section>';
     }
     ligarCartoes(el);
@@ -2379,7 +2435,7 @@ const LOJA_CART_JS = `/*
     overlay.className = 'dia-overlay';
     overlay.id = 'dia-janela';
     overlay.innerHTML = '<div class="dia-modal ' + (classeExtra || '') + '" role="dialog" aria-modal="true">'
-      + '<button class="dia-icone-btn dia-fechar" aria-label="Fechar">' + ICONES.fechar + '</button>' + html + '</div>';
+      + '<button class="dia-icone-btn dia-fechar" aria-label="' + tx('Fechar') + '">' + ICONES.fechar + '</button>' + html + '</div>';
     document.body.appendChild(overlay);
     document.body.style.overflow = 'hidden';
     overlay.addEventListener('click', function(e){ if (e.target === overlay) fecharJanela(); });
@@ -2404,11 +2460,11 @@ const LOJA_CART_JS = `/*
       + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
       + '<h3 class="dia-detalhe-nome">' + esc(p.nome) + '</h3>'
       + '<div class="dia-detalhe-precos"><span class="dia-detalhe-preco">' + mzn(p.preco) + '</span>'
-      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s><span class="dia-detalhe-poupa">Poupas ' + mzn(p.preco_antigo - p.preco) + '</span>' : '') + '</div>'
+      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s><span class="dia-detalhe-poupa">' + tx('Poupas {v}', { v: mzn(p.preco_antigo - p.preco) }) + '</span>' : '') + '</div>'
       + (p.descricao ? '<p class="dia-detalhe-desc">' + esc(p.descricao) + '</p>' : '')
-      + '<div class="dia-detalhe-qtd">Quantidade <div class="dia-qtd"><button data-q="-1" aria-label="Menos">−</button><span id="dia-det-qtd">1</span><button data-q="1" aria-label="Mais">+</button></div></div>'
-      + '<button class="dia-btn-principal" id="dia-det-add">' + ICONES.carrinho + ' Adicionar ao carrinho</button>'
-      + '<button class="dia-btn-sec" id="dia-det-comprar">Comprar agora</button>'
+      + '<div class="dia-detalhe-qtd">' + tx('Quantidade') + ' <div class="dia-qtd"><button data-q="-1" aria-label="' + tx('Menos') + '">−</button><span id="dia-det-qtd">1</span><button data-q="1" aria-label="' + tx('Mais') + '">+</button></div></div>'
+      + '<button class="dia-btn-principal" id="dia-det-add">' + ICONES.carrinho + ' ' + tx('Adicionar ao carrinho') + '</button>'
+      + '<button class="dia-btn-sec" id="dia-det-comprar">' + tx('Comprar agora') + '</button>'
       + '</div>', 'dia-detalhe');
     Array.prototype.forEach.call(j.querySelectorAll('[data-q]'), function(b){
       b.addEventListener('click', function(){
@@ -2432,7 +2488,7 @@ const LOJA_CART_JS = `/*
     if (!cont) return;
     var total = 0;
     if (!itens.length) {
-      cont.innerHTML = '<div class="dia-carrinho-vazio">' + ICONES.carrinho + '<div>O teu carrinho está vazio.</div></div>';
+      cont.innerHTML = '<div class="dia-carrinho-vazio">' + ICONES.carrinho + '<div>' + tx('O teu carrinho está vazio.') + '</div></div>';
     } else {
       cont.innerHTML = itens.map(function(i){
         var sub = i.produto.preco * i.quantidade;
@@ -2440,9 +2496,9 @@ const LOJA_CART_JS = `/*
         return '<div class="dia-item-carrinho">'
           + (i.produto.imagem ? '<img class="dia-item-img" src="' + esc(i.produto.imagem) + '" alt="">' : '<div class="dia-item-img"></div>')
           + '<div class="dia-item-info"><div class="dia-item-nome">' + esc(i.produto.nome) + '</div>'
-          + '<div class="dia-item-linha"><div class="dia-qtd"><button data-menos="' + esc(i.produto.id) + '" aria-label="Menos">−</button><span>' + i.quantidade + '</span><button data-mais="' + esc(i.produto.id) + '" aria-label="Mais">+</button></div>'
+          + '<div class="dia-item-linha"><div class="dia-qtd"><button data-menos="' + esc(i.produto.id) + '" aria-label="' + tx('Menos') + '">−</button><span>' + i.quantidade + '</span><button data-mais="' + esc(i.produto.id) + '" aria-label="' + tx('Mais') + '">+</button></div>'
           + '<span class="dia-item-preco">' + mzn(sub) + '</span></div>'
-          + '<button class="dia-remover" data-remover="' + esc(i.produto.id) + '">Remover</button></div></div>';
+          + '<button class="dia-remover" data-remover="' + esc(i.produto.id) + '">' + tx('Remover') + '</button></div></div>';
       }).join('');
     }
     $('dia-total-carrinho').textContent = mzn(total);
@@ -2471,38 +2527,38 @@ const LOJA_CART_JS = `/*
     var modo = loja.modo;
 
     var blocoModo = '';
-    var textoBotao = 'Confirmar encomenda';
+    var textoBotao = tx('Confirmar encomenda');
     var classeBotao = 'dia-btn-principal';
     var iconeBotao = '';
     if (modo === 'daniel') {
-      var nomesMetodos = { mpesa: ['M-Pesa', 'Vodacom'], emola: ['e-Mola', 'Movitel'], cartao: ['Cartão', 'Visa / Mastercard'] };
-      blocoModo = '<div class="dia-campo"><label>Como queres pagar?</label><div class="dia-metodos">'
+      var nomesMetodos = { mpesa: ['M-Pesa', 'Vodacom'], emola: ['e-Mola', 'Movitel'], cartao: [tx('Cartão'), 'Visa / Mastercard'] };
+      blocoModo = '<div class="dia-campo"><label>' + tx('Como queres pagar?') + '</label><div class="dia-metodos">'
         + loja.metodos.map(function(m){ return '<div class="dia-metodo" data-metodo="' + m + '">' + nomesMetodos[m][0] + '<small>' + nomesMetodos[m][1] + '</small></div>'; }).join('')
         + '</div></div>';
-      textoBotao = 'Pagar ' + mzn(total);
+      textoBotao = tx('Pagar {v}', { v: mzn(total) });
     } else if (modo === 'manual' && loja.manual) {
-      blocoModo = '<div class="dia-pagar-para"><p>Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:</p>'
+      blocoModo = '<div class="dia-pagar-para"><p>' + tx('Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:') + '</p>'
         + (loja.manual.mpesa ? '<div class="dia-numero"><span>M-Pesa <b>' + esc(loja.manual.mpesa) + '</b></span></div>' : '')
         + (loja.manual.emola ? '<div class="dia-numero"><span>e-Mola <b>' + esc(loja.manual.emola) + '</b></span></div>' : '')
-        + (loja.manual.titular ? '<p style="margin:10px 0 0">Em nome de <b>' + esc(loja.manual.titular) + '</b></p>' : '')
+        + (loja.manual.titular ? '<p style="margin:10px 0 0">' + tx('Em nome de') + ' <b>' + esc(loja.manual.titular) + '</b></p>' : '')
         + '</div>';
     } else if (modo === 'whatsapp') {
-      textoBotao = 'Encomendar pelo WhatsApp';
+      textoBotao = tx('Encomendar pelo WhatsApp');
       classeBotao += ' dia-wa';
       iconeBotao = ICONES.whatsapp;
     } else {
-      textoBotao = 'Enviar encomenda';
+      textoBotao = tx('Enviar encomenda');
     }
 
     var j = abrirJanela('<div class="dia-modal-corpo">'
-      + '<h3>Finalizar compra</h3>'
-      + '<p class="dia-modal-sub">' + (modo === 'whatsapp' ? 'Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.' : (modo === 'pedido' ? 'A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.' : 'Só falta isto para receberes a tua encomenda.')) + '</p>'
+      + '<h3>' + tx('Finalizar compra') + '</h3>'
+      + '<p class="dia-modal-sub">' + (modo === 'whatsapp' ? tx('Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.') : (modo === 'pedido' ? tx('A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.') : tx('Só falta isto para receberes a tua encomenda.'))) + '</p>'
       + '<div id="dia-checkout-form">'
-      + '<div class="dia-resumo"><span>' + qtd + ' artigo' + (qtd === 1 ? '' : 's') + '</span><strong>' + mzn(total) + '</strong></div>'
-      + '<div class="dia-campo"><label for="dia-cliente-nome">O teu nome</label><input type="text" id="dia-cliente-nome" maxlength="100" autocomplete="name"></div>'
-      + '<div class="dia-campo"><label for="dia-cliente-telefone">Telefone' + (modo === 'daniel' ? ' (o mesmo da carteira, para M-Pesa/e-Mola)' : '') + '</label><input type="tel" id="dia-cliente-telefone" maxlength="20" placeholder="84 123 4567" autocomplete="tel"></div>'
-      + '<div class="dia-campo"><label for="dia-cliente-email">Email (opcional, para receberes a confirmação)</label><input type="email" id="dia-cliente-email" maxlength="150" autocomplete="email"></div>'
-      + '<div class="dia-campo"><label for="dia-cliente-notas">Morada de entrega / notas (opcional)</label><textarea id="dia-cliente-notas" rows="2" maxlength="500"></textarea></div>'
+      + '<div class="dia-resumo"><span>' + tx(qtd === 1 ? '{n} artigo' : '{n} artigos', { n: qtd }) + '</span><strong>' + mzn(total) + '</strong></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-nome">' + tx('O teu nome') + '</label><input type="text" id="dia-cliente-nome" maxlength="100" autocomplete="name"></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-telefone">' + tx('Telefone') + (modo === 'daniel' ? ' ' + tx('(o mesmo da carteira, para M-Pesa/e-Mola)') : '') + '</label><input type="tel" id="dia-cliente-telefone" maxlength="20" placeholder="84 123 4567" autocomplete="tel"></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-email">' + tx('Email (opcional, para receberes a confirmação)') + '</label><input type="email" id="dia-cliente-email" maxlength="150" autocomplete="email"></div>'
+      + '<div class="dia-campo"><label for="dia-cliente-notas">' + tx('Morada de entrega / notas (opcional)') + '</label><textarea id="dia-cliente-notas" rows="2" maxlength="500"></textarea></div>'
       + blocoModo
       + '<button class="' + classeBotao + '" id="dia-btn-pagar">' + iconeBotao + '<span>' + textoBotao + '</span></button>'
       + '<div class="dia-msg-erro" id="dia-checkout-erro"></div>'
@@ -2528,14 +2584,14 @@ const LOJA_CART_JS = `/*
     var notas = $('dia-cliente-notas').value.trim();
     var elErro = $('dia-checkout-erro');
     elErro.textContent = '';
-    if (nome.length < 2) { elErro.textContent = 'Escreve o teu nome.'; return; }
-    if (soDigitos(telefone).length < 9) { elErro.textContent = 'Escreve o teu número de telefone.'; return; }
-    if (email && !emailValido(email)) { elErro.textContent = 'Esse email não parece válido - podes deixá-lo em branco.'; return; }
-    if (modo === 'daniel' && !metodoSeleccionado) { elErro.textContent = 'Escolhe como queres pagar.'; return; }
+    if (nome.length < 2) { elErro.textContent = tx('Escreve o teu nome.'); return; }
+    if (soDigitos(telefone).length < 9) { elErro.textContent = tx('Escreve o teu número de telefone.'); return; }
+    if (email && !emailValido(email)) { elErro.textContent = tx('Esse email não parece válido - podes deixá-lo em branco.'); return; }
+    if (modo === 'daniel' && !metodoSeleccionado) { elErro.textContent = tx('Escolhe como queres pagar.'); return; }
 
     var btn = $('dia-btn-pagar');
     btn.disabled = true;
-    btn.querySelector('span').textContent = 'A processar...';
+    btn.querySelector('span').textContent = tx('A processar...');
 
     // Para o WhatsApp abrir sem ser bloqueado como pop-up, abrimos já uma
     // janela em branco no próprio clique e só depois lhe damos o endereço.
@@ -2550,13 +2606,14 @@ const LOJA_CART_JS = `/*
       cliente_telefone: telefone,
       cliente_email: email,
       notas: notas,
+      idioma: DIA_LANG,
       itens: itens.map(function(i){ return { produto_id: i.produto.id, quantidade: i.quantidade }; })
     }).then(function(r){
-      if (r.status !== 'success') throw new Error(r.message || 'Não foi possível criar a encomenda.');
+      if (r.status !== 'success') throw new Error((DIA_LANG === 'pt' && r.message) || tx('Não foi possível criar a encomenda.'));
       var enc = r.response;
       if (enc.modo === 'daniel') {
         return post('/loja-pagar', { encomenda_id: enc.encomenda_id, metodo: metodoSeleccionado }).then(function(rp){
-          if (rp.status !== 'success') throw new Error(rp.message || 'Não foi possível iniciar o pagamento.');
+          if (rp.status !== 'success') throw new Error((DIA_LANG === 'pt' && rp.message) || tx('Não foi possível iniciar o pagamento.'));
           if (rp.response.tipo === 'cartao') { window.location.href = rp.response.checkout_url; return; }
           limparCarrinho(); renderCarrinho();
           esperarPagamento(enc.encomenda_id, enc.referencia);
@@ -2573,7 +2630,7 @@ const LOJA_CART_JS = `/*
       if (janelaWa) { try { janelaWa.close(); } catch (e) {} }
       btn.disabled = false;
       btn.querySelector('span').textContent = textoBotao;
-      elErro.textContent = erro.message || 'Algo correu mal. Tenta novamente.';
+      elErro.textContent = erro.message || tx('Algo correu mal. Tenta novamente.');
     });
   }
 
@@ -2587,48 +2644,48 @@ const LOJA_CART_JS = `/*
 
   function mostrarSucesso(enc){
     var html = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div>'
-      + '<h3>Encomenda enviada!</h3><div class="dia-ref">' + esc(enc.referencia) + '</div>';
+      + '<h3>' + tx('Encomenda enviada!') + '</h3><div class="dia-ref">' + esc(enc.referencia) + '</div>';
     if (enc.modo === 'manual' && enc.manual) {
-      html += '<p>Para concluir, paga <b>' + mzn(enc.valor_total) + '</b> com a referência <b>' + esc(enc.referencia) + '</b>:</p>'
-        + (enc.manual.mpesa ? '<div class="dia-numero"><span>M-Pesa <b>' + esc(enc.manual.mpesa) + '</b></span><button class="dia-copiar" data-copiar="' + esc(enc.manual.mpesa) + '">' + ICONES.copiar + 'Copiar</button></div>' : '')
-        + (enc.manual.emola ? '<div class="dia-numero"><span>e-Mola <b>' + esc(enc.manual.emola) + '</b></span><button class="dia-copiar" data-copiar="' + esc(enc.manual.emola) + '">' + ICONES.copiar + 'Copiar</button></div>' : '')
-        + (enc.manual.titular ? '<p>Em nome de <b>' + esc(enc.manual.titular) + '</b>. A loja confirma o pagamento e prepara a tua encomenda.</p>' : '<p>A loja confirma o pagamento e prepara a tua encomenda.</p>');
-      if (enc.whatsapp_url) html += '<a class="dia-btn-principal dia-wa" style="margin-top:16px;text-decoration:none" href="' + esc(enc.whatsapp_url) + '" target="_blank" rel="noopener">' + ICONES.whatsapp + '<span>Enviar comprovativo no WhatsApp</span></a>';
+      html += '<p>' + tx('Para concluir, paga {v} com a referência {r}:', { v: '<b>' + mzn(enc.valor_total) + '</b>', r: '<b>' + esc(enc.referencia) + '</b>' }) + '</p>'
+        + (enc.manual.mpesa ? '<div class="dia-numero"><span>M-Pesa <b>' + esc(enc.manual.mpesa) + '</b></span><button class="dia-copiar" data-copiar="' + esc(enc.manual.mpesa) + '">' + ICONES.copiar + tx('Copiar') + '</button></div>' : '')
+        + (enc.manual.emola ? '<div class="dia-numero"><span>e-Mola <b>' + esc(enc.manual.emola) + '</b></span><button class="dia-copiar" data-copiar="' + esc(enc.manual.emola) + '">' + ICONES.copiar + tx('Copiar') + '</button></div>' : '')
+        + (enc.manual.titular ? '<p>' + tx('Em nome de') + ' <b>' + esc(enc.manual.titular) + '</b>. ' + tx('A loja confirma o pagamento e prepara a tua encomenda.') + '</p>' : '<p>' + tx('A loja confirma o pagamento e prepara a tua encomenda.') + '</p>');
+      if (enc.whatsapp_url) html += '<a class="dia-btn-principal dia-wa" style="margin-top:16px;text-decoration:none" href="' + esc(enc.whatsapp_url) + '" target="_blank" rel="noopener">' + ICONES.whatsapp + '<span>' + tx('Enviar comprovativo no WhatsApp') + '</span></a>';
     } else if (enc.modo === 'whatsapp') {
-      html += '<p>Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.</p>'
-        + '<a class="dia-btn-principal dia-wa" style="margin-top:16px;text-decoration:none" href="' + esc(enc.whatsapp_url) + '" target="_blank" rel="noopener">' + ICONES.whatsapp + '<span>Abrir o WhatsApp outra vez</span></a>';
+      html += '<p>' + tx('Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.') + '</p>'
+        + '<a class="dia-btn-principal dia-wa" style="margin-top:16px;text-decoration:none" href="' + esc(enc.whatsapp_url) + '" target="_blank" rel="noopener">' + ICONES.whatsapp + '<span>' + tx('Abrir o WhatsApp outra vez') + '</span></a>';
     } else {
-      html += '<p>A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.</p>';
+      html += '<p>' + tx('A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.') + '</p>';
     }
-    html += '<button class="dia-btn-sec" data-fechar-final>Continuar a comprar</button></div>';
+    html += '<button class="dia-btn-sec" data-fechar-final>' + tx('Continuar a comprar') + '</button></div>';
     var el = mostrarEstado(html);
     el.querySelector('[data-fechar-final]').addEventListener('click', fecharJanela);
     Array.prototype.forEach.call(el.querySelectorAll('[data-copiar]'), function(b){
       b.addEventListener('click', function(){
         var v = b.getAttribute('data-copiar');
         try { navigator.clipboard.writeText(v); } catch (e) {}
-        b.innerHTML = ICONES.certo + 'Copiado';
+        b.innerHTML = ICONES.certo + tx('Copiado');
       });
     });
   }
 
   function esperarPagamento(encomendaId, referencia){
-    var el = mostrarEstado('<div class="dia-estado-pagamento"><div class="dia-spinner"></div><h3>Confirma no teu telemóvel</h3>'
-      + '<p id="dia-estado-texto">Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.</p></div>');
+    var el = mostrarEstado('<div class="dia-estado-pagamento"><div class="dia-spinner"></div><h3>' + tx('Confirma no teu telemóvel') + '</h3>'
+      + '<p id="dia-estado-texto">' + tx('Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.') + '</p></div>');
     var tentativas = 0;
     function verificar(){
       post('/loja-estado', { encomenda_id: encomendaId }).then(function(r){
         if (r.status === 'success' && r.response.estado === 'Pago') {
-          el.innerHTML = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div><h3>Pagamento confirmado!</h3>'
-            + '<div class="dia-ref">' + esc(referencia) + '</div><p>Obrigado pela tua compra. A loja já recebeu a tua encomenda.</p>'
-            + '<button class="dia-btn-sec" data-fechar-final>Continuar a comprar</button></div>';
+          el.innerHTML = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div><h3>' + tx('Pagamento confirmado!') + '</h3>'
+            + '<div class="dia-ref">' + esc(referencia) + '</div><p>' + tx('Obrigado pela tua compra. A loja já recebeu a tua encomenda.') + '</p>'
+            + '<button class="dia-btn-sec" data-fechar-final>' + tx('Continuar a comprar') + '</button></div>';
           el.querySelector('[data-fechar-final]').addEventListener('click', fecharJanela);
           return;
         }
         tentativas++;
         if (tentativas >= 25) {
           var t = $('dia-estado-texto');
-          if (t) t.textContent = 'Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.';
+          if (t) t.textContent = tx('Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.');
           return;
         }
         setTimeout(verificar, 3000);
@@ -2657,7 +2714,7 @@ const LOJA_CART_JS = `/*
       renderCarrinho();
     }).catch(function(){
       renderCapa();
-      $('dia-catalogo').innerHTML = '<div class="dia-vazio">Não foi possível carregar os produtos. Recarrega a página.</div>';
+      $('dia-catalogo').innerHTML = '<div class="dia-vazio">' + tx('Não foi possível carregar os produtos. Recarrega a página.') + '</div>';
     });
   }
 
@@ -2692,6 +2749,20 @@ const GALERIA_VIEWER_JS = `/*
 */
 (function(){
   'use strict';
+
+  // ---- Idioma do site (lido do <html lang>): pt, en, fr ou es ----
+  var DIA_LANG = (function(){
+    var l = String(document.documentElement.getAttribute('lang') || 'pt').toLowerCase().slice(0, 2);
+    return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
+  })();
+  var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
+  var DIA_TXT = {"en": {"A carregar álbuns...": "Loading albums...", "Ainda não há álbuns aqui.": "No albums here yet.", "Sem ficheiros": "No files", "{n} ficheiro": "{n} file", "{n} ficheiros": "{n} files", "Não foi possível abrir este álbum.": "Could not open this album.", "Ainda não há fotos ou vídeos neste álbum.": "No photos or videos in this album yet.", "Não foi possível carregar os álbuns.": "Could not load the albums.", "Seguinte": "Next", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server.", "Anterior": "Previous"}, "fr": {"A carregar álbuns...": "Chargement des albums...", "Ainda não há álbuns aqui.": "Aucun album pour le moment.", "Sem ficheiros": "Aucun fichier", "{n} ficheiro": "{n} fichier", "{n} ficheiros": "{n} fichiers", "Não foi possível abrir este álbum.": "Impossible d'ouvrir cet album.", "Ainda não há fotos ou vídeos neste álbum.": "Aucune photo ni vidéo dans cet album pour le moment.", "Não foi possível carregar os álbuns.": "Impossible de charger les albums.", "Seguinte": "Suivant", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur.", "Anterior": "Précédent"}, "es": {"A carregar álbuns...": "Cargando álbumes...", "Ainda não há álbuns aqui.": "Todavía no hay álbumes.", "Sem ficheiros": "Sin archivos", "{n} ficheiro": "{n} archivo", "{n} ficheiros": "{n} archivos", "Não foi possível abrir este álbum.": "No se pudo abrir este álbum.", "Ainda não há fotos ou vídeos neste álbum.": "Todavía no hay fotos ni vídeos en este álbum.", "Não foi possível carregar os álbuns.": "No se pudieron cargar los álbumes.", "Seguinte": "Siguiente", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor.", "Anterior": "Anterior"}};
+  function tx(s, v){
+    var d = DIA_TXT[DIA_LANG];
+    var r = (d && d[s]) || s;
+    if (v) { for (var k in v) { r = r.split('{' + k + '}').join(String(v[k])); } }
+    return r;
+  }
 
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
@@ -2770,7 +2841,7 @@ const GALERIA_VIEWER_JS = `/*
       console.error('Daniel IA: falta uma div com id="daniel-ia-galeria" nesta página - os álbuns não têm onde aparecer.');
       return null;
     }
-    alvo.innerHTML = '<div id="dig-grelha" class="dig-grelha"><p class="dig-vazio">A carregar álbuns...</p></div>';
+    alvo.innerHTML = '<div id="dig-grelha" class="dig-grelha"><p class="dig-vazio">' + tx('A carregar álbuns...') + '</p></div>';
     return document.getElementById('dig-grelha');
   }
 
@@ -2778,19 +2849,19 @@ const GALERIA_VIEWER_JS = `/*
     var grelha = document.getElementById('dig-grelha');
     if (!grelha) return;
     if (!albuns || albuns.length === 0) {
-      grelha.innerHTML = '<p class="dig-vazio">Ainda não há álbuns aqui.</p>';
+      grelha.innerHTML = '<p class="dig-vazio">' + tx('Ainda não há álbuns aqui.') + '</p>';
       return;
     }
     grelha.innerHTML = albuns.map(function(a){
       var capa = a.capa
         ? '<img class="dig-album-capa" src="' + escaparAtributo(a.capa) + '" alt="' + escaparAtributo(a.titulo) + '">'
-        : '<div class="dig-album-capa dig-album-capa-vazia">Sem ficheiros</div>';
+        : '<div class="dig-album-capa dig-album-capa-vazia">' + tx('Sem ficheiros') + '</div>';
       return ''
         + '<div class="dig-album-card" data-id="' + a.id + '">'
         + capa
         + '<div class="dig-album-info">'
         + '<div class="dig-album-titulo">' + escaparHtml(a.titulo) + '</div>'
-        + '<div class="dig-album-meta">' + a.total_media + (a.total_media === 1 ? ' ficheiro' : ' ficheiros') + '</div>'
+        + '<div class="dig-album-meta">' + tx(a.total_media === 1 ? '{n} ficheiro' : '{n} ficheiros', { n: a.total_media }) + '</div>'
         + '</div>'
         + '</div>';
     }).join('');
@@ -2815,11 +2886,11 @@ const GALERIA_VIEWER_JS = `/*
     el.innerHTML = ''
       + '<div class="dig-lightbox-topo">'
       + '<div><div class="dig-lightbox-titulo-album" id="dig-titulo-album"></div><div class="dig-lightbox-contador" id="dig-contador"></div></div>'
-      + '<button class="dig-lightbox-fechar" id="dig-fechar" aria-label="Fechar">&times;</button>'
+      + '<button class="dig-lightbox-fechar" id="dig-fechar" aria-label="' + tx('Fechar') + '">&times;</button>'
       + '</div>'
-      + '<button class="dig-lightbox-seta dig-esquerda" id="dig-anterior" aria-label="Anterior">&#8249;</button>'
+      + '<button class="dig-lightbox-seta dig-esquerda" id="dig-anterior" aria-label="' + tx('Anterior') + '">&#8249;</button>'
       + '<div class="dig-lightbox-palco" id="dig-palco"></div>'
-      + '<button class="dig-lightbox-seta dig-direita" id="dig-seguinte" aria-label="Seguinte">&#8250;</button>';
+      + '<button class="dig-lightbox-seta dig-direita" id="dig-seguinte" aria-label="' + tx('Seguinte') + '">&#8250;</button>';
     document.body.appendChild(el);
     lightboxEl = el;
 
@@ -2867,7 +2938,7 @@ const GALERIA_VIEWER_JS = `/*
     }).then(function(r){ return r.json(); })
       .then(function(r){
         if (r.status !== 'success') {
-          mostrarPalco('<p class="dig-lightbox-vazio">' + escaparHtml(r.message || 'Não foi possível abrir este álbum.') + '</p>', true);
+          mostrarPalco('<p class="dig-lightbox-vazio">' + escaparHtml((DIA_LANG === 'pt' && r.message) || tx('Não foi possível abrir este álbum.')) + '</p>', true);
           return;
         }
         albumActual = r.response.album;
@@ -2876,13 +2947,13 @@ const GALERIA_VIEWER_JS = `/*
         document.getElementById('dig-titulo-album').textContent = albumActual.titulo || '';
         if (mediaAtual.length === 0) {
           document.getElementById('dig-contador').textContent = '';
-          mostrarPalco('<p class="dig-lightbox-vazio">Ainda não há fotos ou vídeos neste álbum.</p>', true);
+          mostrarPalco('<p class="dig-lightbox-vazio">' + tx('Ainda não há fotos ou vídeos neste álbum.') + '</p>', true);
           return;
         }
         mostrarMediaAtual();
       })
       .catch(function(){
-        mostrarPalco('<p class="dig-lightbox-vazio">Não foi possível ligar ao servidor.</p>', true);
+        mostrarPalco('<p class="dig-lightbox-vazio">' + tx('Não foi possível ligar ao servidor.') + '</p>', true);
       });
   }
 
@@ -3002,12 +3073,12 @@ const GALERIA_VIEWER_JS = `/*
           renderGrelha(r.response.albuns || []);
         } else {
           var grelha = document.getElementById('dig-grelha');
-          if (grelha) grelha.innerHTML = '<p class="dig-vazio">Não foi possível carregar os álbuns.</p>';
+          if (grelha) grelha.innerHTML = '<p class="dig-vazio">' + tx('Não foi possível carregar os álbuns.') + '</p>';
         }
       })
       .catch(function(){
         var grelha = document.getElementById('dig-grelha');
-        if (grelha) grelha.innerHTML = '<p class="dig-vazio">Não foi possível ligar ao servidor.</p>';
+        if (grelha) grelha.innerHTML = '<p class="dig-vazio">' + tx('Não foi possível ligar ao servidor.') + '</p>';
       });
   }
 
@@ -3041,6 +3112,20 @@ const PORTFOLIO_VIEWER_JS = `/*
 */
 (function(){
   'use strict';
+
+  // ---- Idioma do site (lido do <html lang>): pt, en, fr ou es ----
+  var DIA_LANG = (function(){
+    var l = String(document.documentElement.getAttribute('lang') || 'pt').toLowerCase().slice(0, 2);
+    return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
+  })();
+  var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
+  var DIA_TXT = {"en": {"A carregar trabalhos...": "Loading projects...", "Ainda não há trabalhos aqui.": "No projects here yet.", "Ver projecto": "View project", "Não foi possível carregar os trabalhos.": "Could not load the projects.", "Sem imagem": "No image", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server."}, "fr": {"A carregar trabalhos...": "Chargement des projets...", "Ainda não há trabalhos aqui.": "Aucun projet pour le moment.", "Ver projecto": "Voir le projet", "Não foi possível carregar os trabalhos.": "Impossible de charger les projets.", "Sem imagem": "Pas d'image", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur."}, "es": {"A carregar trabalhos...": "Cargando proyectos...", "Ainda não há trabalhos aqui.": "Todavía no hay proyectos.", "Ver projecto": "Ver proyecto", "Não foi possível carregar os trabalhos.": "No se pudieron cargar los proyectos.", "Sem imagem": "Sin imagen", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor."}};
+  function tx(s, v){
+    var d = DIA_TXT[DIA_LANG];
+    var r = (d && d[s]) || s;
+    if (v) { for (var k in v) { r = r.split('{' + k + '}').join(String(v[k])); } }
+    return r;
+  }
 
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
@@ -3097,7 +3182,7 @@ const PORTFOLIO_VIEWER_JS = `/*
       console.error('Daniel IA: falta uma div com id="daniel-ia-portfolio" nesta página - os trabalhos não têm onde aparecer.');
       return null;
     }
-    alvo.innerHTML = '<div id="dip-grelha" class="dip-grelha"><p class="dip-vazio">A carregar trabalhos...</p></div>';
+    alvo.innerHTML = '<div id="dip-grelha" class="dip-grelha"><p class="dip-vazio">' + tx('A carregar trabalhos...') + '</p></div>';
     return document.getElementById('dip-grelha');
   }
 
@@ -3105,13 +3190,13 @@ const PORTFOLIO_VIEWER_JS = `/*
     var grelha = document.getElementById('dip-grelha');
     if (!grelha) return;
     if (!trabalhos || trabalhos.length === 0) {
-      grelha.innerHTML = '<p class="dip-vazio">Ainda não há trabalhos aqui.</p>';
+      grelha.innerHTML = '<p class="dip-vazio">' + tx('Ainda não há trabalhos aqui.') + '</p>';
       return;
     }
     grelha.innerHTML = trabalhos.map(function(t){
       var imagem = t.imagem
         ? '<img class="dip-card-img" src="' + escaparAtributo(t.imagem) + '" alt="' + escaparAtributo(t.titulo) + '">'
-        : '<div class="dip-card-img dip-card-img-vazia">Sem imagem</div>';
+        : '<div class="dip-card-img dip-card-img-vazia">' + tx('Sem imagem') + '</div>';
       return ''
         + '<div class="dip-card" data-id="' + t.id + '">'
         + imagem
@@ -3154,11 +3239,11 @@ const PORTFOLIO_VIEWER_JS = `/*
       ? '<img class="dip-modal-img" src="' + escaparAtributo(trabalho.imagem) + '" alt="' + escaparAtributo(trabalho.titulo) + '">'
       : '';
     var link = trabalho.link
-      ? '<a class="dip-modal-link" href="' + escaparAtributo(trabalho.link) + '" target="_blank" rel="noopener">Ver projecto &#8594;</a>'
+      ? '<a class="dip-modal-link" href="' + escaparAtributo(trabalho.link) + '" target="_blank" rel="noopener">' + tx('Ver projecto') + ' &#8594;</a>'
       : '';
     el.innerHTML = ''
       + '<div class="dip-modal">'
-      + '<button class="dip-fechar" id="dip-fechar" aria-label="Fechar">&times;</button>'
+      + '<button class="dip-fechar" id="dip-fechar" aria-label="' + tx('Fechar') + '">&times;</button>'
       + imagem
       + '<div class="dip-modal-corpo">'
       + '<div class="dip-modal-titulo">' + escaparHtml(trabalho.titulo) + '</div>'
@@ -3192,12 +3277,12 @@ const PORTFOLIO_VIEWER_JS = `/*
           renderGrelha(trabalhosCache);
         } else {
           var grelha = document.getElementById('dip-grelha');
-          if (grelha) grelha.innerHTML = '<p class="dip-vazio">Não foi possível carregar os trabalhos.</p>';
+          if (grelha) grelha.innerHTML = '<p class="dip-vazio">' + tx('Não foi possível carregar os trabalhos.') + '</p>';
         }
       })
       .catch(function(){
         var grelha = document.getElementById('dip-grelha');
-        if (grelha) grelha.innerHTML = '<p class="dip-vazio">Não foi possível ligar ao servidor.</p>';
+        if (grelha) grelha.innerHTML = '<p class="dip-vazio">' + tx('Não foi possível ligar ao servidor.') + '</p>';
       });
   }
 
@@ -3231,6 +3316,20 @@ const BLOG_VIEWER_JS = `/*
 (function(){
   'use strict';
 
+  // ---- Idioma do site (lido do <html lang>): pt, en, fr ou es ----
+  var DIA_LANG = (function(){
+    var l = String(document.documentElement.getAttribute('lang') || 'pt').toLowerCase().slice(0, 2);
+    return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
+  })();
+  var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
+  var DIA_TXT = {"en": {"A carregar artigos...": "Loading articles...", "Ainda não há artigos aqui.": "No articles here yet.", "Não foi possível carregar os artigos.": "Could not load the articles.", "Sem imagem": "No image", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server."}, "fr": {"A carregar artigos...": "Chargement des articles...", "Ainda não há artigos aqui.": "Aucun article pour le moment.", "Não foi possível carregar os artigos.": "Impossible de charger les articles.", "Sem imagem": "Pas d'image", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur."}, "es": {"A carregar artigos...": "Cargando artículos...", "Ainda não há artigos aqui.": "Todavía no hay artículos.", "Não foi possível carregar os artigos.": "No se pudieron cargar los artículos.", "Sem imagem": "Sin imagen", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor."}};
+  function tx(s, v){
+    var d = DIA_TXT[DIA_LANG];
+    var r = (d && d[s]) || s;
+    if (v) { for (var k in v) { r = r.split('{' + k + '}').join(String(v[k])); } }
+    return r;
+  }
+
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
 
@@ -3254,7 +3353,7 @@ const BLOG_VIEWER_JS = `/*
     try {
       var d = new Date(iso);
       if (isNaN(d.getTime())) return '';
-      return d.toLocaleDateString('pt-PT', { day: '2-digit', month: 'long', year: 'numeric' });
+      return d.toLocaleDateString(DIA_LOCALE, { day: '2-digit', month: 'long', year: 'numeric' });
     } catch (e) { return ''; }
   }
 
@@ -3296,7 +3395,7 @@ const BLOG_VIEWER_JS = `/*
       console.error('Daniel IA: falta uma div com id="daniel-ia-blog" nesta página - os artigos não têm onde aparecer.');
       return null;
     }
-    alvo.innerHTML = '<div id="dib-grelha" class="dib-grelha"><p class="dib-vazio">A carregar artigos...</p></div>';
+    alvo.innerHTML = '<div id="dib-grelha" class="dib-grelha"><p class="dib-vazio">' + tx('A carregar artigos...') + '</p></div>';
     return document.getElementById('dib-grelha');
   }
 
@@ -3304,13 +3403,13 @@ const BLOG_VIEWER_JS = `/*
     var grelha = document.getElementById('dib-grelha');
     if (!grelha) return;
     if (!posts || posts.length === 0) {
-      grelha.innerHTML = '<p class="dib-vazio">Ainda não há artigos aqui.</p>';
+      grelha.innerHTML = '<p class="dib-vazio">' + tx('Ainda não há artigos aqui.') + '</p>';
       return;
     }
     grelha.innerHTML = posts.map(function(p){
       var imagem = p.imagem
         ? '<img class="dib-card-img" src="' + escaparAtributo(p.imagem) + '" alt="' + escaparAtributo(p.titulo) + '">'
-        : '<div class="dib-card-img dib-card-img-vazia">Sem imagem</div>';
+        : '<div class="dib-card-img dib-card-img-vazia">' + tx('Sem imagem') + '</div>';
       var dataFormatada = formatarData(p.data);
       return ''
         + '<div class="dib-card" data-id="' + p.id + '">'
@@ -3357,7 +3456,7 @@ const BLOG_VIEWER_JS = `/*
     var dataFormatada = formatarData(post.data);
     el.innerHTML = ''
       + '<div class="dib-artigo">'
-      + '<button class="dib-fechar" id="dib-fechar" aria-label="Fechar">&times;</button>'
+      + '<button class="dib-fechar" id="dib-fechar" aria-label="' + tx('Fechar') + '">&times;</button>'
       + imagem
       + '<div class="dib-artigo-corpo">'
       + (dataFormatada ? '<div class="dib-artigo-data">' + escaparHtml(dataFormatada) + '</div>' : '')
@@ -3392,12 +3491,12 @@ const BLOG_VIEWER_JS = `/*
           renderGrelha(postsCache);
         } else {
           var grelha = document.getElementById('dib-grelha');
-          if (grelha) grelha.innerHTML = '<p class="dib-vazio">Não foi possível carregar os artigos.</p>';
+          if (grelha) grelha.innerHTML = '<p class="dib-vazio">' + tx('Não foi possível carregar os artigos.') + '</p>';
         }
       })
       .catch(function(){
         var grelha = document.getElementById('dib-grelha');
-        if (grelha) grelha.innerHTML = '<p class="dib-vazio">Não foi possível ligar ao servidor.</p>';
+        if (grelha) grelha.innerHTML = '<p class="dib-vazio">' + tx('Não foi possível ligar ao servidor.') + '</p>';
       });
   }
 
@@ -3428,6 +3527,20 @@ const CONTACTO_FORM_JS = `/*
 */
 (function(){
   'use strict';
+
+  // ---- Idioma do site (lido do <html lang>): pt, en, fr ou es ----
+  var DIA_LANG = (function(){
+    var l = String(document.documentElement.getAttribute('lang') || 'pt').toLowerCase().slice(0, 2);
+    return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
+  })();
+  var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
+  var DIA_TXT = {"en": {"Fale connosco": "Get in touch", "Preenche o formulário e entraremos em contacto.": "Fill in the form and we'll get back to you.", "Nome": "Name", "Email": "Email", "Mensagem": "Message", "Enviar mensagem": "Send message", "Preenche todos os campos.": "Please fill in all fields.", "Introduz um email válido.": "Please enter a valid email.", "A enviar...": "Sending...", "Mensagem enviada. Entraremos em contacto em breve.": "Message sent. We'll be in touch soon.", "Não foi possível enviar a mensagem.": "Could not send the message.", "Não foi possível ligar ao servidor.": "Could not connect to the server."}, "fr": {"Fale connosco": "Contactez-nous", "Preenche o formulário e entraremos em contacto.": "Remplissez le formulaire et nous vous recontacterons.", "Nome": "Nom", "Email": "E-mail", "Mensagem": "Message", "Enviar mensagem": "Envoyer le message", "Preenche todos os campos.": "Veuillez remplir tous les champs.", "Introduz um email válido.": "Veuillez saisir une adresse e-mail valide.", "A enviar...": "Envoi en cours...", "Mensagem enviada. Entraremos em contacto em breve.": "Message envoyé. Nous vous répondrons bientôt.", "Não foi possível enviar a mensagem.": "Impossible d'envoyer le message.", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur."}, "es": {"Fale connosco": "Contáctanos", "Preenche o formulário e entraremos em contacto.": "Rellena el formulario y te contactaremos.", "Nome": "Nombre", "Email": "Correo", "Mensagem": "Mensaje", "Enviar mensagem": "Enviar mensaje", "Preenche todos os campos.": "Rellena todos los campos.", "Introduz um email válido.": "Introduce un correo válido.", "A enviar...": "Enviando...", "Mensagem enviada. Entraremos em contacto em breve.": "Mensaje enviado. Te responderemos pronto.", "Não foi possível enviar a mensagem.": "No se pudo enviar el mensaje.", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor."}};
+  function tx(s, v){
+    var d = DIA_TXT[DIA_LANG];
+    var r = (d && d[s]) || s;
+    if (v) { for (var k in v) { r = r.split('{' + k + '}').join(String(v[k])); } }
+    return r;
+  }
 
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
@@ -3468,22 +3581,22 @@ const CONTACTO_FORM_JS = `/*
     }
     alvo.innerHTML = ''
       + '<div class="dic-caixa">'
-      + '<p class="dic-titulo">Fale connosco</p>'
-      + '<p class="dic-sub">Preenche o formulário e entraremos em contacto.</p>'
+      + '<p class="dic-titulo">' + tx('Fale connosco') + '</p>'
+      + '<p class="dic-sub">' + tx('Preenche o formulário e entraremos em contacto.') + '</p>'
       + '<form id="dic-form">'
       + '<div class="dic-campo">'
-      + '<label class="dic-label" for="dic-nome">Nome</label>'
+      + '<label class="dic-label" for="dic-nome">' + tx('Nome') + '</label>'
       + '<input class="dic-input" id="dic-nome" name="nome" type="text" required maxlength="120">'
       + '</div>'
       + '<div class="dic-campo">'
-      + '<label class="dic-label" for="dic-email">Email</label>'
+      + '<label class="dic-label" for="dic-email">' + tx('Email') + '</label>'
       + '<input class="dic-input" id="dic-email" name="email" type="email" required maxlength="160">'
       + '</div>'
       + '<div class="dic-campo">'
-      + '<label class="dic-label" for="dic-mensagem">Mensagem</label>'
+      + '<label class="dic-label" for="dic-mensagem">' + tx('Mensagem') + '</label>'
       + '<textarea class="dic-textarea" id="dic-mensagem" name="mensagem" required maxlength="2000"></textarea>'
       + '</div>'
-      + '<button class="dic-botao" id="dic-enviar" type="submit">Enviar mensagem</button>'
+      + '<button class="dic-botao" id="dic-enviar" type="submit">' + tx('Enviar mensagem') + '</button>'
       + '<div class="dic-msg" id="dic-msg"></div>'
       + '</form>'
       + '</div>';
@@ -3527,16 +3640,16 @@ const CONTACTO_FORM_JS = `/*
       var botao = document.getElementById('dic-enviar');
 
       if (!nome || !email || !mensagem) {
-        mostrarMensagem('erro', 'Preenche todos os campos.');
+        mostrarMensagem('erro', tx('Preenche todos os campos.'));
         return;
       }
       if (!validarEmail(email)) {
-        mostrarMensagem('erro', 'Introduz um email válido.');
+        mostrarMensagem('erro', tx('Introduz um email válido.'));
         return;
       }
 
       botao.disabled = true;
-      botao.textContent = 'A enviar...';
+      botao.textContent = tx('A enviar...');
       mostrarMensagem('', '');
 
       fetch(CONTAINER_URL + '/contacto-enviar', {
@@ -3546,18 +3659,18 @@ const CONTACTO_FORM_JS = `/*
       }).then(function(r){ return r.json(); })
         .then(function(r){
           botao.disabled = false;
-          botao.textContent = 'Enviar mensagem';
+          botao.textContent = tx('Enviar mensagem');
           if (r.status === 'success') {
-            mostrarMensagem('sucesso', 'Mensagem enviada. Entraremos em contacto em breve.');
+            mostrarMensagem('sucesso', tx('Mensagem enviada. Entraremos em contacto em breve.'));
             form.reset();
           } else {
-            mostrarMensagem('erro', (r.message || 'Não foi possível enviar a mensagem.'));
+            mostrarMensagem('erro', ((DIA_LANG === 'pt' && r.message) || tx('Não foi possível enviar a mensagem.')));
           }
         })
         .catch(function(){
           botao.disabled = false;
-          botao.textContent = 'Enviar mensagem';
-          mostrarMensagem('erro', 'Não foi possível ligar ao servidor.');
+          botao.textContent = tx('Enviar mensagem');
+          mostrarMensagem('erro', tx('Não foi possível ligar ao servidor.'));
         });
     });
   }
@@ -3631,6 +3744,7 @@ app.get('/contacto-form.js', (req, res) => {
 app.post('/generate', async (req, res) => {
   try {
     const { owner, nome, tipo, prompt, logo_data_url, imagens_data_url } = req.body;
+    const idioma = normalizarIdioma(req.body.idioma);
 
     if (!owner || !nome || !tipo || !prompt) {
       return res.json({ status: 'error', message: 'Faltam dados: nome, tipo e prompt são obrigatórios.' });
@@ -3689,7 +3803,7 @@ app.post('/generate', async (req, res) => {
     });
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua })
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
@@ -3698,7 +3812,7 @@ app.post('/generate', async (req, res) => {
   }
 });
 
-async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua }) {
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma }) {
   try {
     // ---- Logótipo (opcional) ----
     // Esta função já corre depois de termos respondido ao pedido (ver nota
@@ -3739,7 +3853,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     }
 
     // ---- Gerar o HTML com a OpenAI ----
-    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua });
+    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma });
 
     // ---- Guardar o HTML no Bunny Storage ----
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -5113,6 +5227,7 @@ app.post('/loja-encomenda', async (req, res) => {
   try {
     const { site_id, cliente_nome, cliente_telefone, cliente_email, itens } = req.body;
     const notas = String(req.body.notas || '').trim().slice(0, 500);
+    const idiomaCliente = normalizarIdioma(req.body.idioma);
 
     if (!site_id || !cliente_nome || !cliente_telefone || !Array.isArray(itens) || itens.length === 0) {
       return res.json({ status: 'error', message: 'Faltam dados: site_id, cliente_nome, cliente_telefone e itens são obrigatórios.' });
@@ -5184,17 +5299,18 @@ app.post('/loja-encomenda', async (req, res) => {
 
     if (modo !== 'daniel') {
       // Sem pagamento online: o dono recebe já a encomenda por email.
-      avisarEncomenda(site, encomendaId, modo, cfg);
+      avisarEncomenda(site, encomendaId, modo, cfg, idiomaCliente);
       if (modo === 'manual') {
         resposta.manual = { mpesa: cfg.mpesa, emola: cfg.emola, titular: cfg.titular };
       }
       if (cfg.whatsapp) {
+        const W = TEXTOS_WHATSAPP_ENCOMENDA[idiomaCliente];
         const linhas = itensCalculados.map(i => '• ' + i.quantidade + 'x ' + i.nome + ' - ' + (i.preco_unitario * i.quantidade).toLocaleString('pt-PT') + ' MZN');
-        const texto = 'Olá! Quero fazer esta encomenda (' + referencia + '):\n\n' + linhas.join('\n')
-          + '\n\nTotal: ' + valorTotal.toLocaleString('pt-PT') + ' MZN'
-          + '\n\nNome: ' + String(cliente_nome).trim()
-          + '\nTelefone: ' + String(cliente_telefone).trim()
-          + (notas ? '\nMorada/notas: ' + notas : '');
+        const texto = W.ola + ' (' + referencia + '):\n\n' + linhas.join('\n')
+          + '\n\n' + W.total + ': ' + valorTotal.toLocaleString('pt-PT') + ' MZN'
+          + '\n\n' + W.nome + ': ' + String(cliente_nome).trim()
+          + '\n' + W.telefone + ': ' + String(cliente_telefone).trim()
+          + (notas ? '\n' + W.notas + ': ' + notas : '');
         resposta.whatsapp_url = 'https://wa.me/' + cfg.whatsapp + '?text=' + encodeURIComponent(texto);
       }
     }
@@ -6905,25 +7021,81 @@ function templateEmailEncomendaDono(nomeLoja, encomenda, itens, modo, cfg) {
 
 // Email ao cliente a confirmar que a encomenda foi recebida (modos sem
 // pagamento online - no modo "daniel" o recibo continua a ir no webhook).
-function templateEmailEncomendaCliente(nomeLoja, encomenda, modo, cfg) {
+const TEXTOS_WHATSAPP_ENCOMENDA = {
+  pt: { ola: 'Olá! Quero fazer esta encomenda', total: 'Total', nome: 'Nome', telefone: 'Telefone', notas: 'Morada/notas' },
+  en: { ola: "Hello! I'd like to place this order", total: 'Total', nome: 'Name', telefone: 'Phone', notas: 'Address/notes' },
+  fr: { ola: 'Bonjour ! Je souhaite passer cette commande', total: 'Total', nome: 'Nom', telefone: 'Téléphone', notas: 'Adresse/remarques' },
+  es: { ola: '¡Hola! Quiero hacer este pedido', total: 'Total', nome: 'Nombre', telefone: 'Teléfono', notas: 'Dirección/notas' }
+};
+
+// Email ao cliente, no idioma do site onde comprou.
+const TEXTOS_EMAIL_CLIENTE = {
+  pt: {
+    assunto: (loja) => `Recebemos a tua encomenda - ${loja}`,
+    titulo: (ref) => 'Encomenda ' + ref,
+    ola: (n) => `Olá, ${n}.`,
+    recebemos: (ref, loja, total) => `Recebemos a tua encomenda <strong>${ref}</strong> em ${loja}, no valor de <strong>${total}</strong>.`,
+    pagar: (formas, titular, ref) => 'Para concluir, envia o pagamento para ' + formas.join(' ou ') + (titular ? ' (em nome de ' + titular + ')' : '') + ', com a referência <strong>' + ref + '</strong>.',
+    confirma: 'A loja confirma o pagamento e prepara a tua encomenda.',
+    contacta: 'A loja vai contactar-te em breve para combinar o pagamento e a entrega.',
+    botao: 'Falar com a loja no WhatsApp',
+    whats: (ref) => 'Olá! Sobre a encomenda ' + ref
+  },
+  en: {
+    assunto: (loja) => `We received your order - ${loja}`,
+    titulo: (ref) => 'Order ' + ref,
+    ola: (n) => `Hello, ${n}.`,
+    recebemos: (ref, loja, total) => `We received your order <strong>${ref}</strong> at ${loja}, for a total of <strong>${total}</strong>.`,
+    pagar: (formas, titular, ref) => 'To complete it, send the payment to ' + formas.join(' or ') + (titular ? ' (account holder: ' + titular + ')' : '') + ', using the reference <strong>' + ref + '</strong>.',
+    confirma: 'The store will confirm the payment and prepare your order.',
+    contacta: 'The store will contact you soon to arrange payment and delivery.',
+    botao: 'Chat with the store on WhatsApp',
+    whats: (ref) => 'Hello! About order ' + ref
+  },
+  fr: {
+    assunto: (loja) => `Nous avons reçu votre commande - ${loja}`,
+    titulo: (ref) => 'Commande ' + ref,
+    ola: (n) => `Bonjour ${n},`,
+    recebemos: (ref, loja, total) => `Nous avons bien reçu votre commande <strong>${ref}</strong> chez ${loja}, d'un montant de <strong>${total}</strong>.`,
+    pagar: (formas, titular, ref) => 'Pour finaliser, envoyez le paiement à ' + formas.join(' ou ') + (titular ? ' (au nom de ' + titular + ')' : '') + ', avec la référence <strong>' + ref + '</strong>.',
+    confirma: 'La boutique confirmera le paiement et préparera votre commande.',
+    contacta: 'La boutique vous contactera bientôt pour convenir du paiement et de la livraison.',
+    botao: 'Contacter la boutique sur WhatsApp',
+    whats: (ref) => 'Bonjour ! À propos de la commande ' + ref
+  },
+  es: {
+    assunto: (loja) => `Hemos recibido tu pedido - ${loja}`,
+    titulo: (ref) => 'Pedido ' + ref,
+    ola: (n) => `Hola, ${n}.`,
+    recebemos: (ref, loja, total) => `Hemos recibido tu pedido <strong>${ref}</strong> en ${loja}, por un total de <strong>${total}</strong>.`,
+    pagar: (formas, titular, ref) => 'Para terminar, envía el pago a ' + formas.join(' o ') + (titular ? ' (a nombre de ' + titular + ')' : '') + ', con la referencia <strong>' + ref + '</strong>.',
+    confirma: 'La tienda confirmará el pago y preparará tu pedido.',
+    contacta: 'La tienda te contactará pronto para acordar el pago y la entrega.',
+    botao: 'Hablar con la tienda por WhatsApp',
+    whats: (ref) => '¡Hola! Sobre el pedido ' + ref
+  }
+};
+
+function templateEmailEncomendaCliente(nomeLoja, encomenda, modo, cfg, idioma) {
+  const T = TEXTOS_EMAIL_CLIENTE[normalizarIdioma(idioma)];
   const ref = referenciaEncomenda(encomenda._id);
   const total = Number(encomenda['Valor Total'] || 0).toLocaleString('pt-PT') + ' MZN';
   const primeiro = escaparHtml(String(encomenda['Cliente Nome'] || '').split(' ')[0]);
-  const paragrafos = [`Recebemos a tua encomenda <strong>${escaparHtml(ref)}</strong> em ${escaparHtml(nomeLoja)}, no valor de <strong>${escaparHtml(total)}</strong>.`];
+  const paragrafos = [T.recebemos(escaparHtml(ref), escaparHtml(nomeLoja), escaparHtml(total))];
   if (modo === 'manual') {
     const formas = [];
     if (cfg.mpesa) formas.push('M-Pesa: <strong>' + escaparHtml(cfg.mpesa) + '</strong>');
     if (cfg.emola) formas.push('e-Mola: <strong>' + escaparHtml(cfg.emola) + '</strong>');
-    paragrafos.push('Para concluir, envia o pagamento para ' + formas.join(' ou ') + (cfg.titular ? ' (em nome de ' + escaparHtml(cfg.titular) + ')' : '') + ', com a referência <strong>' + escaparHtml(ref) + '</strong>.');
-    paragrafos.push('A loja confirma o pagamento e prepara a tua encomenda.');
+    paragrafos.push(T.pagar(formas, cfg.titular ? escaparHtml(cfg.titular) : '', escaparHtml(ref)));
+    paragrafos.push(T.confirma);
   } else {
-    paragrafos.push('A loja vai contactar-te em breve para combinar o pagamento e a entrega.');
+    paragrafos.push(T.contacta);
   }
-  return templateEmailKyc('Encomenda ' + ref, `Olá, ${primeiro}.`, paragrafos,
-    cfg.whatsapp ? { texto: 'Falar com a loja no WhatsApp', url: 'https://wa.me/' + cfg.whatsapp + '?text=' + encodeURIComponent('Olá! Sobre a encomenda ' + ref) } : null);
+  return templateEmailKyc(T.titulo(ref), T.ola(primeiro), paragrafos,
+    cfg.whatsapp ? { texto: T.botao, url: 'https://wa.me/' + cfg.whatsapp + '?text=' + encodeURIComponent(T.whats(ref)) } : null);
 }
 
-async function avisarEncomenda(site, encomendaId, modo, cfg) {
+async function avisarEncomenda(site, encomendaId, modo, cfg, idioma) {
   try {
     const encomenda = await bubbleGet('encomenda', encomendaId);
     if (!encomenda) return;
@@ -6935,8 +7107,8 @@ async function avisarEncomenda(site, encomendaId, modo, cfg) {
         templateEmailEncomendaDono(nomeLoja, encomenda, itens, modo, cfg));
     }
     if (modo !== 'daniel' && encomenda['Cliente Email']) {
-      await enviarEmail(encomenda['Cliente Email'], `Recebemos a tua encomenda - ${nomeLoja}`,
-        templateEmailEncomendaCliente(nomeLoja, encomenda, modo, cfg));
+      await enviarEmail(encomenda['Cliente Email'], TEXTOS_EMAIL_CLIENTE[normalizarIdioma(idioma)].assunto(nomeLoja),
+        templateEmailEncomendaCliente(nomeLoja, encomenda, modo, cfg, idioma));
     }
   } catch (erro) {
     console.error('Aviso de encomenda por email falhou:', erro.message);
