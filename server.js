@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.51.0'; // 15/10/2026 - segurança: sessão obrigatória, limites anti-abuso, CORS fechado, correcções
+const VERSION = '1.53.0'; // 15/10/2026 - loja v3: montra por blocos, várias fotos, opções e stock, avaliações
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -145,12 +145,13 @@ const ROTAS_PRIVADAS = new Set([
   '/galeria-album-criar', '/galeria-meus-albuns', '/galeria-album-editar', '/galeria-album-media',
   '/galeria-foto-adicionar', '/galeria-video-iniciar', '/galeria-video-estado', '/galeria-media-apagar',
   '/assinatura-iniciar', '/assinatura-pagar', '/assinatura-estado',
-  '/loja-config-ler', '/loja-config-guardar', '/kyc-estado', '/kyc-enviar', '/sair'
+  '/loja-config-ler', '/loja-config-guardar', '/loja-montra-guardar', '/loja-avaliacoes-gerir', '/loja-avaliacao-decidir',
+  '/kyc-estado', '/kyc-enviar', '/sair'
 ]);
 // Sem sessão (ainda não há conta entrada), mas só a partir das nossas
 // páginas - ou sem Origin nenhuma (chamadas servidor-a-servidor do Bubble).
 const ROTAS_SO_ORIGEM = new Set([
-  '/signup-code', '/verify-code', '/entrar', '/sessao-criar', '/plan-warnings-teste-7hq2fx',
+  '/signup-code', '/verify-code', '/entrar', '/conta-wf', '/sessao-criar', '/plan-warnings-teste-7hq2fx',
   '/admin-kyc-lista', '/admin-kyc-imagem', '/admin-kyc-decidir'
 ]);
 const ROTAS_ADMIN = new Set(['/sessao-criar', '/plan-warnings-teste-7hq2fx', '/admin-kyc-lista', '/admin-kyc-imagem', '/admin-kyc-decidir']);
@@ -217,11 +218,15 @@ const MIN = 60 * 1000;
 // [quem, máximo, janela]. quem: ip | owner | email | site
 const LIMITES = {
   '/entrar': [['ip', 20, 15 * MIN]],
-  '/signup-code': [['owner', 5, 60 * MIN], ['ip', 15, 60 * MIN]],
+  // Sem limite por IP: o workflow do Bubble chama esta rota sempre do
+  // mesmo IP (o do Bubble), e bloquearia todos os registos novos.
+  '/signup-code': [['owner', 6, 60 * MIN]],
   '/verify-code': [['owner', 12, 15 * MIN], ['ip', 40, 15 * MIN]],
   '/contacto-enviar': [['ip', 5, 10 * MIN], ['site', 40, 60 * MIN]],
   '/loja-encomenda': [['ip', 15, 10 * MIN]],
   '/loja-pagar': [['ip', 10, 10 * MIN]],
+  '/loja-avaliar': [['ip', 5, 60 * MIN]],
+  '/loja-montra-guardar': [['owner', 40, 10 * MIN]],
   '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
   '/editar': [['owner', 15, 10 * MIN]],
   '/kyc-enviar': [['owner', 5, 60 * MIN], ['ip', 10, 60 * MIN]],
@@ -280,7 +285,7 @@ app.use((req, res, next) => {
 // "?", "&", espaços ou objectos é recusada antes de chegar à Data API.
 const ID_VALIDO = /^[A-Za-z0-9_-]{1,64}$/;
 const CAMPOS_ID = ['owner', 'site_id', 'produto_id', 'album_id', 'media_id', 'post_id', 'trabalho_id',
-  'encomenda_id', 'assinatura_id', 'plano_id', 'generation_id', 'id'];
+  'encomenda_id', 'assinatura_id', 'plano_id', 'generation_id', 'avaliacao_id', 'id'];
 app.use((req, res, next) => {
   const corpo = req.body;
   if (corpo && typeof corpo === 'object') {
@@ -2038,42 +2043,44 @@ ${htmlAtual}`;
 // ficheiro que todos os sites de E-commerce/Checkout gerados carregam -
 // nunca é a IA a escrever esta lógica.
 const LOJA_CART_JS = `/*
-  Daniel IA - módulo fixo da loja v2 (montra completa estilo marketplace)
-  ---------------------------------------------------------------------
+  Daniel IA - módulo fixo da loja v3 (montra por blocos, estilo marketplace)
+  -------------------------------------------------------------------------
   Servido pelo container em /loja-cart.js e carregado por TODOS os sites de
-  E-commerce/Checkout. A IA desenha só o cabeçalho e o rodapé do site e
-  deixa uma div com id="daniel-ia-produtos". Este módulo monta ali:
-    - a capa (carrossel até 3 imagens, ou uma capa gerada com a marca)
-    - a pesquisa e as categorias
-    - os produtos em destaque
-    - o catálogo por categoria, com preço antigo e desconto
-    - a página de cada produto, o carrinho e o checkout
-  O checkout adapta-se ao modo da loja: pagamentos Daniel IA (M-Pesa,
-  e-Mola, cartão), pagamento manual para os números do dono, encomenda
-  pelo WhatsApp, ou encomenda simples (chega ao dono por email).
-  As cores, tipos e cantos vêm das fichas --dia-* do próprio site.
+  E-commerce/Checkout. A IA desenha só o cabeçalho e o rodapé do site e deixa
+  uma div com id="daniel-ia-produtos". Este módulo monta ali a montra que o
+  dono escolheu no "Gerir loja", bloco a bloco:
+    anuncio    - faixa de aviso (ex: entrega grátis)
+    capa       - carrossel até 3 imagens
+    categorias - círculos ou cartões com imagem
+    fila       - fila deslizante (novidades, promoções, mais vendidos,
+                 destaques ou uma categoria)
+    banners    - 1 a 3 banners que levam a uma categoria, produto ou link
+    oferta     - oferta relâmpago com contagem decrescente
+    catalogo   - todos os produtos, por categoria
+    vistos     - vistos recentemente (guardado no browser do cliente)
+  Página de produto com várias fotos (zoom e deslizar), opções com preço e
+  stock próprios, avaliações e "também vais gostar". Carrinho e checkout
+  adaptados ao modo de pagamento da loja. Cores, letras e cantos vêm das
+  fichas --dia-* do próprio site; textos no idioma do <html lang>.
 
   Cada página gerada define, antes de carregar este ficheiro:
     window.DANIEL_IA_SITE_ID = 'xxxxx';
 */
 (function(){
   'use strict';
-
   // ---- Idioma do site (lido do <html lang>): pt, en, fr ou es ----
   var DIA_LANG = (function(){
     var l = String(document.documentElement.getAttribute('lang') || 'pt').toLowerCase().slice(0, 2);
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Produto": "Product", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Produto": "Produit", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Produto": "Producto", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente"}};
+  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left."}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock."}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\"."}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
     if (v) { for (var k in v) { r = r.split('{' + k + '}').join(String(v[k])); } }
     return r;
   }
-  var OUTROS = tx('Outros');
-
   var CONTAINER_URL = 'https://mc-8oxfde5o71.bunny.run';
   var SITE_ID = window.DANIEL_IA_SITE_ID || '';
   if (!SITE_ID) {
@@ -2082,12 +2089,24 @@ const LOJA_CART_JS = `/*
   }
 
   var CART_KEY = 'daniel_ia_carrinho_' + SITE_ID;
+  var VISTOS_KEY = 'daniel_ia_vistos_' + SITE_ID;
   var produtos = [];
-  var loja = { nome: '', capa: [], modo: 'pedido', metodos: [], manual: null, whatsapp: '' };
+  var loja = { nome: '', capa: [], modo: 'pedido', metodos: [], manual: null, whatsapp: '', montra: null };
   var carrinho = lerCarrinho();
   var filtro = { categoria: '', texto: '' };
-  var slideActual = 0;
-  var temporizadorCapa = null;
+  var temporizadores = [];
+  var OUTROS = tx('Outros');
+  var MONTRA_PADRAO = {
+    estilo: { cartao: 'suave', colunas: 4 },
+    blocos: [
+      { id: 'capa', tipo: 'capa', activo: true },
+      { id: 'cats', tipo: 'categorias', activo: true, formato: 'circulos', imagens: {} },
+      { id: 'dest', tipo: 'fila', activo: true, fonte: 'destaques' },
+      { id: 'promo', tipo: 'fila', activo: true, fonte: 'promocoes' },
+      { id: 'cat', tipo: 'catalogo', activo: true },
+      { id: 'vistos', tipo: 'vistos', activo: true }
+    ]
+  };
 
   // ======================================================
   // Utilitários
@@ -2126,6 +2145,53 @@ const LOJA_CART_JS = `/*
     for (var i = 0; i < produtos.length; i++) { if (produtos[i].id === id) return produtos[i]; }
     return null;
   }
+  function cada(lista, fn){ Array.prototype.forEach.call(lista, fn); }
+  // "Novo" só nos mais recentes (cerca de 1/4 da loja, criados há menos de
+  // 21 dias) - numa loja acabada de abrir, se todos fossem novos o selo perdia sentido.
+  var novosCache = { lista: null, ids: {} };
+  function eNovo(p){
+    if (novosCache.lista !== produtos) {
+      var limite = Date.now() - 21 * 24 * 3600 * 1000;
+      var quantos = Math.max(2, Math.round(produtos.length / 4));
+      var ids = {};
+      produtos.map(function(x){ return { id: x.id, t: Date.parse(x.criado || '') }; })
+        .filter(function(x){ return !isNaN(x.t) && x.t > limite; })
+        .sort(function(a, b){ return b.t - a.t; })
+        .slice(0, quantos)
+        .forEach(function(x){ ids[x.id] = true; });
+      novosCache = { lista: produtos, ids: ids };
+    }
+    return !!novosCache.ids[p.id];
+  }
+  function imagemDe(p){ return (p.imagens && p.imagens[0]) || p.imagem || ''; }
+  // Preço e stock de uma opção (ou do produto, sem opções).
+  function precoDe(p, vi){ var v = (vi !== null && vi !== undefined && p.variantes) ? p.variantes[vi] : null; return v ? v.preco : p.preco; }
+  function stockDe(p, vi){
+    if (p.variantes && p.variantes.length) {
+      if (vi === null || vi === undefined) return p.stock;
+      var v = p.variantes[vi];
+      return v ? (v.stock === null || v.stock === undefined ? null : v.stock) : 0;
+    }
+    return (p.stock === null || p.stock === undefined) ? null : p.stock;
+  }
+  function precoMinimo(p){
+    if (!p.variantes || !p.variantes.length) return p.preco;
+    return p.variantes.reduce(function(m, v){ return Math.min(m, v.preco); }, Infinity);
+  }
+  function temPrecosDiferentes(p){
+    if (!p.variantes || p.variantes.length < 2) return false;
+    var a = p.variantes[0].preco;
+    return p.variantes.some(function(v){ return v.preco !== a; });
+  }
+  function estrelas(media){
+    var html = '';
+    for (var i = 1; i <= 5; i++) {
+      var cheio = media >= i ? 100 : (media > i - 1 ? Math.round((media - i + 1) * 100) : 0);
+      html += '<span class="dia-estrela"><span style="width:' + cheio + '%"></span></span>';
+    }
+    return '<span class="dia-estrelas" aria-label="' + esc(tx('{n} de 5 estrelas', { n: media })) + '">' + html + '</span>';
+  }
+
   var ICONES = {
     carrinho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1.4"/><circle cx="19" cy="21" r="1.4"/><path d="M2.5 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.3a2 2 0 0 0 2-1.5L22 7H6.2"/></svg>',
     lupa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
@@ -2136,11 +2202,16 @@ const LOJA_CART_JS = `/*
     whatsapp: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.3.8 3.2.7a2.7 2.7 0 0 0 1.8-1.3 2.2 2.2 0 0 0 .2-1.3c-.1-.1-.2-.2-.5-.3z"/></svg>',
     certo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
     copiar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
-    caixa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>'
+    caixa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>',
+    raio: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 2 4 13.5h6.5L9.5 22 20 9.5h-6.6z"/></svg>',
+    megafone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
+    relogio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+    olho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
   };
 
   // ======================================================
   // Carrinho (guardado no browser de quem compra)
+  // Chave de cada linha: id do produto, ou id::opção.
   // ======================================================
   function lerCarrinho(){
     try { var d = localStorage.getItem(CART_KEY); return d ? JSON.parse(d) : {}; } catch (e) { return {}; }
@@ -2149,30 +2220,60 @@ const LOJA_CART_JS = `/*
     try { localStorage.setItem(CART_KEY, JSON.stringify(carrinho)); } catch (e) {}
   }
   function limparCarrinho(){ carrinho = {}; guardarCarrinho(); }
+  function chaveDe(id, vi){ return (vi === null || vi === undefined) ? id : id + '::' + vi; }
   function itensDoCarrinho(){
-    return Object.keys(carrinho).filter(function(id){ return carrinho[id] > 0; }).map(function(id){
-      var p = produtoPorId(id);
-      return p ? { produto: p, quantidade: carrinho[id] } : null;
+    return Object.keys(carrinho).filter(function(k){ return carrinho[k] > 0; }).map(function(k){
+      var partes = k.split('::');
+      var p = produtoPorId(partes[0]);
+      if (!p) return null;
+      var vi = partes.length > 1 ? parseInt(partes[1], 10) : null;
+      var temOpcoes = p.variantes && p.variantes.length;
+      if (temOpcoes && (vi === null || !p.variantes[vi])) return null;
+      if (!temOpcoes) vi = null;
+      return {
+        chave: k, produto: p, variante: vi, quantidade: carrinho[k],
+        preco: precoDe(p, vi),
+        nome: p.nome + (vi !== null ? ' (' + p.variantes[vi].nome + ')' : '')
+      };
     }).filter(function(x){ return x; });
   }
-  function adicionar(id, qtd){
-    carrinho[id] = (carrinho[id] || 0) + (qtd || 1);
+  function adicionar(id, vi, qtd){
+    var p = produtoPorId(id);
+    if (!p) return false;
+    if (p.variantes && p.variantes.length && (vi === null || vi === undefined)) { abrirProduto(id); return false; }
+    var chave = chaveDe(id, vi);
+    var limite = stockDe(p, vi);
+    var novo = (carrinho[chave] || 0) + (qtd || 1);
+    if (limite !== null && novo > limite) {
+      toast(limite === 0 ? tx('Esgotado') : tx('Só restam {n} unidades.', { n: limite }), true);
+      return false;
+    }
+    carrinho[chave] = Math.min(99, novo);
     guardarCarrinho();
     renderCarrinho();
     var b = $('dia-carrinho-botao');
     if (b) { b.classList.remove('dia-pulo'); void b.offsetWidth; b.classList.add('dia-pulo'); }
-    var p = produtoPorId(id);
-    toast(tx('{nome} adicionado ao carrinho', { nome: p ? p.nome : tx('Produto') }));
+    toast(tx('{nome} adicionado ao carrinho', { nome: p.nome }));
+    return true;
   }
 
   var temporizadorToast = null;
-  function toast(texto){
+  function toast(texto, aviso){
     var t = $('dia-toast');
     if (!t) return;
-    t.innerHTML = ICONES.certo + '<span>' + esc(texto) + '</span>';
+    t.innerHTML = (aviso ? '' : ICONES.certo) + '<span>' + esc(texto) + '</span>';
+    t.classList.toggle('dia-aviso', !!aviso);
     t.classList.add('dia-visivel');
     clearTimeout(temporizadorToast);
-    temporizadorToast = setTimeout(function(){ t.classList.remove('dia-visivel'); }, 2200);
+    temporizadorToast = setTimeout(function(){ t.classList.remove('dia-visivel'); }, 2400);
+  }
+
+  // Vistos recentemente (no browser de quem visita)
+  function lerVistos(){ try { return JSON.parse(localStorage.getItem(VISTOS_KEY) || '[]') || []; } catch (e) { return []; } }
+  function marcarVisto(id){
+    var l = lerVistos().filter(function(x){ return x !== id; });
+    l.unshift(id);
+    try { localStorage.setItem(VISTOS_KEY, JSON.stringify(l.slice(0, 16))); } catch (e) {}
   }
 
   // ======================================================
@@ -2183,8 +2284,16 @@ const LOJA_CART_JS = `/*
       '.dia-loja,.dia-carrinho-botao,.dia-painel-carrinho,.dia-overlay,.dia-toast{--_p:var(--dia-primaria,#111);--_pt:var(--dia-primaria-texto,#fff);--_r:var(--dia-raio,14px);--_ft:var(--dia-fonte-titulos,inherit);}',
       '.dia-loja{--_p:var(--dia-primaria,currentColor);--_s:var(--dia-superficie,color-mix(in srgb,currentColor 4%,transparent));--_t:var(--dia-texto,currentColor);--_ts:var(--dia-texto-suave,color-mix(in srgb,currentColor 62%,transparent));--_b:var(--dia-borda,color-mix(in srgb,currentColor 13%,transparent));--_f:var(--dia-fundo,Canvas);color:var(--_t);font-family:inherit;}',
       '.dia-loja *,.dia-overlay,.dia-overlay *,.dia-painel-carrinho,.dia-painel-carrinho *,.dia-carrinho-botao,.dia-toast{box-sizing:border-box;}',
+      '.dia-bloco{margin:0 0 30px;}',
+      '.dia-bloco:empty{display:none;}',
+      /* anúncio */
+      '.dia-anuncio{display:flex;align-items:center;justify-content:center;gap:10px;text-align:center;padding:11px 18px;border-radius:calc(var(--_r) - 2px);font-size:14px;font-weight:700;line-height:1.4;}',
+      '.dia-anuncio svg{width:18px;height:18px;flex-shrink:0;}',
+      '.dia-cor-primaria{background:var(--_p);color:var(--_pt);}',
+      '.dia-cor-escuro{background:#111;color:#fff;}',
+      '.dia-cor-destaque{background:linear-gradient(90deg,#F59E0B,#E11D48);color:#fff;}',
       /* capa */
-      '.dia-capa{position:relative;border-radius:calc(var(--_r) + 8px);overflow:hidden;height:clamp(230px,44vw,480px);margin-bottom:22px;isolation:isolate;background:color-mix(in srgb,var(--_p) 18%,transparent);}',
+      '.dia-capa{position:relative;border-radius:calc(var(--_r) + 8px);overflow:hidden;height:clamp(230px,44vw,480px);isolation:isolate;background:color-mix(in srgb,var(--_p) 18%,transparent);}',
       '.dia-slide{position:absolute;inset:0;opacity:0;transition:opacity .9s ease;}',
       '.dia-slide.dia-activo{opacity:1;z-index:1;}',
       '.dia-slide img{width:100%;height:100%;object-fit:cover;transform:scale(1.06);transition:transform 6s ease;}',
@@ -2203,52 +2312,126 @@ const LOJA_CART_JS = `/*
       '.dia-ponto.dia-activo{width:26px;background:#fff;}',
       '.dia-capa-seta{position:absolute;z-index:3;top:50%;transform:translateY(-50%);width:42px;height:42px;border-radius:50%;border:none;background:rgba(255,255,255,.85);color:#111;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s ease;}',
       '.dia-capa:hover .dia-capa-seta{opacity:1;}',
-      '.dia-capa-seta svg{width:18px;height:18px;}',
-      '.dia-capa-seta.dia-esq{left:14px;}.dia-capa-seta.dia-esq svg{transform:rotate(180deg);}',
+      '.dia-capa-seta svg,.dia-fila-seta svg,.dia-gal-seta svg{width:18px;height:18px;}',
+      '.dia-capa-seta.dia-esq{left:14px;}.dia-esq svg{transform:rotate(180deg);}',
       '.dia-capa-seta.dia-dir{right:14px;}',
       /* barra: pesquisa + categorias */
-      '.dia-barra{display:flex;flex-direction:column;gap:12px;padding:2px 0 6px;margin-bottom:6px;}',
-      '.dia-pesquisa{display:flex;align-items:center;gap:10px;background:var(--_s);border:1px solid var(--_b);border-radius:999px;padding:0 16px;height:48px;transition:border-color .2s ease,box-shadow .2s ease;}',
+      '.dia-barra{position:sticky;top:0;z-index:20;display:flex;flex-direction:column;gap:10px;padding:10px 0;margin:-6px 0 18px;background:linear-gradient(var(--_f) 72%,color-mix(in srgb,var(--_f) 0%,transparent));}',
+      '.dia-pesquisa{display:flex;align-items:center;gap:10px;background:var(--_s);border:1px solid var(--_b);border-radius:999px;padding:0 6px 0 16px;height:50px;transition:border-color .2s ease,box-shadow .2s ease;}',
       '.dia-pesquisa:focus-within{border-color:var(--_p);box-shadow:0 0 0 4px color-mix(in srgb,var(--_p) 16%,transparent);}',
-      '.dia-pesquisa svg{width:19px;height:19px;color:var(--_ts);flex-shrink:0;}',
+      '.dia-pesquisa > svg{width:19px;height:19px;color:var(--_ts);flex-shrink:0;}',
       '.dia-pesquisa input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:var(--_t);font-size:15px;font-family:inherit;height:100%;}',
       '.dia-pesquisa input::placeholder{color:var(--_ts);}',
+      '.dia-limpar{border:none;background:color-mix(in srgb,var(--_t) 8%,transparent);color:var(--_t);border-radius:999px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;display:none;}',
+      '.dia-filtrando .dia-limpar{display:inline-flex;}',
       '.dia-categorias{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;}',
       '.dia-categorias::-webkit-scrollbar{display:none;}',
       '.dia-chip{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--_b);background:var(--_s);color:var(--_t);border-radius:999px;padding:8px 15px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s ease;white-space:nowrap;}',
       '.dia-chip small{font-weight:600;opacity:.6;font-size:11.5px;}',
       '.dia-chip:hover{border-color:color-mix(in srgb,var(--_p) 55%,transparent);}',
       '.dia-chip.dia-activo{background:var(--dia-primaria,currentColor);color:var(--dia-primaria-texto,var(--_f));border-color:transparent;}',
-      /* secções */
-      '.dia-seccao{margin:26px 0 8px;}',
-      '.dia-seccao-topo{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;}',
+      '.dia-filtrando #dia-montra{display:none;}',
+      '#dia-resultados{display:none;}',
+      '.dia-filtrando #dia-resultados{display:block;}',
+      /* secções e filas */
+      '.dia-seccao-topo{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}',
       '.dia-seccao-titulo{font-family:var(--_ft);font-weight:800;font-size:clamp(20px,2.4vw,26px);letter-spacing:-.02em;margin:0;display:flex;align-items:center;gap:8px;}',
       '.dia-seccao-titulo svg{width:20px;height:20px;color:var(--_p);}',
-      '.dia-ver-todos{background:none;border:none;color:var(--_ts);font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;}',
+      '.dia-topo-accoes{display:flex;align-items:center;gap:8px;}',
+      '.dia-ver-todos{background:none;border:none;color:var(--_ts);font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}',
       '.dia-ver-todos:hover{color:var(--_t);}',
       '.dia-ver-todos svg{width:14px;height:14px;}',
-      '.dia-fila{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(200px,230px);gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;padding:4px 2px 14px;scrollbar-width:thin;}',
+      '.dia-fila-seta{width:36px;height:36px;border-radius:50%;border:1px solid var(--_b);background:var(--_s);color:var(--_t);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:border-color .2s ease;}',
+      '.dia-fila-seta:hover{border-color:var(--_p);}',
+      '.dia-fila{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,220px);gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-behavior:smooth;padding:4px 2px 12px;scrollbar-width:none;}',
+      '.dia-fila::-webkit-scrollbar{display:none;}',
       '.dia-fila > *{scroll-snap-align:start;}',
-      '.dia-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;}',
-      '@media (max-width:560px){.dia-grelha{grid-template-columns:1fr 1fr;gap:10px;}.dia-fila{grid-auto-columns:minmax(160px,46%);}}',
+      '.dia-grelha{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;}',
+      '.dia-cols-3 .dia-grelha{grid-template-columns:repeat(3,minmax(0,1fr));}',
+      '.dia-cols-5 .dia-grelha{grid-template-columns:repeat(5,minmax(0,1fr));}',
+      '.dia-cols-6 .dia-grelha{grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;}',
+      '@media (max-width:1100px){.dia-cols-6 .dia-grelha,.dia-cols-5 .dia-grelha{grid-template-columns:repeat(4,minmax(0,1fr));}}',
+      '@media (max-width:860px){.dia-loja .dia-grelha{grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;}}',
+      '@media (max-width:560px){.dia-loja .dia-grelha{grid-template-columns:1fr 1fr;gap:10px;}.dia-fila{grid-auto-columns:minmax(150px,44%);gap:10px;}.dia-fila-seta{display:none;}.dia-bloco{margin-bottom:24px;}}',
+      /* categorias com imagem */
+      '.dia-cat-circulos{display:flex;gap:18px;overflow-x:auto;scrollbar-width:none;padding:4px 2px 8px;}',
+      '.dia-cat-circulos::-webkit-scrollbar{display:none;}',
+      '.dia-cat-circulo{flex-shrink:0;width:96px;display:flex;flex-direction:column;align-items:center;gap:8px;background:none;border:none;color:var(--_t);cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;text-align:center;}',
+      '.dia-cat-circulo .dia-cat-img{width:84px;height:84px;border-radius:50%;overflow:hidden;background:color-mix(in srgb,var(--_p) 14%,transparent);box-shadow:0 0 0 2px var(--_f),0 0 0 4px color-mix(in srgb,var(--_p) 35%,transparent);transition:transform .25s ease,box-shadow .25s ease;display:flex;align-items:center;justify-content:center;}',
+      '.dia-cat-circulo:hover .dia-cat-img{transform:translateY(-3px);box-shadow:0 0 0 2px var(--_f),0 0 0 4px var(--_p);}',
+      '.dia-cat-img img{width:100%;height:100%;object-fit:cover;}',
+      '.dia-cat-letra{font-family:var(--_ft);font-weight:800;font-size:28px;color:var(--_p);}',
+      '.dia-cat-cartoes{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;}',
+      '.dia-cat-cartao{position:relative;aspect-ratio:4/3;border-radius:var(--_r);overflow:hidden;border:none;padding:0;cursor:pointer;background:color-mix(in srgb,var(--_p) 18%,transparent);font-family:inherit;isolation:isolate;}',
+      '.dia-cat-cartao img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transition:transform .5s ease;z-index:-1;}',
+      '.dia-cat-cartao:hover img{transform:scale(1.06);}',
+      '.dia-cat-cartao::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.7),rgba(0,0,0,0) 60%);z-index:-1;}',
+      '.dia-cat-cartao span{position:absolute;left:14px;right:14px;bottom:12px;color:#fff;font-family:var(--_ft);font-weight:800;font-size:17px;text-align:left;}',
+      '.dia-cat-cartao small{display:block;font-family:inherit;font-weight:600;font-size:12px;opacity:.85;}',
+      /* banners */
+      '.dia-banners{display:grid;gap:14px;}',
+      '.dia-banners.dia-n1{grid-template-columns:1fr;}',
+      '.dia-banners.dia-n2{grid-template-columns:1fr 1fr;}',
+      '.dia-banners.dia-n3{grid-template-columns:1fr 1fr 1fr;}',
+      '.dia-banner{position:relative;display:block;border-radius:calc(var(--_r) + 4px);overflow:hidden;border:none;padding:0;cursor:pointer;text-align:left;font-family:inherit;background:color-mix(in srgb,var(--_p) 14%,transparent);isolation:isolate;}',
+      '.dia-n1 .dia-banner{aspect-ratio:21/7;}.dia-n2 .dia-banner{aspect-ratio:16/9;}.dia-n3 .dia-banner{aspect-ratio:4/5;}',
+      '.dia-banner img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;transition:transform .6s ease;}',
+      '.dia-banner:hover img{transform:scale(1.04);}',
+      '.dia-banner.dia-com-texto::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(0deg,rgba(0,0,0,.65),rgba(0,0,0,0) 65%);}',
+      '.dia-banner-texto{position:absolute;left:clamp(14px,3vw,26px);right:14px;bottom:clamp(12px,2.6vw,22px);color:#fff;}',
+      '.dia-banner-texto b{display:block;font-family:var(--_ft);font-weight:800;font-size:clamp(17px,2.2vw,26px);line-height:1.15;letter-spacing:-.02em;}',
+      '.dia-banner-texto span{display:block;font-size:13.5px;opacity:.9;margin-top:4px;}',
+      '@media (max-width:640px){.dia-banners.dia-n2,.dia-banners.dia-n3{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;}.dia-banners::-webkit-scrollbar{display:none;}.dia-n2 .dia-banner,.dia-n3 .dia-banner{flex:0 0 82%;scroll-snap-align:start;aspect-ratio:4/3;}.dia-n1 .dia-banner{aspect-ratio:16/9;}}',
+      /* oferta relâmpago */
+      '.dia-oferta{border-radius:calc(var(--_r) + 8px);padding:20px 20px 8px;background:radial-gradient(circle at 100% 0%,color-mix(in srgb,#F59E0B 35%,transparent),transparent 45%),linear-gradient(135deg,color-mix(in srgb,var(--_p) 92%,#000),color-mix(in srgb,var(--_p) 60%,#000));color:#fff;}',
+      '.dia-oferta-topo{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;}',
+      '.dia-oferta-titulo{display:flex;align-items:center;gap:10px;font-family:var(--_ft);font-weight:800;font-size:clamp(20px,2.6vw,28px);letter-spacing:-.02em;margin:0;}',
+      '.dia-oferta-titulo svg{width:26px;height:26px;color:#FCD34D;filter:drop-shadow(0 0 10px rgba(252,211,77,.6));animation:dia-brilhar 1.6s ease-in-out infinite;}',
+      '@keyframes dia-brilhar{50%{transform:scale(1.12);}}',
+      '.dia-contagem-reg{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;opacity:.95;}',
+      '.dia-contagem-reg b{min-width:42px;text-align:center;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:7px 6px 5px;font-size:18px;font-variant-numeric:tabular-nums;line-height:1;}',
+      '.dia-contagem-reg b small{display:block;font-size:9.5px;font-weight:700;opacity:.75;margin-top:3px;letter-spacing:.06em;text-transform:uppercase;}',
+      '.dia-oferta .dia-produto-card{color:var(--_t);}',
+      '.dia-oferta .dia-fila-seta{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.25);color:#fff;}',
       /* cartão de produto */
       '.dia-produto-card{position:relative;display:flex;flex-direction:column;background:var(--_s);border:1px solid var(--_b);border-radius:var(--_r);overflow:hidden;cursor:pointer;transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;}',
       '.dia-produto-card:hover{transform:translateY(-4px);border-color:color-mix(in srgb,var(--_p) 40%,transparent);box-shadow:0 22px 40px -22px color-mix(in srgb,var(--_p) 70%,transparent);}',
+      '.dia-oferta .dia-produto-card{background:var(--_f);}',
+      '.dia-cartao-moldura .dia-produto-card{background:var(--_f);border:1.5px solid color-mix(in srgb,var(--_t) 22%,transparent);padding:8px;}',
+      '.dia-cartao-moldura .dia-produto-media{border-radius:calc(var(--_r) - 6px);}',
+      '.dia-cartao-moldura .dia-produto-corpo{padding:10px 4px 6px;}',
+      '.dia-cartao-minimal .dia-produto-card{background:transparent;border:none;overflow:visible;}',
+      '.dia-cartao-minimal .dia-produto-card:hover{box-shadow:none;}',
+      '.dia-cartao-minimal .dia-produto-media{border-radius:var(--_r);}',
+      '.dia-cartao-minimal .dia-produto-corpo{padding:10px 2px 4px;}',
+      '.dia-cartao-minimal .dia-btn-add{bottom:auto;top:calc(100% - 128px);}',
       '.dia-produto-media{position:relative;aspect-ratio:1/1;overflow:hidden;background:color-mix(in srgb,currentColor 6%,transparent);}',
-      '.dia-produto-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s ease;}',
+      '.dia-produto-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s ease,opacity .4s ease;}',
+      '.dia-produto-img.dia-segunda{position:absolute;inset:0;opacity:0;}',
       '.dia-produto-card:hover .dia-produto-img{transform:scale(1.05);}',
+      '.dia-produto-card:hover .dia-produto-img.dia-segunda{opacity:1;}',
       '.dia-produto-vazio{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--_ts);}',
       '.dia-produto-vazio svg{width:38%;height:38%;opacity:.45;}',
-      '.dia-badge{position:absolute;top:10px;left:10px;background:#E11D48;color:#fff;font-size:12px;font-weight:800;padding:4px 9px;border-radius:999px;letter-spacing:.01em;box-shadow:0 6px 14px rgba(225,29,72,.35);}',
-      '.dia-badge-destaque{position:absolute;top:10px;right:10px;width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.92);color:#F59E0B;display:flex;align-items:center;justify-content:center;}',
+      '.dia-badges{position:absolute;top:10px;left:10px;display:flex;flex-direction:column;align-items:flex-start;gap:5px;z-index:2;}',
+      '.dia-badge{background:#E11D48;color:#fff;font-size:12px;font-weight:800;padding:4px 9px;border-radius:999px;letter-spacing:.01em;box-shadow:0 6px 14px rgba(225,29,72,.35);}',
+      '.dia-badge.dia-novo{background:#111;box-shadow:none;}',
+      '.dia-badge-destaque{position:absolute;top:10px;right:10px;z-index:2;width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.92);color:#F59E0B;display:flex;align-items:center;justify-content:center;}',
       '.dia-badge-destaque svg{width:15px;height:15px;}',
+      '.dia-esgotado-capa{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--_f) 55%,transparent);}',
+      '.dia-esgotado-capa span{background:#111;color:#fff;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:7px 12px;border-radius:999px;}',
       '.dia-produto-corpo{padding:12px 12px 14px;display:flex;flex-direction:column;gap:6px;flex:1;}',
       '.dia-produto-cat{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--_ts);}',
       '.dia-produto-nome{font-family:var(--_ft);font-weight:700;font-size:14.5px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.6em;}',
+      '.dia-produto-aval{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--_ts);}',
+      '.dia-estrelas{display:inline-flex;gap:1px;}',
+      '.dia-estrela{position:relative;width:13px;height:13px;background:color-mix(in srgb,currentColor 22%,transparent);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Cpath d=%27M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z%27/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Cpath d=%27M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z%27/%3E%3C/svg%3E") center/contain no-repeat;}',
+      '.dia-estrela span{position:absolute;inset:0 auto 0 0;background:#F59E0B;}',
       '.dia-produto-precos{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:auto;padding-right:44px;}',
-      '.dia-produto-preco{font-weight:800;font-size:17px;letter-spacing:-.01em;}',
+      '.dia-produto-preco{font-weight:800;font-size:17px;letter-spacing:-.01em;white-space:nowrap;}',
+      '@media (max-width:560px){.dia-produto-preco{font-size:15px;}}',
+      '.dia-produto-preco small{font-size:11.5px;font-weight:700;color:var(--_ts);margin-right:3px;}',
       '.dia-produto-antigo{font-size:12.5px;color:var(--_ts);text-decoration:line-through;}',
-      '.dia-btn-add{position:absolute;right:10px;bottom:10px;width:38px;height:38px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:var(--dia-primaria,transparent);color:var(--dia-primaria-texto,currentColor);box-shadow:inset 0 0 0 1.5px var(--_p),0 8px 18px -8px color-mix(in srgb,var(--_p) 80%,transparent);transition:transform .2s ease;}',
+      '.dia-btn-add{position:absolute;right:10px;bottom:10px;z-index:3;width:38px;height:38px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:var(--dia-primaria,transparent);color:var(--dia-primaria-texto,currentColor);box-shadow:inset 0 0 0 1.5px var(--_p),0 8px 18px -8px color-mix(in srgb,var(--_p) 80%,transparent);transition:transform .2s ease;}',
       '.dia-btn-add:hover{transform:scale(1.1) rotate(90deg);}',
       '.dia-btn-add svg{width:18px;height:18px;}',
       '.dia-vazio{text-align:center;padding:50px 20px;color:var(--_ts);font-size:14.5px;}',
@@ -2262,8 +2445,9 @@ const LOJA_CART_JS = `/*
       '.dia-contagem{min-width:22px;height:22px;border-radius:999px;background:var(--_pt);color:var(--_p);font-size:12px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;}',
       '.dia-pulo{animation:dia-pulo .5s cubic-bezier(.3,1.6,.5,1);}',
       '@keyframes dia-pulo{0%{transform:scale(1);}40%{transform:scale(1.15);}100%{transform:scale(1);}}',
-      '.dia-toast{position:fixed;left:50%;bottom:86px;z-index:100001;transform:translate(-50%,20px);opacity:0;pointer-events:none;display:flex;align-items:center;gap:10px;background:#111;color:#fff;padding:12px 18px;border-radius:999px;font-size:14px;font-weight:600;box-shadow:0 14px 34px rgba(0,0,0,.3);transition:all .3s cubic-bezier(.2,.8,.2,1);max-width:calc(100vw - 32px);font-family:inherit;}',
+      '.dia-toast{position:fixed;left:50%;bottom:86px;z-index:100003;transform:translate(-50%,20px);opacity:0;pointer-events:none;display:flex;align-items:center;gap:10px;background:#111;color:#fff;padding:12px 18px;border-radius:999px;font-size:14px;font-weight:600;box-shadow:0 14px 34px rgba(0,0,0,.3);transition:all .3s cubic-bezier(.2,.8,.2,1);max-width:calc(100vw - 32px);font-family:inherit;}',
       '.dia-toast.dia-visivel{opacity:1;transform:translate(-50%,0);}',
+      '.dia-toast.dia-aviso{background:#B91C1C;}',
       '.dia-toast svg{width:18px;height:18px;color:#4ADE80;flex-shrink:0;}',
       '.dia-toast span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       /* painel do carrinho */
@@ -2299,28 +2483,71 @@ const LOJA_CART_JS = `/*
       '.dia-btn-principal svg{width:20px;height:20px;}',
       '.dia-btn-principal.dia-wa{background:#25D366;color:#fff;box-shadow:0 14px 28px -12px rgba(37,211,102,.7);}',
       '.dia-btn-sec{width:100%;margin-top:10px;background:transparent;color:inherit;border:1px solid var(--_b);border-radius:calc(var(--_r) - 2px);padding:14px;font-size:14.5px;font-weight:700;cursor:pointer;font-family:inherit;}',
-      '.dia-btn-sec:hover{border-color:var(--_p);}',
+      '.dia-btn-sec:hover:not(:disabled){border-color:var(--_p);}',
+      '.dia-btn-sec:disabled{opacity:.45;cursor:default;}',
       '.dia-carrinho-vazio{text-align:center;color:var(--_ts);padding:60px 10px;font-size:14px;}',
       '.dia-carrinho-vazio svg{width:52px;height:52px;opacity:.4;margin-bottom:12px;}',
-      /* janelas (produto e checkout) */
-      '.dia-overlay{--_f:var(--dia-fundo,Canvas);--_t:var(--dia-texto,CanvasText);--_ts:var(--dia-texto-suave,color-mix(in srgb,var(--_t) 60%,transparent));--_b:var(--dia-borda,color-mix(in srgb,var(--_t) 13%,transparent));position:fixed;inset:0;background:rgba(8,8,12,.6);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:100002;display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit;animation:dia-surgir .2s ease;}',
+      /* janelas */
+      '.dia-overlay{--_f:var(--dia-fundo,Canvas);--_t:var(--dia-texto,CanvasText);--_ts:var(--dia-texto-suave,color-mix(in srgb,var(--_t) 60%,transparent));--_b:var(--dia-borda,color-mix(in srgb,var(--_t) 13%,transparent));--_s:var(--dia-superficie,color-mix(in srgb,var(--_t) 4%,transparent));position:fixed;inset:0;background:rgba(8,8,12,.6);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:100002;display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit;animation:dia-surgir .2s ease;}',
       '.dia-modal{position:relative;background:var(--_f);color:var(--_t);border-radius:calc(var(--_r) + 8px);width:100%;max-width:440px;max-height:92vh;overflow-y:auto;box-shadow:0 40px 90px rgba(0,0,0,.4);animation:dia-subir .32s cubic-bezier(.2,.8,.2,1);}',
       '.dia-modal-corpo{padding:26px;}',
-      '.dia-modal .dia-icone-btn.dia-fechar{position:absolute;top:14px;right:14px;z-index:3;background:color-mix(in srgb,var(--_f) 80%,transparent);}',
+      '.dia-modal .dia-icone-btn.dia-fechar{position:sticky;top:14px;float:right;margin:14px 14px -52px 0;z-index:5;background:color-mix(in srgb,var(--_f) 85%,transparent);}',
       '@keyframes dia-surgir{from{opacity:0;}to{opacity:1;}}',
       '@keyframes dia-subir{from{opacity:0;transform:translateY(20px) scale(.98);}to{opacity:1;transform:none;}}',
-      '.dia-detalhe{max-width:880px;display:grid;grid-template-columns:1.05fr 1fr;}',
-      '.dia-detalhe-media{background:color-mix(in srgb,var(--_t) 6%,transparent);min-height:320px;position:relative;}',
-      '.dia-detalhe-media img{width:100%;height:100%;object-fit:cover;display:block;}',
+      /* página do produto */
+      '.dia-detalhe{max-width:1000px;}',
+      '.dia-detalhe-topo{display:grid;grid-template-columns:1.1fr 1fr;}',
+      '.dia-galeria{position:relative;background:color-mix(in srgb,var(--_t) 5%,transparent);}',
+      '.dia-gal-trilho{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;aspect-ratio:1/1;}',
+      '.dia-gal-trilho::-webkit-scrollbar{display:none;}',
+      '.dia-gal-foto{flex:0 0 100%;scroll-snap-align:start;overflow:hidden;position:relative;cursor:zoom-in;}',
+      '.dia-gal-foto img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s ease;}',
+      '.dia-gal-foto.dia-zoom img{transform:scale(2.1);}',
+      '.dia-gal-seta{position:absolute;top:calc(50% - 40px);z-index:2;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,.9);color:#111;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(0,0,0,.18);}',
+      '.dia-gal-seta.dia-esq{left:12px;}.dia-gal-seta.dia-dir{right:12px;}',
+      '.dia-gal-miniaturas{display:flex;gap:8px;padding:10px;overflow-x:auto;scrollbar-width:none;}',
+      '.dia-gal-miniaturas button{flex:0 0 58px;height:58px;border-radius:10px;overflow:hidden;border:2px solid transparent;padding:0;cursor:pointer;background:none;opacity:.65;transition:opacity .2s,border-color .2s;}',
+      '.dia-gal-miniaturas button.dia-activo{border-color:var(--_p);opacity:1;}',
+      '.dia-gal-miniaturas img{width:100%;height:100%;object-fit:cover;display:block;}',
       '.dia-detalhe-info{padding:30px 28px;display:flex;flex-direction:column;gap:12px;}',
-      '.dia-detalhe-nome{font-family:var(--_ft);font-weight:800;font-size:clamp(22px,3vw,30px);line-height:1.15;letter-spacing:-.02em;margin:0;}',
+      '.dia-detalhe-nome{font-family:var(--_ft);font-weight:800;font-size:clamp(22px,3vw,30px);line-height:1.15;letter-spacing:-.02em;margin:0;padding-right:40px;}',
+      '.dia-detalhe-aval{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--_ts);background:none;border:none;padding:0;cursor:pointer;font-family:inherit;width:max-content;}',
+      '.dia-detalhe-aval .dia-estrela{width:16px;height:16px;}',
       '.dia-detalhe-precos{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}',
       '.dia-detalhe-preco{font-size:28px;font-weight:800;letter-spacing:-.02em;}',
       '.dia-detalhe-poupa{font-size:12.5px;font-weight:800;color:#E11D48;background:rgba(225,29,72,.1);padding:4px 9px;border-radius:999px;}',
+      '.dia-opcoes-titulo{font-size:12.5px;font-weight:800;color:var(--_ts);letter-spacing:.04em;text-transform:uppercase;}',
+      '.dia-opcoes{display:flex;flex-wrap:wrap;gap:8px;}',
+      '.dia-opcao{border:1.5px solid var(--_b);background:transparent;color:var(--_t);border-radius:calc(var(--_r) - 4px);padding:10px 14px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;transition:border-color .15s,background .15s;}',
+      '.dia-opcao:hover:not(:disabled){border-color:color-mix(in srgb,var(--_p) 60%,transparent);}',
+      '.dia-opcao.dia-activo{border-color:var(--_p);background:color-mix(in srgb,var(--_p) 12%,transparent);}',
+      '.dia-opcao:disabled{opacity:.4;text-decoration:line-through;cursor:not-allowed;}',
+      '.dia-stock{font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;}',
+      '.dia-stock::before{content:"";width:8px;height:8px;border-radius:50%;background:#16A34A;}',
+      '.dia-stock.dia-pouco{color:#C2410C;}.dia-stock.dia-pouco::before{background:#F97316;}',
+      '.dia-stock.dia-nada{color:#B91C1C;}.dia-stock.dia-nada::before{background:#DC2626;}',
       '.dia-detalhe-desc{color:var(--_ts);font-size:14.5px;line-height:1.7;white-space:pre-wrap;margin:4px 0 6px;}',
       '.dia-detalhe-qtd{display:flex;align-items:center;gap:12px;font-size:13px;font-weight:700;color:var(--_ts);}',
       '.dia-detalhe-qtd .dia-qtd button{width:38px;height:38px;}',
-      '@media (max-width:720px){.dia-overlay{align-items:flex-end;padding:0;}.dia-modal{max-height:94vh;border-radius:calc(var(--_r) + 8px) calc(var(--_r) + 8px) 0 0;}.dia-detalhe{grid-template-columns:1fr;}.dia-detalhe-media{min-height:0;aspect-ratio:1/1;}}',
+      '.dia-msg-opcao{font-size:13px;color:#B91C1C;font-weight:700;min-height:0;}',
+      '.dia-detalhe-baixo{padding:8px 28px 30px;border-top:1px solid var(--_b);}',
+      '.dia-detalhe-baixo .dia-bloco{margin:24px 0 0;}',
+      /* avaliações */
+      '.dia-aval-resumo{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;}',
+      '.dia-aval-media{font-family:var(--_ft);font-size:38px;font-weight:800;letter-spacing:-.03em;line-height:1;}',
+      '.dia-aval-resumo .dia-estrela{width:18px;height:18px;}',
+      '.dia-aval-resumo small{display:block;color:var(--_ts);font-size:12.5px;margin-top:3px;}',
+      '.dia-aval-lista{display:flex;flex-direction:column;gap:12px;}',
+      '.dia-aval{background:var(--_s);border:1px solid var(--_b);border-radius:calc(var(--_r) - 2px);padding:14px 16px;}',
+      '.dia-aval-cabeca{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:13.5px;}',
+      '.dia-aval-cabeca small{color:var(--_ts);font-size:12px;}',
+      '.dia-aval p{margin:6px 0 0;font-size:14px;line-height:1.6;color:var(--_t);}',
+      '.dia-aval-form{background:var(--_s);border:1px solid var(--_b);border-radius:calc(var(--_r) - 2px);padding:16px;margin-top:12px;}',
+      '.dia-escolher-estrelas{display:flex;gap:4px;margin-bottom:12px;}',
+      '.dia-escolher-estrelas button{background:none;border:none;padding:2px;cursor:pointer;color:color-mix(in srgb,var(--_t) 25%,transparent);}',
+      '.dia-escolher-estrelas button.dia-activo{color:#F59E0B;}',
+      '.dia-escolher-estrelas svg{width:30px;height:30px;}',
+      '@media (max-width:760px){.dia-overlay{align-items:flex-end;padding:0;}.dia-modal{max-height:94vh;border-radius:calc(var(--_r) + 8px) calc(var(--_r) + 8px) 0 0;}.dia-detalhe-topo{grid-template-columns:1fr;}.dia-detalhe-info{padding:22px 18px;}.dia-detalhe-baixo{padding:6px 18px 26px;}.dia-gal-seta{display:none;}}',
       /* checkout */
       '.dia-modal h3{font-family:var(--_ft);font-size:21px;letter-spacing:-.02em;margin:0 0 4px;}',
       '.dia-modal-sub{color:var(--_ts);font-size:13.5px;margin:0 0 18px;}',
@@ -2343,6 +2570,7 @@ const LOJA_CART_JS = `/*
       '.dia-copiar svg{width:13px;height:13px;}',
       '.dia-msg-erro{color:#D64545;font-size:13px;margin-top:10px;line-height:1.4;}',
       '.dia-msg-erro:empty{display:none;}',
+      '.dia-msg-ok{color:#16A34A;font-size:13.5px;font-weight:700;margin-top:10px;line-height:1.4;}',
       '.dia-estado-pagamento{text-align:center;padding:16px 0 6px;}',
       '.dia-estado-pagamento p{color:var(--_ts);font-size:14px;line-height:1.6;margin:8px 0 0;}',
       '.dia-ok{width:72px;height:72px;border-radius:50%;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;background:rgba(34,197,94,.14);color:#16A34A;animation:dia-pulo .6s cubic-bezier(.3,1.6,.5,1);}',
@@ -2369,15 +2597,9 @@ const LOJA_CART_JS = `/*
     }
     var esqueletos = '';
     for (var i = 0; i < 8; i++) esqueletos += '<div class="dia-esqueleto"></div>';
-    alvo.innerHTML = ''
-      + '<div class="dia-loja">'
-      + '<div class="dia-capa" id="dia-capa"></div>'
-      + '<div class="dia-barra">'
-      + '<label class="dia-pesquisa">' + ICONES.lupa + '<input type="search" id="dia-pesquisa" placeholder="' + tx('Pesquisar produtos') + '" autocomplete="off"></label>'
-      + '<div class="dia-categorias" id="dia-categorias"></div>'
-      + '</div>'
-      + '<div id="dia-destaques"></div>'
-      + '<div id="dia-catalogo"><div class="dia-grelha">' + esqueletos + '</div></div>'
+    alvo.innerHTML = '<div class="dia-loja" id="dia-loja">'
+      + '<div id="dia-montra"><div class="dia-grelha">' + esqueletos + '</div></div>'
+      + '<div id="dia-resultados"></div>'
       + '</div>';
 
     var botao = document.createElement('button');
@@ -2413,10 +2635,6 @@ const LOJA_CART_JS = `/*
     fundo.addEventListener('click', fecharPainel);
     $('dia-fechar-painel').addEventListener('click', fecharPainel);
     $('dia-btn-finalizar').addEventListener('click', function(){ fecharPainel(); abrirCheckout(); });
-    $('dia-pesquisa').addEventListener('input', function(){
-      filtro.texto = this.value;
-      renderCatalogo();
-    });
     document.addEventListener('keydown', function(e){
       if (e.key === 'Escape') { fecharPainel(); fecharJanela(); }
     });
@@ -2434,22 +2652,341 @@ const LOJA_CART_JS = `/*
     if (f) f.classList.remove('aberto');
   }
 
+  function montra(){ return (loja.montra && loja.montra.blocos && loja.montra.blocos.length) ? loja.montra : MONTRA_PADRAO; }
+
   // ======================================================
-  // Capa (carrossel)
+  // Dados para os blocos
   // ======================================================
-  function renderCapa(){
-    var capa = $('dia-capa');
-    if (!capa) return;
-    var slides = loja.capa || [];
-    // Sites antigos podem ter a loja a meio da página, depois do hero do
-    // próprio site - aí uma capa gerada ficaria repetida. Sem imagens de
-    // capa e com a loja já lá em baixo, não mostramos capa nenhuma.
-    if (!slides.length && capa.getBoundingClientRect().top + window.pageYOffset > window.innerHeight * 1.1) {
-      capa.style.display = 'none';
+  function categorias(){
+    var mapa = {}, ordem = [];
+    produtos.forEach(function(p){
+      var c = p.categoria || OUTROS;
+      if (!mapa[c]) { mapa[c] = { nome: c, total: 0, imagem: '' }; ordem.push(c); }
+      mapa[c].total++;
+      if (!mapa[c].imagem && imagemDe(p)) mapa[c].imagem = imagemDe(p);
+    });
+    ordem.sort(function(a, b){ return (a === OUTROS) - (b === OUTROS); });
+    return ordem.map(function(c){ return mapa[c]; });
+  }
+  function listaDaFonte(fonte, categoria){
+    var l = produtos.slice();
+    if (fonte === 'novidades') return l.sort(function(a, b){ return String(b.criado).localeCompare(String(a.criado)); }).slice(0, 14);
+    if (fonte === 'promocoes') return l.filter(function(p){ return desconto(p) > 0; }).sort(function(a, b){ return desconto(b) - desconto(a); }).slice(0, 14);
+    if (fonte === 'mais_vendidos') return l.filter(function(p){ return p.vendidos > 0; }).sort(function(a, b){ return b.vendidos - a.vendidos; }).slice(0, 14);
+    if (fonte === 'categoria') return l.filter(function(p){ return (p.categoria || OUTROS) === categoria; }).slice(0, 14);
+    return l.filter(function(p){ return p.destaque; }).slice(0, 14);
+  }
+  function tituloDaFonte(b){
+    if (b.titulo) return b.titulo;
+    return {
+      novidades: tx('Novidades'), promocoes: tx('Promoções'), mais_vendidos: tx('Mais vendidos'),
+      destaques: tx('Em destaque'), categoria: b.categoria || tx('Produtos')
+    }[b.fonte] || tx('Produtos');
+  }
+
+  // ======================================================
+  // Cartão de produto
+  // ======================================================
+  function cartao(p){
+    var d = desconto(p);
+    var img = imagemDe(p);
+    var segunda = p.imagens && p.imagens[1];
+    var badges = (d > 0 ? '<span class="dia-badge">-' + d + '%</span>' : '') + (eNovo(p) ? '<span class="dia-badge dia-novo">' + tx('Novo') + '</span>' : '');
+    var preco = temPrecosDiferentes(p)
+      ? '<span class="dia-produto-preco"><small>' + tx('desde') + '</small>' + mzn(precoMinimo(p)) + '</span>'
+      : '<span class="dia-produto-preco">' + mzn(p.preco) + '</span>';
+    var aval = p.avaliacao && p.avaliacao.total
+      ? '<div class="dia-produto-aval">' + estrelas(p.avaliacao.media) + '<span>(' + p.avaliacao.total + ')</span></div>' : '';
+    return '<article class="dia-produto-card" data-id="' + esc(p.id) + '" tabindex="0">'
+      + '<div class="dia-produto-media">'
+      + (img ? '<img class="dia-produto-img" src="' + esc(img) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
+      + (segunda ? '<img class="dia-produto-img dia-segunda" src="' + esc(segunda) + '" alt="" loading="lazy">' : '')
+      + (badges ? '<div class="dia-badges">' + badges + '</div>' : '')
+      + (p.destaque ? '<span class="dia-badge-destaque" title="' + esc(tx('Em destaque')) + '">' + ICONES.estrela + '</span>' : '')
+      + (p.esgotado ? '<div class="dia-esgotado-capa"><span>' + tx('Esgotado') + '</span></div>' : '')
+      + '</div>'
+      + '<div class="dia-produto-corpo">'
+      + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
+      + '<div class="dia-produto-nome">' + esc(p.nome) + '</div>'
+      + aval
+      + '<div class="dia-produto-precos">' + preco
+      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s>' : '') + '</div>'
+      + '</div>'
+      + (p.esgotado ? '' : '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="' + esc(tx('Adicionar {nome} ao carrinho', { nome: p.nome })) + '">' + ICONES.mais + '</button>')
+      + '</article>';
+  }
+
+  function ligarCartoes(raiz){
+    cada(raiz.querySelectorAll('.dia-produto-card'), function(card){
+      card.addEventListener('click', function(e){
+        var add = e.target.closest ? e.target.closest('[data-add]') : null;
+        if (add) { e.stopPropagation(); adicionar(add.getAttribute('data-add'), null, 1); return; }
+        abrirProduto(card.getAttribute('data-id'));
+      });
+      card.addEventListener('keydown', function(e){
+        if (e.key === 'Enter') abrirProduto(card.getAttribute('data-id'));
+      });
+    });
+  }
+
+  function seccaoComFila(titulo, icone, lista, extra){
+    var id = 'dia-f-' + Math.random().toString(36).slice(2, 8);
+    return '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + (icone || '') + esc(titulo) + '</h3>'
+      + '<div class="dia-topo-accoes">' + (extra || '')
+      + '<button class="dia-fila-seta dia-esq" data-rolar="' + id + '" data-dir="-1" aria-label="' + tx('Anterior') + '">' + ICONES.seta + '</button>'
+      + '<button class="dia-fila-seta dia-dir" data-rolar="' + id + '" data-dir="1" aria-label="' + tx('Seguinte') + '">' + ICONES.seta + '</button></div></div>'
+      + '<div class="dia-fila" id="' + id + '">' + lista.map(cartao).join('') + '</div>';
+  }
+  function ligarSetas(raiz){
+    cada(raiz.querySelectorAll('[data-rolar]'), function(b){
+      b.addEventListener('click', function(){
+        var f = $(b.getAttribute('data-rolar'));
+        if (f) f.scrollBy({ left: Number(b.getAttribute('data-dir')) * f.clientWidth * 0.85, behavior: 'smooth' });
+      });
+    });
+  }
+
+  // ======================================================
+  // Blocos da montra
+  // ======================================================
+  var RENDER = {
+    anuncio: function(b, el){
+      if (!b.texto) return false;
+      el.innerHTML = '<div class="dia-anuncio dia-cor-' + esc(b.cor || 'primaria') + '">' + ICONES.megafone + '<span>' + esc(b.texto) + '</span></div>';
+    },
+    capa: function(b, el){ return renderCapa(el); },
+    categorias: function(b, el){
+      var cats = categorias();
+      if (cats.length < 2) return false;
+      var imgs = b.imagens || {};
+      var titulo = b.titulo || tx('Categorias');
+      var corpo;
+      if (b.formato === 'cartoes') {
+        corpo = '<div class="dia-cat-cartoes">' + cats.map(function(c){
+          var im = imgs[c.nome] || c.imagem;
+          return '<button class="dia-cat-cartao" data-cat="' + esc(c.nome) + '">' + (im ? '<img src="' + esc(im) + '" alt="" loading="lazy">' : '')
+            + '<span>' + esc(c.nome) + '<small>' + tx(c.total === 1 ? '{n} produto' : '{n} produtos', { n: c.total }) + '</small></span></button>';
+        }).join('') + '</div>';
+      } else {
+        corpo = '<div class="dia-cat-circulos">' + cats.map(function(c){
+          var im = imgs[c.nome] || c.imagem;
+          return '<button class="dia-cat-circulo" data-cat="' + esc(c.nome) + '"><span class="dia-cat-img">'
+            + (im ? '<img src="' + esc(im) + '" alt="" loading="lazy">' : '<span class="dia-cat-letra">' + esc(c.nome.charAt(0).toUpperCase()) + '</span>')
+            + '</span>' + esc(c.nome) + '</button>';
+        }).join('') + '</div>';
+      }
+      el.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(titulo) + '</h3></div>' + corpo;
+      cada(el.querySelectorAll('[data-cat]'), function(x){
+        x.addEventListener('click', function(){ filtrarCategoria(x.getAttribute('data-cat')); });
+      });
+    },
+    fila: function(b, el){
+      var lista = listaDaFonte(b.fonte, b.categoria);
+      if (!lista.length) return false;
+      var verTodos = b.fonte === 'categoria' && b.categoria
+        ? '<button class="dia-ver-todos" data-ver-cat="' + esc(b.categoria) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '';
+      var icone = b.fonte === 'destaques' ? ICONES.estrela : (b.fonte === 'promocoes' ? ICONES.raio : '');
+      el.innerHTML = seccaoComFila(tituloDaFonte(b), icone, lista, verTodos);
+      ligarCartoes(el); ligarSetas(el);
+      var vt = el.querySelector('[data-ver-cat]');
+      if (vt) vt.addEventListener('click', function(){ filtrarCategoria(vt.getAttribute('data-ver-cat')); });
+    },
+    banners: function(b, el){
+      var itens = (b.itens || []).filter(function(i){ return i.imagem; });
+      if (!itens.length) return false;
+      el.innerHTML = '<div class="dia-banners dia-n' + itens.length + '">' + itens.map(function(i, n){
+        var texto = i.titulo || i.sub;
+        return '<button class="dia-banner' + (texto ? ' dia-com-texto' : '') + '" data-banner="' + n + '">'
+          + '<img src="' + esc(i.imagem) + '" alt="' + esc(i.titulo || '') + '" loading="lazy">'
+          + (texto ? '<span class="dia-banner-texto">' + (i.titulo ? '<b>' + esc(i.titulo) + '</b>' : '') + (i.sub ? '<span>' + esc(i.sub) + '</span>' : '') + '</span>' : '')
+          + '</button>';
+      }).join('') + '</div>';
+      cada(el.querySelectorAll('[data-banner]'), function(x){
+        x.addEventListener('click', function(){ irPara((itens[Number(x.getAttribute('data-banner'))] || {}).destino); });
+      });
+    },
+    oferta: function(b, el){
+      var fim = Date.parse(b.termina || '');
+      if (isNaN(fim) || fim <= Date.now()) return false;
+      var lista = b.fonte === 'escolher'
+        ? (b.produtos || []).map(produtoPorId).filter(function(p){ return p; })
+        : listaDaFonte('promocoes');
+      if (!lista.length) return false;
+      var id = 'dia-cd-' + Math.random().toString(36).slice(2, 8);
+      var topo = '<div class="dia-oferta-topo"><h3 class="dia-oferta-titulo">' + ICONES.raio + esc(b.titulo || tx('Oferta relâmpago')) + '</h3>'
+        + '<div class="dia-contagem-reg" id="' + id + '"></div></div>';
+      var fila = seccaoComFila('', '', lista, '');
+      el.innerHTML = '<div class="dia-oferta">' + topo + fila.replace('<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo"></h3>', '<div class="dia-seccao-topo" style="justify-content:flex-end;margin:-8px 0 8px"><span></span>') + '</div>';
+      ligarCartoes(el); ligarSetas(el);
+      function tic(){
+        var c = $(id);
+        if (!c) return;
+        var resta = Math.max(0, fim - Date.now());
+        if (resta <= 0) { renderMontra(); return; }
+        var s = Math.floor(resta / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+        function caixa(v, r){ return '<b>' + (v < 10 ? '0' : '') + v + '<small>' + r + '</small></b>'; }
+        c.innerHTML = '<span>' + tx('Termina em') + '</span>' + (d ? caixa(d, tx('dias')) : '') + caixa(h, tx('h')) + caixa(m, tx('min')) + caixa(ss, tx('seg'));
+      }
+      tic();
+      temporizadores.push(setInterval(tic, 1000));
+    },
+    catalogo: function(b, el){
+      if (!produtos.length) {
+        el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>' + tx('Ainda não há produtos à venda aqui.') + '</div></div>';
+        return;
+      }
+      var cats = categorias();
+      if (cats.length > 1) {
+        el.innerHTML = (b.titulo ? '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(b.titulo) + '</h3></div>' : '')
+          + cats.map(function(c){
+            var daCat = produtos.filter(function(p){ return (p.categoria || OUTROS) === c.nome; });
+            return '<section class="dia-bloco"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(c.nome) + '</h3>'
+              + (daCat.length > 8 ? '<button class="dia-ver-todos" data-ver-cat="' + esc(c.nome) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '')
+              + '</div><div class="dia-grelha">' + daCat.slice(0, 8).map(cartao).join('') + '</div></section>';
+          }).join('');
+      } else {
+        el.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(b.titulo || tx('Todos os produtos')) + '</h3></div>'
+          + '<div class="dia-grelha">' + produtos.map(cartao).join('') + '</div>';
+      }
+      ligarCartoes(el);
+      cada(el.querySelectorAll('[data-ver-cat]'), function(x){
+        x.addEventListener('click', function(){ filtrarCategoria(x.getAttribute('data-ver-cat')); });
+      });
+    },
+    vistos: function(b, el){
+      var lista = lerVistos().map(produtoPorId).filter(function(p){ return p; }).slice(0, 12);
+      if (!lista.length) return false;
+      el.innerHTML = seccaoComFila(b.titulo || tx('Vistos recentemente'), ICONES.olho, lista, '');
+      ligarCartoes(el); ligarSetas(el);
+    }
+  };
+
+  function irPara(destino){
+    if (!destino || !destino.valor) return;
+    if (destino.tipo === 'categoria') filtrarCategoria(destino.valor);
+    else if (destino.tipo === 'produto') abrirProduto(destino.valor);
+    else if (destino.tipo === 'url' && /^https?:\\/\\//.test(destino.valor)) window.open(destino.valor, '_blank', 'noopener');
+  }
+
+  function renderMontra(){
+    temporizadores.forEach(clearInterval);
+    temporizadores = [];
+    var m = montra();
+    var raiz = $('dia-loja');
+    if (!raiz) return;
+    var estilo = m.estilo || {};
+    raiz.className = 'dia-loja dia-cartao-' + (estilo.cartao || 'suave') + ' dia-cols-' + (estilo.colunas || 4) + (filtrando() ? ' dia-filtrando' : '');
+    var el = $('dia-montra');
+    el.innerHTML = '';
+    var barraPosta = false;
+    m.blocos.forEach(function(b){
+      if (!b || b.activo === false || !RENDER[b.tipo]) return;
+      var div = document.createElement('section');
+      div.className = 'dia-bloco dia-bloco-' + b.tipo;
+      el.appendChild(div);
+      var r = RENDER[b.tipo](b, div);
+      if (r === false) { div.remove(); return; }
+      // A pesquisa fica logo a seguir à capa (ou ao início, se não houver capa).
+      if (b.tipo === 'capa' && !barraPosta) { el.appendChild(barra()); barraPosta = true; }
+    });
+    if (!barraPosta) el.insertBefore(barra(), el.firstChild && el.firstChild.classList.contains('dia-bloco-anuncio') ? el.firstChild.nextSibling : el.firstChild);
+    if (filtrando()) renderResultados();
+  }
+
+  // ---- Pesquisa e filtros ----
+  function filtrando(){ return !!(filtro.texto.trim() || filtro.categoria); }
+  var barraEl = null;
+  function barra(){
+    if (!barraEl) {
+      barraEl = document.createElement('div');
+      barraEl.className = 'dia-barra';
+      barraEl.innerHTML = '<label class="dia-pesquisa">' + ICONES.lupa
+        + '<input type="search" id="dia-pesquisa" placeholder="' + esc(tx('Pesquisar produtos')) + '" autocomplete="off">'
+        + '<button type="button" class="dia-limpar" id="dia-limpar">' + tx('Limpar') + '</button></label>'
+        + '<div class="dia-categorias" id="dia-categorias"></div>';
+      barraEl.querySelector('#dia-pesquisa').addEventListener('input', function(){
+        filtro.texto = this.value;
+        aplicarFiltro();
+      });
+      barraEl.querySelector('#dia-limpar').addEventListener('click', function(e){
+        e.preventDefault();
+        filtro.texto = ''; filtro.categoria = '';
+        barraEl.querySelector('#dia-pesquisa').value = '';
+        aplicarFiltro();
+      });
+    }
+    renderChips();
+    return barraEl;
+  }
+  function renderChips(){
+    var el = barraEl && barraEl.querySelector('#dia-categorias');
+    if (!el) return;
+    var cats = categorias();
+    if (cats.length < 2) { el.innerHTML = ''; el.style.display = 'none'; return; }
+    el.style.display = 'flex';
+    el.innerHTML = '<button class="dia-chip' + (!filtro.categoria ? ' dia-activo' : '') + '" data-cat="">' + tx('Tudo') + ' <small>' + produtos.length + '</small></button>'
+      + cats.map(function(c){
+        return '<button class="dia-chip' + (filtro.categoria === c.nome ? ' dia-activo' : '') + '" data-cat="' + esc(c.nome) + '">' + esc(c.nome) + ' <small>' + c.total + '</small></button>';
+      }).join('');
+    cada(el.querySelectorAll('.dia-chip'), function(b){
+      b.addEventListener('click', function(){ filtrarCategoria(b.getAttribute('data-cat')); });
+    });
+  }
+  function filtrarCategoria(c){
+    filtro.categoria = c || '';
+    aplicarFiltro();
+    var raiz = $('dia-loja');
+    if (raiz && raiz.getBoundingClientRect().top < 0) raiz.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function aplicarFiltro(){
+    var raiz = $('dia-loja');
+    if (!raiz) return;
+    raiz.classList.toggle('dia-filtrando', filtrando());
+    renderChips();
+    if (filtrando()) {
+      // A barra passa para cima dos resultados enquanto se filtra.
+      var res = $('dia-resultados');
+      if (barraEl.parentNode !== res) res.insertBefore(barraEl, res.firstChild);
+      renderResultados();
+    } else {
+      renderMontra();
+    }
+  }
+  function renderResultados(){
+    var res = $('dia-resultados');
+    var corpo = res.querySelector('.dia-corpo-res');
+    if (!corpo) { corpo = document.createElement('div'); corpo.className = 'dia-corpo-res'; res.appendChild(corpo); }
+    if (barraEl.parentNode !== res) res.insertBefore(barraEl, res.firstChild);
+    var texto = normalizar(filtro.texto.trim());
+    var lista = produtos.filter(function(p){
+      if (filtro.categoria && (p.categoria || OUTROS) !== filtro.categoria) return false;
+      if (texto && normalizar(p.nome + ' ' + (p.categoria || '') + ' ' + (p.descricao || '') + ' ' + (p.variantes || []).map(function(v){ return v.nome; }).join(' ')).indexOf(texto) === -1) return false;
+      return true;
+    });
+    if (!lista.length) {
+      corpo.innerHTML = '<div class="dia-vazio">' + ICONES.lupa + '<div>' + (filtro.texto ? esc(tx('Nenhum produto encontrado para "{t}".', { t: filtro.texto.trim() })) : tx('Nenhum produto encontrado.')) + '</div></div>';
       return;
     }
+    var titulo = filtro.categoria || tx('Resultados');
+    corpo.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(titulo) + '</h3>'
+      + '<span class="dia-ver-todos" style="cursor:default">' + tx(lista.length === 1 ? '{n} produto' : '{n} produtos', { n: lista.length }) + '</span></div>'
+      + '<div class="dia-grelha">' + lista.map(cartao).join('') + '</div>';
+    ligarCartoes(corpo);
+  }
+
+  // ---- Capa (carrossel) ----
+  var slideActual = 0, temporizadorCapa = null;
+  function renderCapa(capa){
+    capa.innerHTML = '';
+    var slides = loja.capa || [];
+    var c = document.createElement('div');
+    c.className = 'dia-capa';
+    capa.appendChild(c);
     if (!slides.length) {
-      capa.innerHTML = '<div class="dia-capa-gerada"></div>'
+      // Sites antigos podem ter a loja a meio da página, depois do hero do
+      // próprio site - aí uma capa gerada ficaria repetida.
+      if (capa.getBoundingClientRect().top + window.pageYOffset > window.innerHeight * 1.1) return false;
+      c.innerHTML = '<div class="dia-capa-gerada"></div>'
         + '<div class="dia-slide-texto"><h2 class="dia-slide-titulo">' + esc(loja.nome || tx('A nossa loja')) + '</h2>'
         + '<p class="dia-slide-sub">' + (produtos.length ? esc(tx('{n} produtos à tua espera. Escolhe, encomenda e recebe.', { n: produtos.length })) : tx('Descobre os nossos produtos.')) + '</p>'
         + '<button class="dia-slide-btn" data-ir-catalogo>' + tx('Ver produtos') + ' ' + ICONES.seta + '</button></div>';
@@ -2472,30 +3009,30 @@ const LOJA_CART_JS = `/*
             return '<button class="dia-ponto' + (i === 0 ? ' dia-activo' : '') + '" data-i="' + i + '" aria-label="' + tx('Imagem {n}', { n: i + 1 }) + '"></button>';
           }).join('') + '</div>';
       }
-      capa.innerHTML = html;
-      if (slides.length > 1) ligarCarrossel(capa, slides.length);
+      c.innerHTML = html;
+      if (slides.length > 1) ligarCarrossel(c, slides.length);
     }
-    Array.prototype.forEach.call(capa.querySelectorAll('[data-ir-catalogo]'), function(b){
+    cada(c.querySelectorAll('[data-ir-catalogo]'), function(b){
       b.addEventListener('click', function(){
-        var alvo = $('dia-destaques').firstChild ? $('dia-destaques') : $('dia-catalogo');
+        var alvo = document.querySelector('.dia-bloco-fila, .dia-bloco-catalogo') || $('dia-montra');
         alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
   }
-
   function ligarCarrossel(capa, total){
+    slideActual = 0;
     function irPara(i){
       slideActual = (i + total) % total;
-      Array.prototype.forEach.call(capa.querySelectorAll('.dia-slide'), function(el, j){ el.classList.toggle('dia-activo', j === slideActual); });
-      Array.prototype.forEach.call(capa.querySelectorAll('.dia-ponto'), function(el, j){ el.classList.toggle('dia-activo', j === slideActual); });
+      cada(capa.querySelectorAll('.dia-slide'), function(el, j){ el.classList.toggle('dia-activo', j === slideActual); });
+      cada(capa.querySelectorAll('.dia-ponto'), function(el, j){ el.classList.toggle('dia-activo', j === slideActual); });
     }
     function reiniciar(){
       clearInterval(temporizadorCapa);
       temporizadorCapa = setInterval(function(){ irPara(slideActual + 1); }, 5500);
     }
-    capa.querySelector('.dia-esq').addEventListener('click', function(){ irPara(slideActual - 1); reiniciar(); });
-    capa.querySelector('.dia-dir').addEventListener('click', function(){ irPara(slideActual + 1); reiniciar(); });
-    Array.prototype.forEach.call(capa.querySelectorAll('.dia-ponto'), function(el){
+    capa.querySelector('.dia-capa-seta.dia-esq').addEventListener('click', function(){ irPara(slideActual - 1); reiniciar(); });
+    capa.querySelector('.dia-capa-seta.dia-dir').addEventListener('click', function(){ irPara(slideActual + 1); reiniciar(); });
+    cada(capa.querySelectorAll('.dia-ponto'), function(el){
       el.addEventListener('click', function(){ irPara(Number(el.getAttribute('data-i'))); reiniciar(); });
     });
     var inicioX = null;
@@ -2507,131 +3044,6 @@ const LOJA_CART_JS = `/*
       inicioX = null;
     });
     reiniciar();
-  }
-
-  // ======================================================
-  // Categorias, destaques e catálogo
-  // ======================================================
-  function categorias(){
-    var mapa = {}, ordem = [];
-    produtos.forEach(function(p){
-      var c = p.categoria || OUTROS;
-      if (!mapa[c]) { mapa[c] = 0; ordem.push(c); }
-      mapa[c]++;
-    });
-    // "Outros" vai sempre para o fim
-    ordem.sort(function(a, b){ return (a === OUTROS) - (b === OUTROS); });
-    return ordem.map(function(c){ return { nome: c, total: mapa[c] }; });
-  }
-
-  function renderCategorias(){
-    var el = $('dia-categorias');
-    if (!el) return;
-    var cats = categorias();
-    if (cats.length < 2) { el.innerHTML = ''; el.style.display = 'none'; return; }
-    el.style.display = 'flex';
-    var html = '<button class="dia-chip' + (!filtro.categoria ? ' dia-activo' : '') + '" data-cat="">' + tx('Tudo') + ' <small>' + produtos.length + '</small></button>';
-    html += cats.map(function(c){
-      return '<button class="dia-chip' + (filtro.categoria === c.nome ? ' dia-activo' : '') + '" data-cat="' + esc(c.nome) + '">' + esc(c.nome) + ' <small>' + c.total + '</small></button>';
-    }).join('');
-    el.innerHTML = html;
-    Array.prototype.forEach.call(el.querySelectorAll('.dia-chip'), function(b){
-      b.addEventListener('click', function(){
-        filtro.categoria = b.getAttribute('data-cat');
-        renderCategorias();
-        renderCatalogo();
-        var cat = $('dia-catalogo');
-        if (cat && cat.getBoundingClientRect().top < 0) cat.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    });
-  }
-
-  function cartao(p){
-    var d = desconto(p);
-    return '<article class="dia-produto-card" data-id="' + esc(p.id) + '" tabindex="0">'
-      + '<div class="dia-produto-media">'
-      + (p.imagem ? '<img class="dia-produto-img" src="' + esc(p.imagem) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
-      + (d > 0 ? '<span class="dia-badge">-' + d + '%</span>' : '')
-      + (p.destaque ? '<span class="dia-badge-destaque" title="' + tx('Em destaque') + '">' + ICONES.estrela + '</span>' : '')
-      + '</div>'
-      + '<div class="dia-produto-corpo">'
-      + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
-      + '<div class="dia-produto-nome">' + esc(p.nome) + '</div>'
-      + '<div class="dia-produto-precos"><span class="dia-produto-preco">' + mzn(p.preco) + '</span>'
-      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s>' : '') + '</div>'
-      + '</div>'
-      + '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="' + esc(tx('Adicionar {nome} ao carrinho', { nome: p.nome })) + '">' + ICONES.mais + '</button>'
-      + '</article>';
-  }
-
-  function ligarCartoes(raiz){
-    Array.prototype.forEach.call(raiz.querySelectorAll('.dia-produto-card'), function(card){
-      card.addEventListener('click', function(e){
-        var add = e.target.closest ? e.target.closest('[data-add]') : null;
-        if (add) { e.stopPropagation(); adicionar(add.getAttribute('data-add'), 1); return; }
-        abrirProduto(card.getAttribute('data-id'));
-      });
-      card.addEventListener('keydown', function(e){
-        if (e.key === 'Enter') abrirProduto(card.getAttribute('data-id'));
-      });
-    });
-  }
-
-  function renderDestaques(){
-    var el = $('dia-destaques');
-    if (!el) return;
-    var lista = produtos.filter(function(p){ return p.destaque; });
-    if (!lista.length || filtro.texto || filtro.categoria) { el.innerHTML = ''; return; }
-    el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + ICONES.estrela + tx('Em destaque') + '</h3></div>'
-      + '<div class="dia-fila">' + lista.map(cartao).join('') + '</div></section>';
-    ligarCartoes(el);
-  }
-
-  function renderCatalogo(){
-    var el = $('dia-catalogo');
-    if (!el) return;
-    renderDestaques();
-    if (!produtos.length) {
-      el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>' + tx('Ainda não há produtos à venda aqui.') + '</div></div>';
-      return;
-    }
-    var texto = normalizar(filtro.texto.trim());
-    var lista = produtos.filter(function(p){
-      if (filtro.categoria && (p.categoria || OUTROS) !== filtro.categoria) return false;
-      if (texto && normalizar(p.nome + ' ' + (p.categoria || '') + ' ' + (p.descricao || '')).indexOf(texto) === -1) return false;
-      return true;
-    });
-
-    if (!lista.length) {
-      el.innerHTML = '<div class="dia-vazio">' + ICONES.lupa + '<div>' + (filtro.texto ? esc(tx('Nenhum produto encontrado para "{t}".', { t: filtro.texto.trim() })) : tx('Nenhum produto encontrado.')) + '</div></div>';
-      return;
-    }
-
-    // Sem filtros e com várias categorias: uma secção por categoria (estilo
-    // marketplace). Com filtro ou pesquisa: uma grelha só com os resultados.
-    var cats = categorias();
-    if (!texto && !filtro.categoria && cats.length > 1) {
-      el.innerHTML = cats.map(function(c){
-        var daCat = lista.filter(function(p){ return (p.categoria || OUTROS) === c.nome; });
-        return '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(c.nome) + '</h3>'
-          + (daCat.length > 4 ? '<button class="dia-ver-todos" data-cat="' + esc(c.nome) + '">' + tx('Ver todos') + ' ' + ICONES.seta + '</button>' : '')
-          + '</div><div class="dia-grelha">' + daCat.slice(0, 8).map(cartao).join('') + '</div></section>';
-      }).join('');
-      Array.prototype.forEach.call(el.querySelectorAll('.dia-ver-todos'), function(b){
-        b.addEventListener('click', function(){
-          filtro.categoria = b.getAttribute('data-cat');
-          renderCategorias();
-          renderCatalogo();
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
-      });
-    } else {
-      var titulo = filtro.categoria || (texto ? tx('Resultados') : tx('Produtos'));
-      el.innerHTML = '<section class="dia-seccao"><div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(titulo) + '</h3>'
-        + '<span class="dia-ver-todos" style="cursor:default">' + tx(lista.length === 1 ? '{n} produto' : '{n} produtos', { n: lista.length }) + '</span></div>'
-        + '<div class="dia-grelha">' + lista.map(cartao).join('') + '</div></section>';
-    }
-    ligarCartoes(el);
   }
 
   // ======================================================
@@ -2656,32 +3068,196 @@ const LOJA_CART_JS = `/*
     document.body.style.overflow = '';
   }
 
+  // ---- Página do produto ----
   function abrirProduto(id){
     var p = produtoPorId(id);
     if (!p) return;
-    var d = desconto(p);
+    marcarVisto(id);
+    var temOpcoes = p.variantes && p.variantes.length;
+    var vi = null;
+    if (temOpcoes) {
+      var disponiveis = p.variantes.map(function(v, i){ return (v.stock === null || v.stock > 0) ? i : -1; }).filter(function(i){ return i >= 0; });
+      if (p.variantes.length === 1 && disponiveis.length) vi = 0;
+    }
     var qtd = 1;
-    var j = abrirJanela(''
-      + '<div class="dia-detalhe-media">' + (p.imagem ? '<img src="' + esc(p.imagem) + '" alt="' + esc(p.nome) + '">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
-      + (d > 0 ? '<span class="dia-badge">-' + d + '%</span>' : '') + '</div>'
+    var imagens = (p.imagens && p.imagens.length) ? p.imagens : (p.imagem ? [p.imagem] : []);
+
+    var galeria = '<div class="dia-galeria">'
+      + (imagens.length ? '<div class="dia-gal-trilho" id="dia-gal">' + imagens.map(function(src){
+        return '<div class="dia-gal-foto"><img src="' + esc(src) + '" alt="' + esc(p.nome) + '"></div>';
+      }).join('') + '</div>' : '<div class="dia-gal-trilho"><div class="dia-gal-foto"><div class="dia-produto-vazio">' + ICONES.caixa + '</div></div></div>')
+      + (imagens.length > 1 ? '<button class="dia-gal-seta dia-esq" data-gal="-1" aria-label="' + tx('Anterior') + '">' + ICONES.seta + '</button><button class="dia-gal-seta dia-dir" data-gal="1" aria-label="' + tx('Seguinte') + '">' + ICONES.seta + '</button>'
+        + '<div class="dia-gal-miniaturas">' + imagens.map(function(src, i){
+          return '<button data-mini="' + i + '"' + (i === 0 ? ' class="dia-activo"' : '') + ' aria-label="' + tx('Imagem {n}', { n: i + 1 }) + '"><img src="' + esc(src) + '" alt=""></button>';
+        }).join('') + '</div>' : '')
+      + '</div>';
+
+    var aval = p.avaliacao && p.avaliacao.total
+      ? '<button class="dia-detalhe-aval" data-ir-aval>' + estrelas(p.avaliacao.media) + '<span>' + p.avaliacao.media.toLocaleString(DIA_LOCALE) + ' · ' + tx(p.avaliacao.total === 1 ? '{n} avaliação' : '{n} avaliações', { n: p.avaliacao.total }) + '</span></button>' : '';
+
+    var opcoes = temOpcoes ? '<div class="dia-opcoes-titulo">' + tx('Opção') + '</div><div class="dia-opcoes">' + p.variantes.map(function(v, i){
+      var esgotada = v.stock !== null && v.stock <= 0;
+      return '<button class="dia-opcao" data-opcao="' + i + '"' + (esgotada ? ' disabled title="' + esc(tx('Esgotado')) + '"' : '') + '>' + esc(v.nome) + '</button>';
+    }).join('') + '</div>' : '';
+
+    var j = abrirJanela('<div class="dia-detalhe-topo">' + galeria
       + '<div class="dia-detalhe-info">'
       + (p.categoria ? '<div class="dia-produto-cat">' + esc(p.categoria) + '</div>' : '')
       + '<h3 class="dia-detalhe-nome">' + esc(p.nome) + '</h3>'
-      + '<div class="dia-detalhe-precos"><span class="dia-detalhe-preco">' + mzn(p.preco) + '</span>'
-      + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s><span class="dia-detalhe-poupa">' + tx('Poupas {v}', { v: mzn(p.preco_antigo - p.preco) }) + '</span>' : '') + '</div>'
-      + (p.descricao ? '<p class="dia-detalhe-desc">' + esc(p.descricao) + '</p>' : '')
+      + aval
+      + '<div class="dia-detalhe-precos" id="dia-det-precos"></div>'
+      + opcoes
+      + '<div class="dia-stock" id="dia-det-stock"></div>'
       + '<div class="dia-detalhe-qtd">' + tx('Quantidade') + ' <div class="dia-qtd"><button data-q="-1" aria-label="' + tx('Menos') + '">−</button><span id="dia-det-qtd">1</span><button data-q="1" aria-label="' + tx('Mais') + '">+</button></div></div>'
+      + '<div class="dia-msg-opcao" id="dia-det-msg"></div>'
       + '<button class="dia-btn-principal" id="dia-det-add">' + ICONES.carrinho + ' ' + tx('Adicionar ao carrinho') + '</button>'
       + '<button class="dia-btn-sec" id="dia-det-comprar">' + tx('Comprar agora') + '</button>'
-      + '</div>', 'dia-detalhe');
-    Array.prototype.forEach.call(j.querySelectorAll('[data-q]'), function(b){
+      + (p.descricao ? '<p class="dia-detalhe-desc">' + esc(p.descricao) + '</p>' : '')
+      + '</div></div>'
+      + '<div class="dia-detalhe-baixo"><section class="dia-bloco" id="dia-det-aval"></section><section class="dia-bloco" id="dia-det-rel"></section></div>', 'dia-detalhe');
+
+    function actualizar(){
+      var preco = precoDe(p, vi);
+      var d = desconto(p);
+      var antigo = (vi === null || p.variantes[vi].preco === p.preco) && d > 0;
+      $('dia-det-precos').innerHTML = (temOpcoes && vi === null && temPrecosDiferentes(p)
+          ? '<span class="dia-detalhe-preco"><small style="font-size:14px;font-weight:700;margin-right:6px">' + tx('desde') + '</small>' + mzn(precoMinimo(p)) + '</span>'
+          : '<span class="dia-detalhe-preco">' + mzn(preco) + '</span>')
+        + (antigo ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s><span class="dia-detalhe-poupa">' + tx('Poupas {v}', { v: mzn(p.preco_antigo - p.preco) }) + '</span>' : '');
+      var st = stockDe(p, vi);
+      var el = $('dia-det-stock');
+      if (temOpcoes && vi === null) { el.className = 'dia-stock'; el.style.display = 'none'; }
+      else if (st === 0) { el.style.display = ''; el.className = 'dia-stock dia-nada'; el.textContent = tx('Esgotado'); }
+      else if (st !== null && st <= 5) { el.style.display = ''; el.className = 'dia-stock dia-pouco'; el.textContent = tx(st === 1 ? 'Só resta 1 unidade' : 'Só restam {n} unidades', { n: st }); }
+      else { el.style.display = ''; el.className = 'dia-stock'; el.textContent = tx('Em stock'); }
+      var semStock = (vi !== null || !temOpcoes) && st === 0;
+      $('dia-det-add').disabled = semStock;
+      $('dia-det-comprar').disabled = semStock;
+      if (st !== null && qtd > st) { qtd = Math.max(1, st); $('dia-det-qtd').textContent = qtd; }
+      cada(j.querySelectorAll('[data-opcao]'), function(b){ b.classList.toggle('dia-activo', Number(b.getAttribute('data-opcao')) === vi); });
+    }
+    actualizar();
+
+    cada(j.querySelectorAll('[data-opcao]'), function(b){
+      b.addEventListener('click', function(){ vi = Number(b.getAttribute('data-opcao')); $('dia-det-msg').textContent = ''; actualizar(); });
+    });
+    cada(j.querySelectorAll('[data-q]'), function(b){
       b.addEventListener('click', function(){
-        qtd = Math.max(1, Math.min(99, qtd + Number(b.getAttribute('data-q'))));
+        var st = stockDe(p, vi);
+        var max = st === null ? 99 : Math.max(1, st);
+        qtd = Math.max(1, Math.min(max, qtd + Number(b.getAttribute('data-q'))));
         $('dia-det-qtd').textContent = qtd;
       });
     });
-    $('dia-det-add').addEventListener('click', function(){ adicionar(p.id, qtd); fecharJanela(); });
-    $('dia-det-comprar').addEventListener('click', function(){ adicionar(p.id, qtd); fecharJanela(); abrirCheckout(); });
+    function confirmarOpcao(){
+      if (temOpcoes && vi === null) { $('dia-det-msg').textContent = tx('Escolhe uma opção.'); return false; }
+      return true;
+    }
+    $('dia-det-add').addEventListener('click', function(){ if (confirmarOpcao() && adicionar(p.id, vi, qtd)) fecharJanela(); });
+    $('dia-det-comprar').addEventListener('click', function(){ if (confirmarOpcao() && adicionar(p.id, vi, qtd)) { fecharJanela(); abrirCheckout(); } });
+    var irAval = j.querySelector('[data-ir-aval]');
+    if (irAval) irAval.addEventListener('click', function(){ $('dia-det-aval').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+
+    ligarGaleria(j);
+    renderAvaliacoes(p);
+    var rel = produtos.filter(function(x){ return x.id !== p.id && p.categoria && x.categoria === p.categoria; });
+    if (rel.length < 4) rel = rel.concat(produtos.filter(function(x){ return x.id !== p.id && rel.indexOf(x) === -1; }));
+    rel = rel.slice(0, 10);
+    var relEl = $('dia-det-rel');
+    if (rel.length) {
+      relEl.innerHTML = seccaoComFila(tx('Também vais gostar'), '', rel, '');
+      ligarSetas(relEl);
+      cada(relEl.querySelectorAll('.dia-produto-card'), function(card){
+        card.addEventListener('click', function(e){
+          var add = e.target.closest ? e.target.closest('[data-add]') : null;
+          if (add) { e.stopPropagation(); adicionar(add.getAttribute('data-add'), null, 1); return; }
+          abrirProduto(card.getAttribute('data-id'));
+        });
+      });
+    } else relEl.remove();
+  }
+
+  function ligarGaleria(j){
+    var trilho = j.querySelector('#dia-gal');
+    if (!trilho) return;
+    var total = trilho.children.length;
+    function actual(){ return Math.round(trilho.scrollLeft / Math.max(1, trilho.clientWidth)); }
+    function ir(i){ i = (i + total) % total; trilho.scrollTo({ left: i * trilho.clientWidth, behavior: 'smooth' }); }
+    cada(j.querySelectorAll('[data-gal]'), function(b){ b.addEventListener('click', function(){ ir(actual() + Number(b.getAttribute('data-gal'))); }); });
+    cada(j.querySelectorAll('[data-mini]'), function(b){ b.addEventListener('click', function(){ ir(Number(b.getAttribute('data-mini'))); }); });
+    trilho.addEventListener('scroll', function(){
+      var a = actual();
+      cada(j.querySelectorAll('[data-mini]'), function(b){ b.classList.toggle('dia-activo', Number(b.getAttribute('data-mini')) === a); });
+    }, { passive: true });
+    // Zoom ao passar o rato (computador); no telemóvel desliza.
+    cada(trilho.querySelectorAll('.dia-gal-foto'), function(f){
+      var img = f.querySelector('img');
+      if (!img) return;
+      f.addEventListener('mousemove', function(e){
+        var r = f.getBoundingClientRect();
+        img.style.transformOrigin = ((e.clientX - r.left) / r.width * 100) + '% ' + ((e.clientY - r.top) / r.height * 100) + '%';
+      });
+      f.addEventListener('mouseenter', function(){ if (window.matchMedia('(hover:hover)').matches) f.classList.add('dia-zoom'); });
+      f.addEventListener('mouseleave', function(){ f.classList.remove('dia-zoom'); });
+    });
+  }
+
+  // ---- Avaliações ----
+  function renderAvaliacoes(p){
+    var el = $('dia-det-aval');
+    if (!el) return;
+    var resumo = p.avaliacao || { media: 0, total: 0 };
+    var nota = 0;
+    el.innerHTML = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + tx('Avaliações') + '</h3>'
+      + '<button class="dia-ver-todos" id="dia-aval-escrever">' + tx('Escrever avaliação') + ' ' + ICONES.seta + '</button></div>'
+      + (resumo.total ? '<div class="dia-aval-resumo"><span class="dia-aval-media">' + resumo.media.toLocaleString(DIA_LOCALE) + '</span><div>' + estrelas(resumo.media)
+        + '<small>' + tx(resumo.total === 1 ? '{n} avaliação' : '{n} avaliações', { n: resumo.total }) + '</small></div></div>' : '')
+      + '<div class="dia-aval-lista" id="dia-aval-lista">' + (resumo.total ? '<div class="dia-spinner"></div>' : '<p class="dia-modal-sub" style="margin:0">' + tx('Ainda sem avaliações. Sê o primeiro a avaliar!') + '</p>') + '</div>'
+      + '<div id="dia-aval-form-caixa"></div>';
+    $('dia-aval-escrever').addEventListener('click', function(){
+      var caixa = $('dia-aval-form-caixa');
+      if (caixa.innerHTML) { caixa.innerHTML = ''; return; }
+      caixa.innerHTML = '<div class="dia-aval-form">'
+        + '<div class="dia-escolher-estrelas" role="radiogroup" aria-label="' + esc(tx('A tua nota')) + '">' + [1, 2, 3, 4, 5].map(function(n){
+          return '<button type="button" data-nota="' + n + '" aria-label="' + esc(tx('{n} de 5 estrelas', { n: n })) + '">' + ICONES.estrela + '</button>';
+        }).join('') + '</div>'
+        + '<div class="dia-campo"><label for="dia-aval-nome">' + tx('O teu nome') + '</label><input type="text" id="dia-aval-nome" maxlength="60" autocomplete="name"></div>'
+        + '<div class="dia-campo"><label for="dia-aval-texto">' + tx('Comentário (opcional)') + '</label><textarea id="dia-aval-texto" rows="3" maxlength="600"></textarea></div>'
+        + '<button class="dia-btn-principal" id="dia-aval-enviar">' + tx('Enviar avaliação') + '</button>'
+        + '<div class="dia-msg-erro" id="dia-aval-erro"></div></div>';
+      cada(caixa.querySelectorAll('[data-nota]'), function(b){
+        b.addEventListener('click', function(){
+          nota = Number(b.getAttribute('data-nota'));
+          cada(caixa.querySelectorAll('[data-nota]'), function(x){ x.classList.toggle('dia-activo', Number(x.getAttribute('data-nota')) <= nota); });
+        });
+      });
+      $('dia-aval-enviar').addEventListener('click', function(){
+        var btn = this;
+        var nome = $('dia-aval-nome').value.trim();
+        if (!nota) { $('dia-aval-erro').textContent = tx('Escolhe de 1 a 5 estrelas.'); return; }
+        if (nome.length < 2) { $('dia-aval-erro').textContent = tx('Escreve o teu nome.'); return; }
+        btn.disabled = true;
+        post('/loja-avaliar', { site_id: SITE_ID, produto_id: p.id, nome: nome, estrelas: nota, comentario: $('dia-aval-texto').value.trim() }).then(function(r){
+          if (r.status !== 'success') throw new Error((DIA_LANG === 'pt' && r.message) || tx('Não foi possível enviar a avaliação.'));
+          caixa.innerHTML = '<div class="dia-msg-ok">' + tx('Obrigado! A tua avaliação aparece depois de a loja a aprovar.') + '</div>';
+        }).catch(function(erro){
+          btn.disabled = false;
+          $('dia-aval-erro').textContent = erro.message || tx('Algo correu mal. Tenta novamente.');
+        });
+      });
+    });
+    if (!resumo.total) return;
+    post('/loja-avaliacoes', { site_id: SITE_ID, produto_id: p.id }).then(function(r){
+      var lista = (r.status === 'success' && r.response.avaliacoes) || [];
+      var caixa = $('dia-aval-lista');
+      if (!caixa) return;
+      caixa.innerHTML = lista.map(function(a){
+        var data = '';
+        try { data = a.data ? new Date(a.data).toLocaleDateString(DIA_LOCALE, { day: 'numeric', month: 'short', year: 'numeric' }) : ''; } catch (e) {}
+        return '<div class="dia-aval"><div class="dia-aval-cabeca"><strong>' + esc(a.nome) + '</strong><small>' + esc(data) + '</small></div>'
+          + estrelas(a.estrelas) + (a.comentario ? '<p>' + esc(a.comentario) + '</p>' : '') + '</div>';
+      }).join('');
+    }).catch(function(){ var c = $('dia-aval-lista'); if (c) c.innerHTML = ''; });
   }
 
   // ======================================================
@@ -2699,25 +3275,29 @@ const LOJA_CART_JS = `/*
       cont.innerHTML = '<div class="dia-carrinho-vazio">' + ICONES.carrinho + '<div>' + tx('O teu carrinho está vazio.') + '</div></div>';
     } else {
       cont.innerHTML = itens.map(function(i){
-        var sub = i.produto.preco * i.quantidade;
+        var sub = i.preco * i.quantidade;
         total += sub;
+        var img = imagemDe(i.produto);
         return '<div class="dia-item-carrinho">'
-          + (i.produto.imagem ? '<img class="dia-item-img" src="' + esc(i.produto.imagem) + '" alt="">' : '<div class="dia-item-img"></div>')
-          + '<div class="dia-item-info"><div class="dia-item-nome">' + esc(i.produto.nome) + '</div>'
-          + '<div class="dia-item-linha"><div class="dia-qtd"><button data-menos="' + esc(i.produto.id) + '" aria-label="' + tx('Menos') + '">−</button><span>' + i.quantidade + '</span><button data-mais="' + esc(i.produto.id) + '" aria-label="' + tx('Mais') + '">+</button></div>'
+          + (img ? '<img class="dia-item-img" src="' + esc(img) + '" alt="">' : '<div class="dia-item-img"></div>')
+          + '<div class="dia-item-info"><div class="dia-item-nome">' + esc(i.nome) + '</div>'
+          + '<div class="dia-item-linha"><div class="dia-qtd"><button data-menos="' + esc(i.chave) + '" aria-label="' + tx('Menos') + '">−</button><span>' + i.quantidade + '</span><button data-mais="' + esc(i.chave) + '" aria-label="' + tx('Mais') + '">+</button></div>'
           + '<span class="dia-item-preco">' + mzn(sub) + '</span></div>'
-          + '<button class="dia-remover" data-remover="' + esc(i.produto.id) + '">' + tx('Remover') + '</button></div></div>';
+          + '<button class="dia-remover" data-remover="' + esc(i.chave) + '">' + tx('Remover') + '</button></div></div>';
       }).join('');
     }
     $('dia-total-carrinho').textContent = mzn(total);
     $('dia-btn-finalizar').disabled = !itens.length;
-    Array.prototype.forEach.call(cont.querySelectorAll('[data-mais]'), function(b){
-      b.addEventListener('click', function(){ var id = b.getAttribute('data-mais'); carrinho[id] = Math.min(99, (carrinho[id] || 0) + 1); guardarCarrinho(); renderCarrinho(); });
+    cada(cont.querySelectorAll('[data-mais]'), function(b){
+      b.addEventListener('click', function(){
+        var k = b.getAttribute('data-mais'), partes = k.split('::');
+        adicionar(partes[0], partes.length > 1 ? Number(partes[1]) : null, 1);
+      });
     });
-    Array.prototype.forEach.call(cont.querySelectorAll('[data-menos]'), function(b){
-      b.addEventListener('click', function(){ var id = b.getAttribute('data-menos'); carrinho[id] = (carrinho[id] || 0) - 1; if (carrinho[id] <= 0) delete carrinho[id]; guardarCarrinho(); renderCarrinho(); });
+    cada(cont.querySelectorAll('[data-menos]'), function(b){
+      b.addEventListener('click', function(){ var k = b.getAttribute('data-menos'); carrinho[k] = (carrinho[k] || 0) - 1; if (carrinho[k] <= 0) delete carrinho[k]; guardarCarrinho(); renderCarrinho(); });
     });
-    Array.prototype.forEach.call(cont.querySelectorAll('[data-remover]'), function(b){
+    cada(cont.querySelectorAll('[data-remover]'), function(b){
       b.addEventListener('click', function(){ delete carrinho[b.getAttribute('data-remover')]; guardarCarrinho(); renderCarrinho(); });
     });
   }
@@ -2730,7 +3310,7 @@ const LOJA_CART_JS = `/*
   function abrirCheckout(){
     var itens = itensDoCarrinho();
     if (!itens.length) return;
-    var total = itens.reduce(function(t, i){ return t + i.produto.preco * i.quantidade; }, 0);
+    var total = itens.reduce(function(t, i){ return t + i.preco * i.quantidade; }, 0);
     var qtd = itens.reduce(function(t, i){ return t + i.quantidade; }, 0);
     var modo = loja.modo;
 
@@ -2775,14 +3355,22 @@ const LOJA_CART_JS = `/*
       + '</div>');
 
     metodoSeleccionado = '';
-    Array.prototype.forEach.call(j.querySelectorAll('.dia-metodo'), function(el){
+    cada(j.querySelectorAll('.dia-metodo'), function(el){
       el.addEventListener('click', function(){
-        Array.prototype.forEach.call(j.querySelectorAll('.dia-metodo'), function(x){ x.classList.remove('seleccionado'); });
+        cada(j.querySelectorAll('.dia-metodo'), function(x){ x.classList.remove('seleccionado'); });
         el.classList.add('seleccionado');
         metodoSeleccionado = el.getAttribute('data-metodo');
       });
     });
     $('dia-btn-pagar').addEventListener('click', function(){ confirmar(itens, modo, textoBotao); });
+  }
+
+  function mensagemDeErro(r, padrao){
+    if (r && r.codigo === 'stock') {
+      return r.disponivel ? tx(r.disponivel === 1 ? 'Só resta 1 de "{nome}".' : 'Só restam {n} de "{nome}".', { n: r.disponivel, nome: r.nome || '' }) : tx('"{nome}" está esgotado.', { nome: r.nome || '' });
+    }
+    if (r && r.codigo === 'opcao') return tx('Escolhe uma opção para "{nome}".', { nome: r.nome || '' });
+    return (DIA_LANG === 'pt' && r && r.message) || padrao;
   }
 
   function confirmar(itens, modo, textoBotao){
@@ -2815,9 +3403,9 @@ const LOJA_CART_JS = `/*
       cliente_email: email,
       notas: notas,
       idioma: DIA_LANG,
-      itens: itens.map(function(i){ return { produto_id: i.produto.id, quantidade: i.quantidade }; })
+      itens: itens.map(function(i){ return { produto_id: i.produto.id, variante: i.variante, quantidade: i.quantidade }; })
     }).then(function(r){
-      if (r.status !== 'success') throw new Error((DIA_LANG === 'pt' && r.message) || tx('Não foi possível criar a encomenda.'));
+      if (r.status !== 'success') throw new Error(mensagemDeErro(r, tx('Não foi possível criar a encomenda.')));
       var enc = r.response;
       if (enc.modo === 'daniel') {
         return post('/loja-pagar', { encomenda_id: enc.encomenda_id, metodo: metodoSeleccionado }).then(function(rp){
@@ -2867,8 +3455,10 @@ const LOJA_CART_JS = `/*
     }
     html += '<button class="dia-btn-sec" data-fechar-final>' + tx('Continuar a comprar') + '</button></div>';
     var el = mostrarEstado(html);
-    el.querySelector('[data-fechar-final]').addEventListener('click', fecharJanela);
-    Array.prototype.forEach.call(el.querySelectorAll('[data-copiar]'), function(b){
+    // O stock mudou com esta encomenda: actualizar a montra já, por trás.
+    recarregarProdutos().catch(function(){});
+    el.querySelector('[data-fechar-final]').addEventListener('click', function(){ fecharJanela(); });
+    cada(el.querySelectorAll('[data-copiar]'), function(b){
       b.addEventListener('click', function(){
         var v = b.getAttribute('data-copiar');
         try { navigator.clipboard.writeText(v); } catch (e) {}
@@ -2887,7 +3477,7 @@ const LOJA_CART_JS = `/*
           el.innerHTML = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div><h3>' + tx('Pagamento confirmado!') + '</h3>'
             + '<div class="dia-ref">' + esc(referencia) + '</div><p>' + tx('Obrigado pela tua compra. A loja já recebeu a tua encomenda.') + '</p>'
             + '<button class="dia-btn-sec" data-fechar-final>' + tx('Continuar a comprar') + '</button></div>';
-          el.querySelector('[data-fechar-final]').addEventListener('click', fecharJanela);
+          el.querySelector('[data-fechar-final]').addEventListener('click', function(){ fecharJanela(); recarregarProdutos(); });
           return;
         }
         tentativas++;
@@ -2908,21 +3498,21 @@ const LOJA_CART_JS = `/*
   // ======================================================
   // Arranque
   // ======================================================
+  function recarregarProdutos(){
+    return post('/loja-produtos', { site_id: SITE_ID }).then(function(r){
+      if (r.status !== 'success') throw new Error();
+      produtos = r.response.produtos || [];
+      if (r.response.loja) loja = r.response.loja;
+      renderMontra();
+      renderCarrinho();
+    });
+  }
   function iniciar(){
     injectarEstilos();
     if (!montarUI()) return;
     renderCarrinho();
-    post('/loja-produtos', { site_id: SITE_ID }).then(function(r){
-      if (r.status !== 'success') throw new Error();
-      produtos = r.response.produtos || [];
-      if (r.response.loja) loja = r.response.loja;
-      renderCapa();
-      renderCategorias();
-      renderCatalogo();
-      renderCarrinho();
-    }).catch(function(){
-      renderCapa();
-      $('dia-catalogo').innerHTML = '<div class="dia-vazio">' + tx('Não foi possível carregar os produtos. Recarrega a página.') + '</div>';
+    recarregarProdutos().catch(function(){
+      $('dia-montra').innerHTML = '<div class="dia-vazio">' + tx('Não foi possível carregar os produtos. Recarrega a página.') + '</div>';
     });
   }
 
@@ -4415,7 +5005,10 @@ app.post('/loja-produtos', async (req, res) => {
       };
     }
 
-    return res.json({ status: 'success', response: { produtos: produtos.map(produtoParaLista), loja } });
+    if (site) loja.montra = montraLoja(site);
+    const resumo = await resumoAvaliacoes(site_id);
+    const lista = produtos.map(p => Object.assign(produtoParaLista(p), { avaliacao: resumo[p._id] || { media: 0, total: 0 } }));
+    return res.json({ status: 'success', response: { produtos: lista, loja } });
   } catch (erro) {
     console.error('Erro em /loja-produtos:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os produtos.' });
@@ -4463,6 +5056,33 @@ app.post('/loja-produto-criar', async (req, res) => {
       const up = await uploadImagemBase64('produtos', owner, imagem_data_url);
       if (up.erro) return res.json({ status: 'error', message: up.erro });
       dados['Imagem URL'] = up.url;
+    }
+    // Loja v3: fotos por ordem (a primeira é a principal), opções e stock.
+    if (Array.isArray(req.body.fotos) || req.body.variantes !== undefined || req.body.stock !== undefined) {
+      const base = (typeof produto !== 'undefined' && produto) ? produto : null;
+      const extra = extraProduto(base || {});
+      if (Array.isArray(req.body.fotos)) {
+        const urls = [];
+        for (const f of req.body.fotos.slice(0, 6)) {
+          if (typeof f !== 'string') continue;
+          if (f.indexOf('data:image/') === 0) {
+            const up = await uploadImagemBase64('produtos', owner, f);
+            if (up.erro) return res.json({ status: 'error', message: up.erro });
+            if (up.url) urls.push(up.url);
+          } else if (/^https:\/\/[^\s"'<>]+$/.test(f)) {
+            urls.push(f.slice(0, 600));
+          }
+        }
+        dados['Imagem URL'] = urls[0] || '';
+        extra.imagens = urls.slice(1);
+      }
+      if (req.body.variantes !== undefined) {
+        extra.variantes = extraProduto({ 'Extra Json': JSON.stringify({ variantes: Array.isArray(req.body.variantes) ? req.body.variantes : [] }) }).variantes;
+      }
+      if (req.body.stock !== undefined) {
+        extra.stock = numeroOuNulo(req.body.stock);
+      }
+      dados['Extra Json'] = JSON.stringify(extra);
     }
 
     const produtoId = await bubbleCreate('produto', dados);
@@ -4549,6 +5169,33 @@ app.post('/loja-produto-editar', async (req, res) => {
       const up = await uploadImagemBase64('produtos', owner, imagem_data_url);
       if (up.erro) return res.json({ status: 'error', message: up.erro });
       dados['Imagem URL'] = up.url;
+    }
+    // Loja v3: fotos por ordem (a primeira é a principal), opções e stock.
+    if (Array.isArray(req.body.fotos) || req.body.variantes !== undefined || req.body.stock !== undefined) {
+      const base = (typeof produto !== 'undefined' && produto) ? produto : null;
+      const extra = extraProduto(base || {});
+      if (Array.isArray(req.body.fotos)) {
+        const urls = [];
+        for (const f of req.body.fotos.slice(0, 6)) {
+          if (typeof f !== 'string') continue;
+          if (f.indexOf('data:image/') === 0) {
+            const up = await uploadImagemBase64('produtos', owner, f);
+            if (up.erro) return res.json({ status: 'error', message: up.erro });
+            if (up.url) urls.push(up.url);
+          } else if (/^https:\/\/[^\s"'<>]+$/.test(f)) {
+            urls.push(f.slice(0, 600));
+          }
+        }
+        dados['Imagem URL'] = urls[0] || '';
+        extra.imagens = urls.slice(1);
+      }
+      if (req.body.variantes !== undefined) {
+        extra.variantes = extraProduto({ 'Extra Json': JSON.stringify({ variantes: Array.isArray(req.body.variantes) ? req.body.variantes : [] }) }).variantes;
+      }
+      if (req.body.stock !== undefined) {
+        extra.stock = numeroOuNulo(req.body.stock);
+      }
+      dados['Extra Json'] = JSON.stringify(extra);
     }
 
     await bubblePatch('produto', produto_id, dados);
@@ -5461,19 +6108,43 @@ app.post('/loja-encomenda', async (req, res) => {
 
     let valorTotal = 0;
     const itensCalculados = [];
-    for (const item of itens) {
-      const produto = porId[item.produto_id];
+    const pedidoPorChave = {};
+    for (const item of itens.slice(0, 50)) {
+      const produto = porId[item && item.produto_id];
       if (!produto) {
         return res.json({ status: 'error', message: 'Um dos produtos já não está disponível nesta loja.' });
       }
-      const quantidade = Math.max(1, parseInt(item.quantidade, 10) || 1);
-      const precoUnitario = produto['Preco MZN'];
+      const quantidade = Math.max(1, Math.min(99, parseInt(item.quantidade, 10) || 1));
+      const extra = extraProduto(produto);
+      let precoUnitario = Number(produto['Preco MZN']) || 0;
+      let nomeItem = produto['Nome'];
+      let varIdx = null;
+      if (extra.variantes.length) {
+        varIdx = parseInt(item.variante, 10);
+        const v = extra.variantes[varIdx];
+        if (isNaN(varIdx) || !v) {
+          return res.json({ status: 'error', codigo: 'opcao', nome: produto['Nome'], message: 'Escolhe uma opção para "' + produto['Nome'] + '".' });
+        }
+        if (v.preco > 0) precoUnitario = v.preco;
+        nomeItem = produto['Nome'] + ' (' + v.nome + ')';
+      }
+      // Stock: soma as quantidades do mesmo produto/opção no pedido.
+      const disponivel = varIdx !== null ? extra.variantes[varIdx].stock : extra.stock;
+      const chave = produto._id + ':' + varIdx;
+      pedidoPorChave[chave] = (pedidoPorChave[chave] || 0) + quantidade;
+      if (disponivel !== null && pedidoPorChave[chave] > disponivel) {
+        return res.json({
+          status: 'error', codigo: 'stock', nome: nomeItem, disponivel,
+          message: disponivel === 0 ? '"' + nomeItem + '" está esgotado.' : 'Só restam ' + disponivel + ' de "' + nomeItem + '".'
+        });
+      }
       valorTotal += precoUnitario * quantidade;
       itensCalculados.push({
         produto_id: produto._id,
-        nome: produto['Nome'],
+        nome: nomeItem,
         preco_unitario: precoUnitario,
-        quantidade
+        quantidade,
+        variante: varIdx
       });
     }
 
@@ -5509,7 +6180,10 @@ app.post('/loja-encomenda', async (req, res) => {
     const resposta = { encomenda_id: encomendaId, valor_total: valorTotal, modo, referencia };
 
     if (modo !== 'daniel') {
-      // Sem pagamento online: o dono recebe já a encomenda por email.
+      // Sem pagamento online: o stock desconta já, e o dono recebe a
+      // encomenda por email. (Com pagamento online, desconta quando o
+      // pagamento é confirmado - ver o webhook.)
+      await baixarStock(itensCalculados);
       avisarEncomenda(site, encomendaId, modo, cfg, idiomaCliente);
       if (modo === 'manual') {
         resposta.manual = { mpesa: cfg.mpesa, emola: cfg.emola, titular: cfg.titular };
@@ -5915,6 +6589,7 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     });
 
     console.log('Encomenda marcada como paga:', encomenda._id);
+    await baixarStock(lerJsonSeguro(encomenda['Produtos Json'], []));
 
     // Avisar o dono da loja (não bloqueia nada se falhar).
     try {
@@ -6492,7 +7167,7 @@ app.post('/signup-code', async (req, res) => {
 
     return res.json({ status: 'success' });
   } catch (erro) {
-    console.error('Erro em /signup-code:', erro);
+    console.error('Erro em /signup-code (se for "enviarEmail falhou", ver o domínio de envio na Resend):', erro && erro.message ? erro.message : erro);
     return res.json({ status: 'error', message: 'Não foi possível enviar o código. Tenta novamente.' });
   }
 });
@@ -6648,6 +7323,68 @@ app.post('/entrar', async (req, res) => {
     console.error('Erro em /entrar:', erro);
     return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível entrar. Tenta novamente.' });
   }
+});
+
+// ---- Criar conta e recuperar password pelo container ----
+// As páginas chamavam os workflows do Bubble directamente pelo domínio
+// (daniel-ia.pro/api/1.1/wf/...). Se o domínio falhar ou o browser bloquear
+// o pedido, a pessoa via "Não foi possível ligar ao servidor". Agora o
+// container chama o Bubble pelo mesmo endereço que já usa para tudo o resto
+// (BUBBLE_BASE) e devolve a resposta à página. Só estes workflows passam
+// por aqui (o login tem a rota /entrar, com bloqueio de tentativas).
+const WORKFLOWS_CONTA = {
+  'signup': { campos: { nome: 120, email: 160, pass: 200 }, limiteIp: [5, 60 * MIN] },
+  'forgot-password': { campos: { email: 160 }, limiteIp: [6, 60 * MIN], limiteEmail: [3, 60 * MIN] },
+  'reset-password': { campos: { token: 300, newpass: 200 }, limiteIp: [10, 60 * MIN] }
+};
+app.post('/conta-wf', async (req, res) => {
+  const nome = String((req.body || {}).wf || '');
+  const regra = WORKFLOWS_CONTA[nome];
+  if (!regra) {
+    return res.json({ status: 'error', codigo: 'indisponivel', message: 'Pedido inválido.' });
+  }
+  const recebidos = (req.body && typeof req.body.dados === 'object' && req.body.dados) || {};
+  const dados = {};
+  for (const [campo, max] of Object.entries(regra.campos)) {
+    const v = recebidos[campo];
+    if (typeof v !== 'string' || !v || v.length > max) {
+      return res.json({ status: 'error', message: 'Preenche todos os campos.' });
+    }
+    dados[campo] = campo === 'email' ? v.trim().toLowerCase() : v;
+  }
+  const ip = ipDe(req);
+  if (!contar('conta-wf:' + nome + ':ip:' + ip, regra.limiteIp[0], regra.limiteIp[1])) {
+    return res.status(429).json({ status: 'error', codigo: 'limite', message: MSG_LIMITE });
+  }
+  if (regra.limiteEmail && !contar('conta-wf:' + nome + ':email:' + dados.email, regra.limiteEmail[0], regra.limiteEmail[1])) {
+    return res.status(429).json({ status: 'error', codigo: 'limite', message: MSG_LIMITE });
+  }
+
+  let resposta;
+  try {
+    const r = await fetch(BUBBLE_WF_BASE + '/' + nome, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(dados)
+    });
+    const texto = await r.text();
+    try { resposta = JSON.parse(texto); } catch (e) {
+      console.error('Workflow ' + nome + ' do Bubble devolveu algo que não é JSON (HTTP ' + r.status + '):', texto.slice(0, 200));
+      return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível ligar ao servidor. Tenta novamente.' });
+    }
+  } catch (e) {
+    console.error('Erro a chamar o workflow ' + nome + ' do Bubble:', e.message);
+    return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível ligar ao servidor. Tenta novamente.' });
+  }
+
+  if (resposta && resposta.status === 'success') {
+    return res.json({ status: 'success', response: resposta.response || {} });
+  }
+  // Erros do Bubble vêm em formatos diferentes (ex: email já registado).
+  const corpo = (resposta && resposta.body) || {};
+  const msg = resposta && (resposta.message || corpo.message);
+  console.warn('Workflow ' + nome + ' recusado pelo Bubble:', JSON.stringify(resposta).slice(0, 300));
+  return res.json({ status: 'error', message: msg ? String(msg).slice(0, 200) : 'Não foi possível concluir. Verifica os dados e tenta novamente.' });
 });
 
 // ---- Sair: o token deixa de valer em todo o lado ----
@@ -7266,6 +8003,174 @@ function referenciaEncomenda(id) {
   return 'ENC-' + String(id || '').replace(/[^0-9a-z]/gi, '').slice(-6).toUpperCase();
 }
 
+// ======================================================
+// Loja v3 (15/10/2026): várias fotos, opções (variantes), stock,
+// avaliações e montra por blocos.
+// ======================================================
+// Campo novo no Produto: "Extra Json" (text) =
+//   { imagens: [links extra], variantes: [{nome, preco, stock}], stock, vendidos }
+// Campo novo no Site: "Loja Blocos Json" (text) = { blocos: [...], estilo: {...} }
+// Tipo novo: "Avaliacao" (Site, Produto, Nome, Estrelas, Comentario, Aprovada)
+function numeroOuNulo(v) {
+  if (v === null || v === undefined || v === '' || isNaN(Number(v))) return null;
+  return Math.max(0, Math.floor(Number(v)));
+}
+function extraProduto(p) {
+  const e = lerJsonSeguro(p && p['Extra Json'], {}) || {};
+  return {
+    imagens: (Array.isArray(e.imagens) ? e.imagens : [])
+      .filter(u => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/.test(u)).slice(0, 8),
+    variantes: (Array.isArray(e.variantes) ? e.variantes : [])
+      .filter(v => v && String(v.nome || '').trim())
+      .slice(0, 30)
+      .map(v => ({
+        nome: String(v.nome).trim().slice(0, 60),
+        preco: Number(v.preco) > 0 ? Math.round(Number(v.preco) * 100) / 100 : 0,
+        stock: numeroOuNulo(v.stock)
+      })),
+    stock: numeroOuNulo(e.stock),
+    vendidos: Math.max(0, Math.floor(Number(e.vendidos) || 0))
+  };
+}
+
+// Stock total: com opções, soma o stock de cada uma (se alguma não tiver
+// limite, o produto também não tem). Sem opções, o stock do produto.
+function stockTotal(extra) {
+  if (!extra.variantes.length) return extra.stock;
+  let total = 0;
+  for (const v of extra.variantes) {
+    if (v.stock === null) return null;
+    total += v.stock;
+  }
+  return total;
+}
+
+// Desconta o stock e soma as vendas depois de uma encomenda (ou de um
+// pagamento confirmado). Nunca deixa o stock abaixo de zero.
+async function baixarStock(itens) {
+  const porProduto = {};
+  for (const i of itens || []) {
+    if (!i || !i.produto_id) continue;
+    (porProduto[i.produto_id] = porProduto[i.produto_id] || []).push(i);
+  }
+  for (const id of Object.keys(porProduto)) {
+    try {
+      const p = await bubbleGet('produto', id);
+      if (!p) continue;
+      const extra = extraProduto(p);
+      for (const i of porProduto[id]) {
+        const q = Math.max(0, parseInt(i.quantidade, 10) || 0);
+        const vi = (i.variante === null || i.variante === undefined || i.variante === '') ? null : parseInt(i.variante, 10);
+        if (vi !== null && extra.variantes[vi]) {
+          if (extra.variantes[vi].stock !== null) extra.variantes[vi].stock = Math.max(0, extra.variantes[vi].stock - q);
+        } else if (extra.stock !== null) {
+          extra.stock = Math.max(0, extra.stock - q);
+        }
+        extra.vendidos += q;
+      }
+      await bubblePatch('produto', id, { 'Extra Json': JSON.stringify(extra) });
+    } catch (e) {
+      console.error('Stock não actualizado para o produto', id, e.message);
+    }
+  }
+}
+
+// ---- Montra por blocos ----
+const TIPOS_BLOCO = ['anuncio', 'capa', 'categorias', 'fila', 'banners', 'oferta', 'catalogo', 'vistos'];
+const FONTES_FILA = ['novidades', 'promocoes', 'mais_vendidos', 'destaques', 'categoria'];
+function textoLimpo(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').trim().slice(0, max); }
+function linkImagem(v) { const t = String(v || ''); return /^https:\/\/[^\s"'<>]+$/.test(t) ? t.slice(0, 600) : ''; }
+function limparDestino(d) {
+  d = d || {};
+  const tipo = ['categoria', 'produto', 'url'].includes(d.tipo) ? d.tipo : 'nada';
+  let valor = textoLimpo(d.valor, 300);
+  if (tipo === 'url' && !/^https?:\/\/[^\s"'<>]+$/.test(valor)) valor = '';
+  if (tipo === 'produto' && !/^[A-Za-z0-9_-]{1,64}$/.test(valor)) valor = '';
+  return { tipo: valor ? tipo : 'nada', valor };
+}
+function limparBloco(b) {
+  if (!b || !TIPOS_BLOCO.includes(b.tipo)) return null;
+  const base = {
+    id: String(b.id || '').replace(/[^a-z0-9]/gi, '').slice(0, 16) || Math.random().toString(36).slice(2, 10),
+    tipo: b.tipo,
+    activo: b.activo !== false
+  };
+  switch (b.tipo) {
+    case 'anuncio':
+      return Object.assign(base, { texto: textoLimpo(b.texto, 140), cor: ['primaria', 'escuro', 'destaque'].includes(b.cor) ? b.cor : 'primaria' });
+    case 'capa':
+      return base;
+    case 'categorias': {
+      const imagens = {};
+      if (b.imagens && typeof b.imagens === 'object') {
+        Object.keys(b.imagens).slice(0, 40).forEach(k => { const u = linkImagem(b.imagens[k]); if (u) imagens[textoLimpo(k, 40)] = u; });
+      }
+      return Object.assign(base, { titulo: textoLimpo(b.titulo, 60), formato: b.formato === 'cartoes' ? 'cartoes' : 'circulos', imagens });
+    }
+    case 'fila':
+      return Object.assign(base, { titulo: textoLimpo(b.titulo, 60), fonte: FONTES_FILA.includes(b.fonte) ? b.fonte : 'destaques', categoria: textoLimpo(b.categoria, 40) });
+    case 'banners': {
+      const itens = (Array.isArray(b.itens) ? b.itens : []).slice(0, 3).map(i => ({
+        imagem: linkImagem(i && i.imagem),
+        titulo: textoLimpo(i && i.titulo, 60),
+        sub: textoLimpo(i && i.sub, 100),
+        destino: limparDestino(i && i.destino)
+      })).filter(i => i.imagem);
+      return Object.assign(base, { itens });
+    }
+    case 'oferta': {
+      const t = new Date(b.termina);
+      return Object.assign(base, {
+        titulo: textoLimpo(b.titulo, 60),
+        termina: isNaN(t.getTime()) ? '' : t.toISOString(),
+        fonte: b.fonte === 'escolher' ? 'escolher' : 'promocoes',
+        produtos: (Array.isArray(b.produtos) ? b.produtos : []).filter(x => typeof x === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(x)).slice(0, 24)
+      });
+    }
+    default:
+      return Object.assign(base, { titulo: textoLimpo(b.titulo, 60) });
+  }
+}
+const MONTRA_PADRAO = [
+  { id: 'capa', tipo: 'capa', activo: true },
+  { id: 'cats', tipo: 'categorias', activo: true, titulo: '', formato: 'circulos', imagens: {} },
+  { id: 'dest', tipo: 'fila', activo: true, titulo: '', fonte: 'destaques', categoria: '' },
+  { id: 'promo', tipo: 'fila', activo: true, titulo: '', fonte: 'promocoes', categoria: '' },
+  { id: 'cat', tipo: 'catalogo', activo: true, titulo: '' },
+  { id: 'vistos', tipo: 'vistos', activo: true, titulo: '' }
+];
+function limparEstilo(e) {
+  e = e || {};
+  const colunas = Math.min(6, Math.max(3, parseInt(e.colunas, 10) || 4));
+  return { cartao: ['suave', 'moldura', 'minimal'].includes(e.cartao) ? e.cartao : 'suave', colunas };
+}
+function montraLoja(site) {
+  const m = lerJsonSeguro(site && site['Loja Blocos Json'], null);
+  const blocos = m && Array.isArray(m.blocos) ? m.blocos.slice(0, 30).map(limparBloco).filter(Boolean) : [];
+  if (!blocos.length) return { blocos: MONTRA_PADRAO.map(b => Object.assign({}, b)), estilo: limparEstilo(m && m.estilo), padrao: true };
+  return { blocos, estilo: limparEstilo(m.estilo), padrao: false };
+}
+
+// Média e total das avaliações aprovadas, por produto.
+async function resumoAvaliacoes(siteId) {
+  const lista = await bubbleList('avaliacao', [
+    { key: 'Site', constraint_type: 'equals', value: siteId },
+    { key: 'Aprovada', constraint_type: 'equals', value: true }
+  ]).catch(() => []);
+  const r = {};
+  for (const a of lista) {
+    const id = a['Produto'];
+    const e = Math.min(5, Math.max(1, Number(a['Estrelas']) || 0));
+    if (!id || !e) continue;
+    r[id] = r[id] || { soma: 0, total: 0 };
+    r[id].soma += e;
+    r[id].total++;
+  }
+  const saida = {};
+  Object.keys(r).forEach(id => { saida[id] = { media: Math.round(r[id].soma / r[id].total * 10) / 10, total: r[id].total }; });
+  return saida;
+}
+
 function produtoParaLista(p) {
   const preco = Number(p['Preco MZN']) || 0;
   const antigo = Number(p['Preco Antigo MZN']) || 0;
@@ -7277,7 +8182,20 @@ function produtoParaLista(p) {
     categoria: String(p['Categoria'] || '').trim(),
     destaque: !!p['Destaque'],
     descricao: p['Descricao'] || '',
-    imagem: p['Imagem URL'] || ''
+    imagem: p['Imagem URL'] || '',
+    ...(function () {
+      const extra = extraProduto(p);
+      const imagens = [p['Imagem URL'] || ''].concat(extra.imagens).filter((u, i, a) => u && a.indexOf(u) === i);
+      const stock = stockTotal(extra);
+      return {
+        imagens,
+        variantes: extra.variantes.map(v => ({ nome: v.nome, preco: v.preco > 0 ? v.preco : preco, stock: v.stock })),
+        stock,
+        esgotado: stock === 0,
+        vendidos: extra.vendidos,
+        criado: p['Created Date'] || ''
+      };
+    })()
   };
 }
 
@@ -7428,6 +8346,7 @@ app.post('/loja-config-ler', async (req, res) => {
         cdn_url: site['CDN URL'] || '',
         config: cfg,
         capa: capaLoja(site),
+        montra: montraLoja(site),
         modo_efectivo: modo,
         kyc_estado: kyc ? (kyc['Estado'] || 'Pendente') : 'Nenhum'
       }
@@ -7503,6 +8422,159 @@ app.post('/loja-config-guardar', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /loja-config-guardar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível guardar as definições da loja.' });
+  }
+});
+
+// ======================================================
+// Loja v3 - montra por blocos e avaliações
+// ======================================================
+async function siteDoDono(owner, siteId) {
+  const site = siteId ? await bubbleGet('site', siteId).catch(() => null) : null;
+  return site && site['Owner'] === owner ? site : null;
+}
+
+// Guardar a montra. Imagens novas (banners e categorias) chegam em base64
+// e sobem aqui para o Bunny.
+app.post('/loja-montra-guardar', async (req, res) => {
+  try {
+    const { owner, site_id, montra } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    if (!montra || !Array.isArray(montra.blocos)) return res.json({ status: 'error', message: 'Pedido inválido.' });
+
+    let envios = 0;
+    async function subir(valor) {
+      if (typeof valor !== 'string' || valor.indexOf('data:image/') !== 0) return valor;
+      if (++envios > 12) throw Object.assign(new Error('demasiadas'), { utilizador: 'Demasiadas imagens de uma vez. Guarda e depois continua.' });
+      const up = await uploadImagemBase64('loja-montra', owner, valor);
+      if (up.erro) throw Object.assign(new Error(up.erro), { utilizador: up.erro });
+      return up.url;
+    }
+    const blocos = [];
+    for (const b of montra.blocos.slice(0, 30)) {
+      if (!b || typeof b !== 'object') continue;
+      const copia = Object.assign({}, b);
+      if (copia.tipo === 'banners' && Array.isArray(copia.itens)) {
+        copia.itens = [];
+        for (const i of b.itens.slice(0, 3)) {
+          if (!i) continue;
+          copia.itens.push(Object.assign({}, i, { imagem: await subir(i.imagem_data_url || i.imagem) }));
+        }
+      }
+      if (copia.tipo === 'categorias' && copia.imagens && typeof copia.imagens === 'object') {
+        const imgs = {};
+        for (const k of Object.keys(b.imagens).slice(0, 40)) imgs[k] = await subir(b.imagens[k]);
+        copia.imagens = imgs;
+      }
+      const limpo = limparBloco(copia);
+      if (limpo) blocos.push(limpo);
+    }
+    const valor = { blocos, estilo: limparEstilo(montra.estilo) };
+    await bubblePatch('site', site_id, { 'Loja Blocos Json': JSON.stringify(valor) });
+    return res.json({ status: 'success', response: { montra: montraLoja({ 'Loja Blocos Json': JSON.stringify(valor) }) } });
+  } catch (erro) {
+    if (erro && erro.utilizador) return res.json({ status: 'error', message: erro.utilizador });
+    console.error('Erro em /loja-montra-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar a montra.' });
+  }
+});
+
+// Cliente deixa uma avaliação (fica à espera de aprovação do dono).
+app.post('/loja-avaliar', async (req, res) => {
+  try {
+    const { site_id, produto_id } = req.body;
+    const nome = textoLimpo(req.body.nome, 60);
+    const comentario = textoLimpo(req.body.comentario, 600);
+    const estrelas = parseInt(req.body.estrelas, 10);
+    if (!site_id || !produto_id || nome.length < 2 || !(estrelas >= 1 && estrelas <= 5)) {
+      return res.json({ status: 'error', codigo: 'dados', message: 'Escreve o teu nome e escolhe as estrelas.' });
+    }
+    const produto = await bubbleGet('produto', produto_id).catch(() => null);
+    if (!produto || produto['Site'] !== site_id || !produto['Is Active']) {
+      return res.json({ status: 'error', message: 'Produto não encontrado.' });
+    }
+    await bubbleCreate('avaliacao', {
+      'Site': site_id, 'Produto': produto_id, 'Nome': nome, 'Estrelas': estrelas, 'Comentario': comentario, 'Aprovada': false
+    });
+    // Aviso ao dono (não bloqueia nada se falhar).
+    (async () => {
+      try {
+        const site = await bubbleGet('site', site_id);
+        const email = await emailDonoLoja(site, configLoja(site));
+        if (!email) return;
+        const estrelasTexto = '★★★★★'.slice(0, estrelas) + '☆☆☆☆☆'.slice(0, 5 - estrelas);
+        await enviarEmail(email, 'Nova avaliação para aprovar - ' + (site['Nome'] || 'a tua loja'),
+          templateEmailKyc('Nova avaliação', 'Olá.', [
+            'Um cliente avaliou <strong>' + escaparHtml(produto['Nome']) + '</strong> na tua loja:',
+            '<span style="font-size:20px;color:#F59E0B;letter-spacing:2px;">' + estrelasTexto + '</span>',
+            '<strong>' + escaparHtml(nome) + '</strong>' + (comentario ? ': "' + escaparHtml(comentario) + '"' : ''),
+            'A avaliação só aparece na loja depois de a aprovares.'
+          ], { texto: 'Ver avaliações', url: 'https://app.daniel-ia.pro/produtos/?site=' + encodeURIComponent(site_id) + '#p-avaliacoes' }));
+      } catch (e) { console.error('Aviso de avaliação falhou:', e.message); }
+    })();
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /loja-avaliar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível enviar a avaliação.' });
+  }
+});
+
+// Avaliações aprovadas de um produto (público).
+app.post('/loja-avaliacoes', async (req, res) => {
+  try {
+    const { site_id, produto_id } = req.body;
+    if (!site_id || !produto_id) return res.json({ status: 'error', message: 'Pedido inválido.' });
+    const lista = await bubbleList('avaliacao', [
+      { key: 'Site', constraint_type: 'equals', value: site_id },
+      { key: 'Produto', constraint_type: 'equals', value: produto_id },
+      { key: 'Aprovada', constraint_type: 'equals', value: true }
+    ], 'Created Date', true);
+    return res.json({ status: 'success', response: { avaliacoes: lista.slice(0, 50).map(a => ({
+      nome: a['Nome'] || '', estrelas: Number(a['Estrelas']) || 0, comentario: a['Comentario'] || '', data: a['Created Date'] || ''
+    })) } });
+  } catch (erro) {
+    console.error('Erro em /loja-avaliacoes:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar as avaliações.' });
+  }
+});
+
+// Dono: todas as avaliações da loja (por aprovar e aprovadas).
+app.post('/loja-avaliacoes-gerir', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para ver esta loja.' });
+    const [lista, produtos] = await Promise.all([
+      bubbleList('avaliacao', [{ key: 'Site', constraint_type: 'equals', value: site_id }], 'Created Date', true),
+      bubbleList('produto', [{ key: 'Site', constraint_type: 'equals', value: site_id }])
+    ]);
+    const nomes = {};
+    produtos.forEach(p => { nomes[p._id] = p['Nome']; });
+    return res.json({ status: 'success', response: { avaliacoes: lista.map(a => ({
+      id: a._id, produto_id: a['Produto'], produto: nomes[a['Produto']] || '', nome: a['Nome'] || '',
+      estrelas: Number(a['Estrelas']) || 0, comentario: a['Comentario'] || '', aprovada: !!a['Aprovada'], data: a['Created Date'] || ''
+    })) } });
+  } catch (erro) {
+    console.error('Erro em /loja-avaliacoes-gerir:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar as avaliações.' });
+  }
+});
+
+// Dono: aprovar ou apagar uma avaliação.
+app.post('/loja-avaliacao-decidir', async (req, res) => {
+  try {
+    const { owner, site_id, avaliacao_id, accao } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site || !avaliacao_id) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const a = await bubbleGet('avaliacao', avaliacao_id).catch(() => null);
+    if (!a || a['Site'] !== site_id) return res.json({ status: 'error', message: 'Avaliação não encontrada.' });
+    if (accao === 'aprovar') await bubblePatch('avaliacao', avaliacao_id, { 'Aprovada': true });
+    else if (accao === 'apagar') await bubbleDelete('avaliacao', avaliacao_id);
+    else return res.json({ status: 'error', message: 'Pedido inválido.' });
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /loja-avaliacao-decidir:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar.' });
   }
 });
 
