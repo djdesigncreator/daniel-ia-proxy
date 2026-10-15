@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.50.0'; // 15/10/2026 - sites também em espanhol; app em pt/en/fr/es
+const VERSION = '1.51.0'; // 15/10/2026 - segurança: sessão obrigatória, limites anti-abuso, CORS fechado, correcções
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -108,28 +108,236 @@ const STREAM_CDN = semProtocolo(process.env.STREAM_CDN);
 
 const app = express();
 
-// ---- CORS ----
-// Sem isto, o browser bloqueia qualquer fetch() feito a partir das páginas
-// do Bubble (daniel-ia.bubbleapps.io ou, mais tarde, bag-security.com) para
-// este container, que vive noutro domínio (bunny.run).
+// ======================================================
+// SEGURANÇA (15/10/2026)
+// ======================================================
+// Camadas, por esta ordem:
+//  1. Cabeçalhos de segurança em todas as respostas.
+//  2. CORS: as rotas da conta (privadas) só aceitam pedidos vindos das
+//     páginas do Daniel IA. As rotas públicas (lojas, galerias, blogs e
+//     formulários dos sites gerados, que vivem noutros domínios) continuam
+//     abertas a qualquer origem.
+//  3. Limites de pedidos por IP e por conta (anti força bruta e anti spam).
+//  4. Validação dos ids que chegam no corpo (impede injectar caminhos ou
+//     parâmetros na Data API do Bubble, que usamos com token de admin).
+//  5. Sessão obrigatória (owner + token) em todas as rotas da conta - já
+//     não basta saber o id de alguém para mexer na conta dele.
+// Interruptor de emergência no Bunny: SESSAO_MODO=aviso deixa passar os
+// pedidos sem sessão válida (só regista no log). Por omissão é obrigatória.
+app.disable('x-powered-by');
+app.set('trust proxy', true);
+
+const SESSAO_MODO = (clean(process.env.SESSAO_MODO) || 'obrigatoria').toLowerCase();
+const ORIGENS_PERMITIDAS = new Set(
+  ['https://app.daniel-ia.pro', 'https://daniel-ia.pro', 'https://www.daniel-ia.pro', 'https://daniel-ia.bubbleapps.io', SELF_URL]
+    .concat(String(process.env.ORIGENS_EXTRA || '').split(','))
+    .map(o => String(o || '').trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+);
+
+// Rotas da conta: exigem sessão e só aceitam as origens do Daniel IA.
+const ROTAS_PRIVADAS = new Set([
+  '/dominio-configurar', '/dominio-cloudflare-auto', '/dominio-verificar',
+  '/generate', '/editar', '/generate-status', '/account', '/meus-sites',
+  '/loja-produto-criar', '/loja-meus-produtos', '/loja-produto-editar',
+  '/portfolio-trabalho-criar', '/portfolio-meus-trabalhos', '/portfolio-trabalho-editar',
+  '/blog-post-criar', '/blog-meus-posts', '/blog-post-editar', '/contacto-guardar',
+  '/galeria-album-criar', '/galeria-meus-albuns', '/galeria-album-editar', '/galeria-album-media',
+  '/galeria-foto-adicionar', '/galeria-video-iniciar', '/galeria-video-estado', '/galeria-media-apagar',
+  '/assinatura-iniciar', '/assinatura-pagar', '/assinatura-estado',
+  '/loja-config-ler', '/loja-config-guardar', '/kyc-estado', '/kyc-enviar', '/sair'
+]);
+// Sem sessão (ainda não há conta entrada), mas só a partir das nossas
+// páginas - ou sem Origin nenhuma (chamadas servidor-a-servidor do Bubble).
+const ROTAS_SO_ORIGEM = new Set([
+  '/signup-code', '/verify-code', '/entrar', '/sessao-criar', '/plan-warnings-teste-7hq2fx',
+  '/admin-kyc-lista', '/admin-kyc-imagem', '/admin-kyc-decidir'
+]);
+const ROTAS_ADMIN = new Set(['/sessao-criar', '/plan-warnings-teste-7hq2fx', '/admin-kyc-lista', '/admin-kyc-imagem', '/admin-kyc-decidir']);
+
+function ipDe(req) {
+  const real = String(req.headers['x-real-ip'] || '').trim();
+  if (real) return real;
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xff || req.ip || (req.socket && req.socket.remoteAddress) || 'desconhecido';
+}
+
+// ---- 1. Cabeçalhos ----
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
+// ---- 2. CORS ----
+app.use((req, res, next) => {
+  const origem = String(req.headers.origin || '').replace(/\/+$/, '');
+  const fechada = ROTAS_PRIVADAS.has(req.path) || ROTAS_SO_ORIGEM.has(req.path);
+  if (fechada) {
+    if (origem && !ORIGENS_PERMITIDAS.has(origem)) {
+      console.warn('[seguranca] origem recusada', origem, 'em', req.path, 'IP', ipDe(req));
+      return res.status(403).json({ status: 'error', message: 'Pedido não autorizado.' });
+    }
+    if (origem) {
+      res.header('Access-Control-Allow-Origin', origem);
+      res.header('Vary', 'Origin');
+    }
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
   }
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Max-Age', '600');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// ---- 3. Limites de pedidos (memória do container) ----
+const baldesLimite = new Map();
+function contar(chave, max, janelaMs) {
+  const agora = Date.now();
+  let b = baldesLimite.get(chave);
+  if (!b || b.fim <= agora) { b = { n: 0, fim: agora + janelaMs }; baldesLimite.set(chave, b); }
+  b.n++;
+  return b.n <= max;
+}
+function excedido(chave, max) {
+  const b = baldesLimite.get(chave);
+  return !!(b && b.fim > Date.now() && b.n >= max);
+}
+setInterval(() => {
+  const agora = Date.now();
+  for (const [k, b] of baldesLimite) if (b.fim <= agora) baldesLimite.delete(k);
+}, 60 * 1000).unref();
+
+const MIN = 60 * 1000;
+// [quem, máximo, janela]. quem: ip | owner | email | site
+const LIMITES = {
+  '/entrar': [['ip', 20, 15 * MIN]],
+  '/signup-code': [['owner', 5, 60 * MIN], ['ip', 15, 60 * MIN]],
+  '/verify-code': [['owner', 12, 15 * MIN], ['ip', 40, 15 * MIN]],
+  '/contacto-enviar': [['ip', 5, 10 * MIN], ['site', 40, 60 * MIN]],
+  '/loja-encomenda': [['ip', 15, 10 * MIN]],
+  '/loja-pagar': [['ip', 10, 10 * MIN]],
+  '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
+  '/editar': [['owner', 15, 10 * MIN]],
+  '/kyc-enviar': [['owner', 5, 60 * MIN], ['ip', 10, 60 * MIN]],
+  '/dominio-cloudflare-auto': [['owner', 10, 60 * MIN]],
+  '/dominio-configurar': [['owner', 20, 60 * MIN]],
+  '/galeria-foto-adicionar': [['owner', 150, 10 * MIN]],
+  '/sessao-criar': [['ip', 120, 15 * MIN]],
+  '/admin-kyc-lista': [['ip', 60, 15 * MIN]],
+  '/admin-kyc-imagem': [['ip', 200, 15 * MIN]],
+  '/admin-kyc-decidir': [['ip', 60, 15 * MIN]],
+  '/plan-warnings-teste-7hq2fx': [['ip', 10, 60 * MIN]]
+};
+const MSG_LIMITE = 'Demasiados pedidos. Espera um pouco e tenta outra vez.';
+function recusarLimite(res, req, regra) {
+  console.warn('[seguranca] limite atingido', req.path, regra, 'IP', ipDe(req));
+  return res.status(429).json({ status: 'error', codigo: 'limite', message: MSG_LIMITE });
+}
+
+app.use((req, res, next) => {
+  const ip = ipDe(req);
+  // Limite geral por IP, generoso - só trava abuso a sério.
+  if (!contar('geral:' + ip, 400, MIN)) return recusarLimite(res, req, 'geral');
+  // Chave de admin errada vezes demais: IP bloqueado 30 minutos.
+  if (ROTAS_ADMIN.has(req.path) && excedido('admin-falha:' + ip, 10)) return recusarLimite(res, req, 'admin-falhas');
   next();
 });
 
 app.use(express.json({ limit: '15mb' })); // 15mb para caber um logótipo em base64
 
+// JSON partido não mostra a pilha de erro do Express a ninguém.
+app.use((erro, req, res, next) => {
+  if (erro && (erro.type === 'entity.parse.failed' || erro.type === 'entity.too.large')) {
+    return res.status(400).json({ status: 'error', message: 'Pedido inválido.' });
+  }
+  next(erro);
+});
+
+app.use((req, res, next) => {
+  const regras = LIMITES[req.path];
+  if (!regras) return next();
+  const corpo = req.body || {};
+  const ip = ipDe(req);
+  for (const [quem, max, janela] of regras) {
+    let valor = ip;
+    if (quem === 'owner') valor = String(corpo.owner || '');
+    if (quem === 'site') valor = String(corpo.site_id || '');
+    if (quem === 'email') valor = String(corpo.email || '').toLowerCase();
+    if (!valor) continue;
+    if (!contar(req.path + ':' + quem + ':' + valor, max, janela)) return recusarLimite(res, req, quem);
+  }
+  next();
+});
+
+// ---- 4. Ids válidos ----
+// Os ids do Bubble são só números, letras e "x". Qualquer coisa com "/",
+// "?", "&", espaços ou objectos é recusada antes de chegar à Data API.
+const ID_VALIDO = /^[A-Za-z0-9_-]{1,64}$/;
+const CAMPOS_ID = ['owner', 'site_id', 'produto_id', 'album_id', 'media_id', 'post_id', 'trabalho_id',
+  'encomenda_id', 'assinatura_id', 'plano_id', 'generation_id', 'id'];
+app.use((req, res, next) => {
+  const corpo = req.body;
+  if (corpo && typeof corpo === 'object') {
+    for (const campo of CAMPOS_ID) {
+      const v = corpo[campo];
+      if (v === undefined || v === null || v === '') continue;
+      if (typeof v !== 'string' || !ID_VALIDO.test(v)) {
+        console.warn('[seguranca] id inválido em', req.path, campo, 'IP', ipDe(req));
+        return res.status(400).json({ status: 'error', message: 'Pedido inválido.' });
+      }
+    }
+    if (corpo.token !== undefined && (typeof corpo.token !== 'string' || corpo.token.length > 200)) {
+      return res.status(400).json({ status: 'error', message: 'Pedido inválido.' });
+    }
+  }
+  next();
+});
+
+// ---- 5. Sessão obrigatória nas rotas da conta ----
+// Sessões válidas ficam 60 s em memória, para não ir ao Bubble em cada
+// pedido. Ao sair (/sair) ou ao entrar noutra vez, a cache é limpa.
+const cacheSessoes = new Map();
+function esquecerSessoes(owner) {
+  for (const k of cacheSessoes.keys()) if (k.indexOf(owner + ':') === 0) cacheSessoes.delete(k);
+}
+app.use(async (req, res, next) => {
+  if (!ROTAS_PRIVADAS.has(req.path) || req.method !== 'POST') return next();
+  if (SESSAO_MODO === 'desligada') return next();
+  const { owner, token } = req.body || {};
+  const chave = owner + ':' + token;
+  const emCache = cacheSessoes.get(chave);
+  if (owner && token && emCache && emCache > Date.now()) return next();
+  const usuario = await validarSessao(owner, token);
+  if (usuario) {
+    cacheSessoes.set(chave, Date.now() + 60 * 1000);
+    return next();
+  }
+  if (SESSAO_MODO === 'aviso') {
+    console.warn('[seguranca] pedido sem sessão válida (modo aviso, deixado passar):', req.path, 'IP', ipDe(req));
+    return next();
+  }
+  console.warn('[seguranca] pedido sem sessão válida recusado:', req.path, 'IP', ipDe(req));
+  return res.json({ status: 'error', codigo: 'sessao', message: 'A tua sessão expirou. Entra outra vez na tua conta.' });
+});
+
 // ======================================================
 // Helpers - Bubble Data API
 // ======================================================
 
+function idSeguro(id) {
+  const t = String(id == null ? '' : id);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(t)) throw new Error('id inválido');
+  return encodeURIComponent(t);
+}
+
 async function bubbleGet(tipo, id) {
-  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${id}`, {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${idSeguro(id)}`, {
     headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` }
   });
   const json = await res.json();
@@ -181,7 +389,7 @@ async function bubbleCreate(tipo, dados) {
 }
 
 async function bubblePatch(tipo, id, dados) {
-  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${id}`, {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${idSeguro(id)}`, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${BUBBLE_TOKEN}`,
@@ -196,7 +404,7 @@ async function bubblePatch(tipo, id, dados) {
 }
 
 async function bubbleDelete(tipo, id) {
-  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${id}`, {
+  const res = await fetch(`${BUBBLE_BASE}/${tipo}/${idSeguro(id)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` }
   });
@@ -4055,6 +4263,9 @@ app.post('/generate-status', async (req, res) => {
     if (!site) {
       return res.json({ status: 'error', message: 'Projecto não encontrado.' });
     }
+    if (SESSAO_MODO === 'obrigatoria' && site['Owner'] !== req.body.owner) {
+      return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    }
 
     const response = {
       estado: site['Status'],
@@ -6256,7 +6467,15 @@ app.post('/signup-code', async (req, res) => {
       return res.json({ status: 'error', message: 'Esta conta não tem email associado.' });
     }
 
+    // Segurança: antes, qualquer pessoa podia chamar isto com o id de outra
+    // conta e voltar a pô-la como "não confirmada". Conta já confirmada
+    // fica como está (e não recebe email nenhum).
+    if (usuario['Token Confirmado']) {
+      return res.json({ status: 'success' });
+    }
+
     const codigo = gerarCodigo();
+    baldesLimite.delete('codigo-falha:' + owner);
     const expira = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos
 
     await bubblePatch('user', owner, {
@@ -6293,17 +6512,19 @@ app.post('/verify-code', async (req, res) => {
       return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
     }
 
-    if (usuario['Token Confirmado']) {
-      // já estava confirmado antes, sem mal nenhum - mas ainda assim dá-lhe
-      // uma sessão nova, para o caso de ter chegado aqui sem token (ex:
-      // clicou duas vezes seguidas no botão de confirmar).
-      const tokenExistente = await criarTokenSessao(owner).catch(() => null);
-      return res.json({ status: 'success', token: tokenExistente });
+    // Segurança (15/10/2026): antes, uma conta já confirmada recebia uma
+    // sessão nova SEM verificar o código - bastava saber o id da conta para
+    // entrar nela. Agora o código tem sempre de bater certo (e dentro do
+    // prazo), e há um limite de tentativas erradas por conta.
+    if (excedido('codigo-falha:' + owner, 8)) {
+      return res.json({ status: 'error', message: 'Demasiadas tentativas. Pede um código novo.' });
     }
 
     const codigoCerto = String(usuario['Token'] || '').trim().toUpperCase();
     const codigoRecebido = String(code || '').trim().toUpperCase();
-    if (!codigoCerto || codigoRecebido !== codigoCerto) {
+    const a = Buffer.from(codigoRecebido), b = Buffer.from(codigoCerto);
+    if (!codigoCerto || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      contar('codigo-falha:' + owner, 8, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Código incorrecto.' });
     }
 
@@ -6376,10 +6597,78 @@ async function criarTokenSessao(owner) {
   return token;
 }
 
+// ---- Entrar (login feito pelo container) ----
+// A página de login manda o email e a password para aqui; o container
+// chama o mesmo workflow "login" do Bubble que a página chamava antes
+// e, se o Bubble aceitar, devolve o id da conta e um token de sessão
+// nosso. Assim o token já não depende de nenhum passo extra configurado
+// no Bubble. Tentativas erradas contam por email e por IP.
+const BUBBLE_WF_BASE = clean(process.env.BUBBLE_WF_BASE) || String(BUBBLE_BASE || '').replace(/\/obj\/?$/, '/wf');
+app.post('/entrar', async (req, res) => {
+  try {
+    const email = String((req.body || {}).email || '').trim().toLowerCase();
+    const pass = (req.body || {}).pass;
+    if (!email || typeof pass !== 'string' || !pass || email.length > 160 || pass.length > 200) {
+      return res.json({ status: 'error', message: 'Preenche o email e a password.' });
+    }
+    const ip = ipDe(req);
+    if (excedido('login-falha:' + email, 6) || excedido('login-falha-ip:' + ip, 25)) {
+      return res.status(429).json({ status: 'error', codigo: 'limite', message: 'Demasiadas tentativas. Espera 15 minutos e tenta outra vez.' });
+    }
+
+    let resposta;
+    try {
+      const r = await fetch(BUBBLE_WF_BASE + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, pass })
+      });
+      resposta = await r.json();
+    } catch (e) {
+      console.error('Erro a chamar o login do Bubble:', e.message);
+      return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível ligar ao servidor. Tenta novamente.' });
+    }
+
+    if (!resposta || resposta.status !== 'success') {
+      contar('login-falha:' + email, 6, 15 * MIN);
+      contar('login-falha-ip:' + ip, 25, 15 * MIN);
+      return res.json({ status: 'error', message: 'Email ou password incorrectos.' });
+    }
+    const r = resposta.response || {};
+    const owner = r.user_id || r.owner || r.user || r.id || '';
+    if (!owner || !ID_VALIDO.test(String(owner))) {
+      console.error('Login do Bubble sem user_id reconhecível. Chaves recebidas:', Object.keys(r));
+      return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível entrar. Tenta novamente.' });
+    }
+    baldesLimite.delete('login-falha:' + email);
+    const token = await criarTokenSessao(String(owner));
+    esquecerSessoes(String(owner));
+    return res.json({ status: 'success', response: { owner: String(owner), token } });
+  } catch (erro) {
+    console.error('Erro em /entrar:', erro);
+    return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível entrar. Tenta novamente.' });
+  }
+});
+
+// ---- Sair: o token deixa de valer em todo o lado ----
+app.post('/sair', async (req, res) => {
+  try {
+    const { owner } = req.body || {};
+    if (owner) {
+      await bubblePatch('user', owner, { 'Token Sessao': '', 'Token Sessao Expira': new Date(0).toISOString() });
+      esquecerSessoes(owner);
+    }
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    return res.json({ status: 'success' });
+  }
+});
+
 app.post('/sessao-criar', async (req, res) => {
   try {
     const { owner, key } = req.body;
-    if (!ADMIN_SECRET || key !== ADMIN_SECRET) {
+    if (!chaveAdminValida(key)) {
+      contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Não autorizado.' });
     }
     if (!owner) {
@@ -6387,6 +6676,7 @@ app.post('/sessao-criar', async (req, res) => {
     }
 
     const token = await criarTokenSessao(owner);
+    esquecerSessoes(owner);
     return res.json({ status: 'success', token: token });
   } catch (erro) {
     console.error('Erro em /sessao-criar:', erro);
@@ -6488,13 +6778,15 @@ setInterval(verificarAvisosExpiracao, 24 * 60 * 60 * 1000);
 // contas foram avisadas desta vez.
 app.post('/plan-warnings-teste-7hq2fx', async (req, res) => {
   try {
-    if (!ADMIN_SECRET || req.body.key !== ADMIN_SECRET) {
+    if (!chaveAdminValida(req.body.key)) {
+      contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Não autorizado.' });
     }
     await verificarAvisosExpiracao();
     return res.json({ status: 'success', message: 'Verificação feita - ver os logs do container para detalhes.' });
   } catch (erro) {
-    return res.json({ status: 'error', message: 'Falhou: ' + erro.message });
+    console.error('Erro em /plan-warnings:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível fazer a verificação.' });
   }
 });
 
@@ -6763,6 +7055,7 @@ app.post('/kyc-enviar', async (req, res) => {
 app.post('/admin-kyc-lista', async (req, res) => {
   try {
     if (!chaveAdminValida(req.body.key)) {
+      contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Chave inválida.' });
     }
     const estado = ['Pendente', 'Aprovado', 'Rejeitado'].includes(req.body.estado) ? req.body.estado : 'Pendente';
@@ -6797,6 +7090,7 @@ app.post('/admin-kyc-lista', async (req, res) => {
 app.post('/admin-kyc-imagem', async (req, res) => {
   try {
     if (!chaveAdminValida(req.body.key)) {
+      contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Chave inválida.' });
     }
     const campos = { selfie: 'Selfie', frente: 'BI Frente', verso: 'BI Verso' };
@@ -6821,6 +7115,7 @@ app.post('/admin-kyc-imagem', async (req, res) => {
 app.post('/admin-kyc-decidir', async (req, res) => {
   try {
     if (!chaveAdminValida(req.body.key)) {
+      contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Chave inválida.' });
     }
     const { id, decisao } = req.body;
