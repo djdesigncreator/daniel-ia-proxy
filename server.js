@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.57.0'; // 16/10/2026 - mudar de layout só nos planos pagos (Free vê as 3 e usa a escolhida)
+const VERSION = '1.58.0'; // 16/10/2026 - painel de administração (KYC, planos manuais, utilizadores, sites, pagamentos)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -140,7 +140,8 @@ const ORIGENS_PERMITIDAS = new Set(
 // Rotas da conta: exigem sessão e só aceitam as origens do Daniel IA.
 const ROTAS_PRIVADAS = new Set([
   '/dominio-configurar', '/dominio-cloudflare-auto', '/dominio-verificar',
-  '/generate', '/editar', '/generate-status', '/escolher-variante', '/novas-variantes', '/trocar-variante', '/account', '/meus-sites',
+  '/generate', '/editar', '/generate-status', '/escolher-variante', '/novas-variantes', '/trocar-variante',
+  '/admin-entrar', '/admin-resumo', '/admin-utilizadores', '/admin-utilizador', '/admin-atribuir-plano', '/admin-tokens', '/admin-terminar-sessoes', '/admin-sites', '/admin-pagamentos', '/admin-registo', '/account', '/meus-sites',
   '/loja-produto-criar', '/loja-meus-produtos', '/loja-produto-editar',
   '/portfolio-trabalho-criar', '/portfolio-meus-trabalhos', '/portfolio-trabalho-editar',
   '/blog-post-criar', '/blog-meus-posts', '/blog-post-editar', '/contacto-guardar',
@@ -233,6 +234,8 @@ const LIMITES = {
   '/loja-organizar-aplicar': [['owner', 30, 10 * MIN]],
   '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
   '/escolher-variante': [['owner', 20, 10 * MIN]],
+  '/admin-entrar': [['owner', 60, 10 * MIN], ['ip', 60, 10 * MIN]],
+  '/admin-atribuir-plano': [['owner', 60, 10 * MIN]],
   '/novas-variantes': [['owner', 6, 60 * MIN]],
   '/trocar-variante': [['owner', 30, 10 * MIN]],
   '/editar': [['owner', 15, 10 * MIN]],
@@ -291,7 +294,7 @@ app.use((req, res, next) => {
 // Os ids do Bubble são só números, letras e "x". Qualquer coisa com "/",
 // "?", "&", espaços ou objectos é recusada antes de chegar à Data API.
 const ID_VALIDO = /^[A-Za-z0-9_-]{1,64}$/;
-const CAMPOS_ID = ['owner', 'site_id', 'produto_id', 'album_id', 'media_id', 'post_id', 'trabalho_id',
+const CAMPOS_ID = ['owner', 'user_id', 'site_id', 'produto_id', 'album_id', 'media_id', 'post_id', 'trabalho_id',
   'encomenda_id', 'assinatura_id', 'plano_id', 'generation_id', 'avaliacao_id', 'id'];
 app.use((req, res, next) => {
   const corpo = req.body;
@@ -8320,7 +8323,7 @@ app.post('/kyc-enviar', async (req, res) => {
 // ---- Admin: lista de pedidos ----
 app.post('/admin-kyc-lista', async (req, res) => {
   try {
-    if (!chaveAdminValida(req.body.key)) {
+    if (!(await adminAutorizado(req))) {
       contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Chave inválida.' });
     }
@@ -8352,10 +8355,311 @@ app.post('/admin-kyc-lista', async (req, res) => {
   }
 });
 
+// ======================================================
+// Painel de administração (1.58.0)
+// ------------------------------------------------------
+// Entra com a sessão normal da app (owner + token) e só se o email da conta
+// estiver em ADMIN_EMAILS (variável do container, separada por vírgulas).
+// Sem a variável, vale só nikayia2026@gmail.com. Cada acção fica registada.
+// ======================================================
+const ADMIN_EMAILS = (clean(process.env.ADMIN_EMAILS) || 'nikayia2026@gmail.com')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+function ehAdmin(usuario) {
+  const email = String(emailDoUsuario(usuario) || '').trim().toLowerCase();
+  return !!email && ADMIN_EMAILS.includes(email);
+}
+async function adminAutorizado(req) {
+  if (chaveAdminValida(req.body && req.body.key)) return true;
+  const { owner, token } = req.body || {};
+  const usuario = await validarSessao(owner, token);
+  return !!usuario && ehAdmin(usuario);
+}
+async function exigirAdmin(req, res) {
+  const usuario = await validarSessao((req.body || {}).owner, (req.body || {}).token);
+  if (!usuario || !ehAdmin(usuario)) {
+    contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
+    console.warn('[admin] acesso recusado', (req.body || {}).owner, 'IP', ipDe(req), req.path);
+    res.json({ status: 'error', codigo: 'admin', message: 'Acesso reservado à administração.' });
+    return null;
+  }
+  return usuario;
+}
+// Registo das acções (memória do container; também vai para os logs do Bunny).
+const registoAdmin = [];
+function registar(admin, accao, detalhe) {
+  const linha = { quando: new Date().toISOString(), quem: emailDoUsuario(admin) || admin._id, accao, detalhe: String(detalhe || '').slice(0, 300) };
+  registoAdmin.unshift(linha);
+  if (registoAdmin.length > 300) registoAdmin.pop();
+  console.log('[admin]', linha.quem, accao, linha.detalhe);
+}
+// Listas completas (o bubbleList normal pára nos 100), com cache curta.
+async function bubbleListTodos(tipo, constraints, max) {
+  const todos = [];
+  let cursor = 0;
+  for (let volta = 0; volta < 60; volta++) {
+    const params = new URLSearchParams();
+    params.set('constraints', JSON.stringify(constraints || []));
+    params.set('sort_field', 'Created Date');
+    params.set('descending', 'true');
+    params.set('limit', '100');
+    params.set('cursor', String(cursor));
+    const res = await fetch(`${BUBBLE_BASE}/${tipo}?${params.toString()}`, { headers: { Authorization: `Bearer ${BUBBLE_TOKEN}` } });
+    const json = await res.json();
+    if (!res.ok) throw new Error('bubbleListTodos falhou: ' + JSON.stringify(json));
+    const r = json.response || {};
+    const lote = r.results || [];
+    todos.push(...lote);
+    cursor += lote.length;
+    if (!lote.length || !r.remaining || todos.length >= (max || 5000)) break;
+  }
+  return todos;
+}
+const cacheAdmin = new Map();
+async function listaAdmin(tipo, forcar) {
+  const c = cacheAdmin.get(tipo);
+  if (!forcar && c && c.ate > Date.now()) return c.dados;
+  const dados = await bubbleListTodos(tipo, []);
+  cacheAdmin.set(tipo, { dados, ate: Date.now() + 30 * 1000 });
+  return dados;
+}
+function limparCacheAdmin() { cacheAdmin.clear(); }
+function nomePlanoDe(planos, id) { const p = planos.find(x => x._id === id); return p ? (p['Name'] || '') : ''; }
+function diasAtras(n) { return Date.now() - n * 86400000; }
+function depoisDe(data, ms) { const t = Date.parse(data || ''); return !isNaN(t) && t >= ms; }
+
+app.post('/admin-entrar', async (req, res) => {
+  try {
+    const usuario = await validarSessao(req.body.owner, req.body.token);
+    if (!usuario || !ehAdmin(usuario)) return res.json({ status: 'success', response: { admin: false } });
+    return res.json({ status: 'success', response: { admin: true, email: emailDoUsuario(usuario), nome: usuario['Full Name'] || '', versao: VERSION } });
+  } catch (erro) {
+    return res.json({ status: 'success', response: { admin: false } });
+  }
+});
+
+app.post('/admin-resumo', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const forcar = !!req.body.actualizar;
+    const [users, sites, planos, kycs, assinaturas, encomendas] = await Promise.all([
+      listaAdmin('user', forcar), listaAdmin('site', forcar), listaAdmin('plan', forcar),
+      listaAdmin('kyc', forcar), listaAdmin('assinatura', forcar), listaAdmin('encomenda', forcar)
+    ]);
+    const conta = (lista, fn) => lista.reduce((m, x) => { const k = fn(x) || '—'; m[k] = (m[k] || 0) + 1; return m; }, {});
+    const pagas30 = assinaturas.filter(a => a['Estado'] === 'Pago' && depoisDe(a['Created Date'], diasAtras(30)));
+    const enc30 = encomendas.filter(e => depoisDe(e['Created Date'], diasAtras(30)));
+    const encPagas30 = enc30.filter(e => e['Estado'] === 'Pago');
+    const ultimoKyc = {};
+    kycs.forEach(k => { if (!ultimoKyc[k['Owner']]) ultimoKyc[k['Owner']] = k; });
+    return res.json({ status: 'success', response: {
+      utilizadores: {
+        total: users.length,
+        novos7: users.filter(u => depoisDe(u['Created Date'], diasAtras(7))).length,
+        novos30: users.filter(u => depoisDe(u['Created Date'], diasAtras(30))).length,
+        por_plano: conta(users, u => nomePlanoDe(planos, u['Plan']) || 'Sem plano')
+      },
+      sites: {
+        total: sites.length,
+        novos7: sites.filter(x => depoisDe(x['Created Date'], diasAtras(7))).length,
+        por_tipo: conta(sites, x => x['Tipo']),
+        por_estado: conta(sites, x => x['Status'])
+      },
+      kyc: { pendentes: Object.values(ultimoKyc).filter(k => k['Estado'] === 'Pendente').length, aprovados: Object.values(ultimoKyc).filter(k => k['Estado'] === 'Aprovado').length },
+      receita: { assinaturas30: pagas30.reduce((t, a) => t + (Number(a['Valor MZN']) || 0), 0), n_assinaturas30: pagas30.length },
+      lojas: { encomendas30: enc30.length, pagas30: encPagas30.length, volume30: encPagas30.reduce((t, e) => t + (Number(e['Valor Total']) || 0), 0) },
+      tokens_mes: users.reduce((t, u) => t + (Number(u['Tokens Usados Mes']) || 0), 0),
+      geracoes: { activas: geracoesActivas, em_fila: filaGeracoes.length, maximo: GERACOES_EM_PARALELO },
+      sistema: {
+        versao: VERSION, ligado_ha_min: Math.round(process.uptime() / 60), sessao_modo: SESSAO_MODO,
+        config: {
+          openai: !!OPENAI_API_KEY, resend: !!clean(process.env.RESEND_KEY), bunny_api: !!clean(process.env.BUNNY_API_KEY),
+          stream: !!clean(process.env.STREAM_KEY), mozpayment: !!clean(process.env.MOZPAYMENT_EMAIL), kyc_cifra: !!clean(process.env.KYC_ENC_KEY),
+          admin_secret: !!ADMIN_SECRET, admin_emails: ADMIN_EMAILS.length
+        }
+      },
+      planos: planos.map(p => ({ id: p._id, nome: p['Name'] || '', preco: Number(p['Price MZN']) || 0, tokens: Number(p['Tokens Incluidos']) || 0, sites: Number(p['Sites Limit']) || 0, activo: !!p['Is Active'] }))
+        .sort((a, b) => a.preco - b.preco)
+    } });
+  } catch (erro) {
+    console.error('Erro em /admin-resumo:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar o resumo.' });
+  }
+});
+
+function utilizadorParaAdmin(u, planos, sitesPorDono, kycPorDono) {
+  const plano = planos.find(p => p._id === u['Plan']);
+  const k = kycPorDono[u._id];
+  return {
+    id: u._id, nome: u['Full Name'] || '', email: emailDoUsuario(u) || '',
+    plano_id: u['Plan'] || '', plano: plano ? (plano['Name'] || '') : '', plano_expira: u['Plan Expires'] || '',
+    tokens_usados: Number(u['Tokens Usados Mes']) || 0, tokens_incluidos: plano ? (Number(plano['Tokens Incluidos']) || 0) : 0,
+    sites: sitesPorDono[u._id] || 0, kyc: k ? (k['Estado'] || 'Pendente') : 'Nenhum', criado: u['Created Date'] || ''
+  };
+}
+
+app.post('/admin-utilizadores', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const [users, sites, planos, kycs] = await Promise.all([listaAdmin('user', !!req.body.actualizar), listaAdmin('site'), listaAdmin('plan'), listaAdmin('kyc')]);
+    const sitesPorDono = {}; sites.forEach(x => { sitesPorDono[x['Owner']] = (sitesPorDono[x['Owner']] || 0) + 1; });
+    const kycPorDono = {}; kycs.forEach(k => { if (!kycPorDono[k['Owner']]) kycPorDono[k['Owner']] = k; });
+    const termo = String(req.body.pesquisa || '').trim().toLowerCase().slice(0, 80);
+    const planoFiltro = String(req.body.plano_id || '');
+    let lista = users.map(u => utilizadorParaAdmin(u, planos, sitesPorDono, kycPorDono));
+    if (termo) lista = lista.filter(u => (u.nome + ' ' + u.email + ' ' + u.id).toLowerCase().includes(termo));
+    if (planoFiltro) lista = lista.filter(u => u.plano_id === planoFiltro);
+    return res.json({ status: 'success', response: { total: lista.length, utilizadores: lista.slice(0, 300) } });
+  } catch (erro) {
+    console.error('Erro em /admin-utilizadores:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os utilizadores.' });
+  }
+});
+
+app.post('/admin-utilizador', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const u = await bubbleGet('user', req.body.user_id);
+    if (!u) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const [planos, sites, kycs, assinaturas] = await Promise.all([
+      listaAdmin('plan'),
+      bubbleList('site', [{ key: 'Owner', constraint_type: 'equals', value: u._id }], 'Created Date', true),
+      bubbleList('kyc', [{ key: 'Owner', constraint_type: 'equals', value: u._id }], 'Created Date', true),
+      bubbleList('assinatura', [{ key: 'User', constraint_type: 'equals', value: u._id }], 'Created Date', true)
+    ]);
+    const base = utilizadorParaAdmin(u, planos, { [u._id]: sites.length }, { [u._id]: kycs[0] });
+    return res.json({ status: 'success', response: Object.assign(base, {
+      plano_inicio: u['Plan Started'] || '',
+      sessao_activa: !!u['Token Sessao'] && depoisDe(u['Token Sessao Expira'], Date.now()),
+      sites_lista: sites.map(x => ({ id: x._id, nome: x['Nome'] || '', tipo: x['Tipo'] || '', estado: x['Status'] || '', url: x['CDN URL'] || '', criado: x['Created Date'] || '' })),
+      assinaturas: assinaturas.slice(0, 20).map(a => ({ plano: nomePlanoDe(planos, a['Plano']), valor: Number(a['Valor MZN']) || 0, metodo: a['Metodo'] || '', estado: a['Estado'] || '', criado: a['Created Date'] || '' }))
+    }) });
+  } catch (erro) {
+    console.error('Erro em /admin-utilizador:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível abrir este utilizador.' });
+  }
+});
+
+// Atribuir um plano à mão (ex: pagou em dinheiro ou por transferência).
+app.post('/admin-atribuir-plano', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const u = await bubbleGet('user', req.body.user_id);
+    const plano = await bubbleGet('plan', req.body.plano_id).catch(() => null);
+    if (!u) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    if (!plano) return res.json({ status: 'error', message: 'Plano não encontrado.' });
+    const dias = Math.min(3650, Math.max(1, parseInt(req.body.dias, 10) || 30));
+    const valor = Math.max(0, Math.round((Number(req.body.valor) || 0) * 100) / 100);
+    const agora = new Date();
+    const expira = new Date(agora.getTime() + dias * 86400000);
+    const dados = { 'Plan': plano._id, 'Plan Started': agora.toISOString(), 'Plan Expires': expira.toISOString(), 'Aviso Enviado': false };
+    if (req.body.repor_tokens) dados['Tokens Usados Mes'] = 0;
+    await bubblePatch('user', u._id, dados);
+    // Fica um registo de assinatura para as contas (método "Manual").
+    await bubbleCreate('assinatura', {
+      'User': u._id, 'Plano': plano._id, 'Valor MZN': valor, 'Metodo': 'Manual', 'ID Pagamento': '',
+      'Estado': 'Pago', 'Transaction ID': 'admin:' + (emailDoUsuario(admin) || admin._id) + (req.body.nota ? ' - ' + textoLimpo(req.body.nota, 120) : ''),
+      'Webhook Processado': true, 'Created Date': agora.toISOString()
+    }).catch(e => console.error('Registo de assinatura manual falhou:', e.message));
+    limparCacheAdmin();
+    registar(admin, 'Plano atribuído', `${emailDoUsuario(u) || u._id} -> ${plano['Name']} (${dias} dias, ${valor} MZN)`);
+    const email = emailDoUsuario(u);
+    if (req.body.avisar && email) {
+      enviarEmail(email, 'O teu plano ' + (plano['Name'] || '') + ' está activo - Daniel IA', templateEmailKyc(
+        'Plano activado', 'Olá' + (u['Full Name'] ? ', ' + escaparHtml(String(u['Full Name']).split(' ')[0]) : '') + '!',
+        [`O teu plano <strong>${escaparHtml(plano['Name'] || '')}</strong> já está activo, até ${expira.toLocaleDateString('pt-PT')}.`, 'Obrigado por confiares no Daniel IA.'],
+        { texto: 'Ir para o dashboard', url: APP_URL })).catch(e => console.error('Email de plano manual falhou:', e.message));
+    }
+    return res.json({ status: 'success', response: { plano: plano['Name'] || '', expira: expira.toISOString() } });
+  } catch (erro) {
+    console.error('Erro em /admin-atribuir-plano:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível atribuir o plano.' });
+  }
+});
+
+app.post('/admin-tokens', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const u = await bubbleGet('user', req.body.user_id);
+    if (!u) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const valor = Math.max(0, parseInt(req.body.usados, 10) || 0);
+    await bubblePatch('user', u._id, { 'Tokens Usados Mes': valor });
+    limparCacheAdmin();
+    registar(admin, 'Tokens do mês', `${emailDoUsuario(u) || u._id}: ${Number(u['Tokens Usados Mes']) || 0} -> ${valor}`);
+    return res.json({ status: 'success', response: { tokens_usados: valor } });
+  } catch (erro) {
+    console.error('Erro em /admin-tokens:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível mudar os tokens.' });
+  }
+});
+
+app.post('/admin-terminar-sessoes', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const u = await bubbleGet('user', req.body.user_id);
+    if (!u) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    if (u._id === admin._id) return res.json({ status: 'error', message: 'Para saíres da tua própria conta, usa o botão Sair.' });
+    await bubblePatch('user', u._id, { 'Token Sessao': '', 'Token Sessao Expira': new Date(0).toISOString() });
+    esquecerSessoes(u._id);
+    registar(admin, 'Sessões terminadas', emailDoUsuario(u) || u._id);
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /admin-terminar-sessoes:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível terminar as sessões.' });
+  }
+});
+
+app.post('/admin-sites', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const [sites, users] = await Promise.all([listaAdmin('site', !!req.body.actualizar), listaAdmin('user')]);
+    const emailPorId = {}; users.forEach(u => { emailPorId[u._id] = emailDoUsuario(u) || ''; });
+    const termo = String(req.body.pesquisa || '').trim().toLowerCase().slice(0, 80);
+    const tipo = String(req.body.tipo || ''), estado = String(req.body.estado || '');
+    let lista = sites.map(x => ({ id: x._id, nome: x['Nome'] || '', tipo: x['Tipo'] || '', estado: x['Status'] || '', url: x['CDN URL'] || '',
+      dono_id: x['Owner'] || '', dono_email: emailPorId[x['Owner']] || '', dominio: x['Dominio'] || '', criado: x['Created Date'] || '' }));
+    if (termo) lista = lista.filter(x => (x.nome + ' ' + x.dono_email + ' ' + x.dominio).toLowerCase().includes(termo));
+    if (tipo) lista = lista.filter(x => x.tipo === tipo);
+    if (estado) lista = lista.filter(x => x.estado === estado);
+    return res.json({ status: 'success', response: { total: lista.length, sites: lista.slice(0, 300) } });
+  } catch (erro) {
+    console.error('Erro em /admin-sites:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os sites.' });
+  }
+});
+
+app.post('/admin-pagamentos', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const forcar = !!req.body.actualizar;
+    const [assinaturas, encomendas, users, planos, sites] = await Promise.all([
+      listaAdmin('assinatura', forcar), listaAdmin('encomenda', forcar), listaAdmin('user'), listaAdmin('plan'), listaAdmin('site')
+    ]);
+    const emailPorId = {}; users.forEach(u => { emailPorId[u._id] = emailDoUsuario(u) || ''; });
+    const sitePorId = {}; sites.forEach(x => { sitePorId[x._id] = x['Nome'] || ''; });
+    return res.json({ status: 'success', response: {
+      assinaturas: assinaturas.slice(0, 150).map(a => ({ email: emailPorId[a['User']] || '', plano: nomePlanoDe(planos, a['Plano']), valor: Number(a['Valor MZN']) || 0,
+        metodo: a['Metodo'] || '', estado: a['Estado'] || '', criado: a['Created Date'] || '' })),
+      encomendas: encomendas.slice(0, 150).map(e => ({ loja: sitePorId[e['Site']] || '', cliente: e['Cliente Nome'] || '', valor: Number(e['Valor Total']) || 0,
+        metodo: e['Metodo'] || '', estado: e['Estado'] || '', criado: e['Created Date'] || '' }))
+    } });
+  } catch (erro) {
+    console.error('Erro em /admin-pagamentos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os pagamentos.' });
+  }
+});
+
+app.post('/admin-registo', async (req, res) => {
+  if (!(await exigirAdmin(req, res))) return;
+  return res.json({ status: 'success', response: { registo: registoAdmin.slice(0, 200) } });
+});
+
 // ---- Admin: uma imagem decifrada ----
 app.post('/admin-kyc-imagem', async (req, res) => {
   try {
-    if (!chaveAdminValida(req.body.key)) {
+    if (!(await adminAutorizado(req))) {
       contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Chave inválida.' });
     }
@@ -8380,7 +8684,7 @@ app.post('/admin-kyc-imagem', async (req, res) => {
 // ---- Admin: aprovar ou rejeitar ----
 app.post('/admin-kyc-decidir', async (req, res) => {
   try {
-    if (!chaveAdminValida(req.body.key)) {
+    if (!(await adminAutorizado(req))) {
       contar('admin-falha:' + ipDe(req), 10, 30 * 60 * 1000);
       return res.json({ status: 'error', message: 'Chave inválida.' });
     }
@@ -8395,6 +8699,8 @@ app.post('/admin-kyc-decidir', async (req, res) => {
     const kyc = await bubbleGet('kyc', id);
     if (!kyc) return res.json({ status: 'error', message: 'Pedido não encontrado.' });
 
+    const quemDecide = await validarSessao(req.body.owner, req.body.token).catch(() => null);
+    if (quemDecide) registar(quemDecide, 'KYC ' + decisao.toLowerCase(), (kyc['Nome Completo'] || id) + (motivo ? ' - ' + motivo : ''));
     await bubblePatch('kyc', id, {
       'Estado': decisao,
       'Motivo': decisao === 'Rejeitado' ? motivo : '',
