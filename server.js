@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.55.0'; // 16/10/2026 - estúdio de layouts (3 sites em paralelo, a pessoa escolhe) + KYC só na loja
+const VERSION = '1.57.0'; // 16/10/2026 - mudar de layout só nos planos pagos (Free vê as 3 e usa a escolhida)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -140,7 +140,7 @@ const ORIGENS_PERMITIDAS = new Set(
 // Rotas da conta: exigem sessão e só aceitam as origens do Daniel IA.
 const ROTAS_PRIVADAS = new Set([
   '/dominio-configurar', '/dominio-cloudflare-auto', '/dominio-verificar',
-  '/generate', '/editar', '/generate-status', '/escolher-variante', '/account', '/meus-sites',
+  '/generate', '/editar', '/generate-status', '/escolher-variante', '/novas-variantes', '/trocar-variante', '/account', '/meus-sites',
   '/loja-produto-criar', '/loja-meus-produtos', '/loja-produto-editar',
   '/portfolio-trabalho-criar', '/portfolio-meus-trabalhos', '/portfolio-trabalho-editar',
   '/blog-post-criar', '/blog-meus-posts', '/blog-post-editar', '/contacto-guardar',
@@ -233,6 +233,8 @@ const LIMITES = {
   '/loja-organizar-aplicar': [['owner', 30, 10 * MIN]],
   '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
   '/escolher-variante': [['owner', 20, 10 * MIN]],
+  '/novas-variantes': [['owner', 6, 60 * MIN]],
+  '/trocar-variante': [['owner', 30, 10 * MIN]],
   '/editar': [['owner', 15, 10 * MIN]],
   '/kyc-enviar': [['owner', 5, 60 * MIN], ['ip', 10, 60 * MIN]],
   '/dominio-cloudflare-auto': [['owner', 10, 60 * MIN]],
@@ -4897,11 +4899,12 @@ function guardarVariantes(siteId, estado) {
   return proximo;
 }
 
-async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma }) {
+async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente }) {
   const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const direcoes = escolherDirecoes();
   const estado = {
-    slug, logo: '', generation_id: generationId, escolhida: null, inicio: new Date().toISOString(),
+    slug, logo: logoExistente || '', generation_id: generationId, escolhida: null, inicio: new Date().toISOString(),
+    modo: manterSite ? 'mudar' : 'criar', cobrado: false,
     variantes: direcoes.map((d, i) => ({
       n: i + 1, estado: 'a gerar', caminho: '', url: '', tokens: 0,
       direcao: { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia }, paleta: [], fontes: [], segundos: 0
@@ -4951,6 +4954,11 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
       await guardarVariantes(siteId, estado);
     }));
 
+    // Mudar de layout: o site continua no ar como estava; só fica a escolha.
+    if (manterSite) {
+      if (!estado.variantes.some(v => v.estado === 'pronto')) await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
+      return;
+    }
     // Se a pessoa já escolheu uma versão entretanto, o site já está pronto.
     const site = await bubbleGet('site', siteId);
     if (!site || site['Status'] !== 'A gerar') return;
@@ -4961,10 +4969,101 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
     console.error('Erro em processarVariantes:', erro);
     estado.variantes.forEach(v => { if (v.estado === 'a gerar') v.estado = 'erro'; });
     await guardarVariantes(siteId, estado);
-    await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {});
+    if (!manterSite) await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {});
     await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
   }
 }
+
+// Plano pago? (o Free vê as 3 versões, mas só usa a que escolheu ao criar)
+async function temPlanoPago(owner) {
+  const user = await bubbleGet('user', owner);
+  if (!user) return false;
+  const planId = await garantirPlano(owner, user);
+  const plano = planId ? await bubbleGet('plan', planId).catch(() => null) : null;
+  return !!plano && String(plano['Name'] || '').trim().toLowerCase() !== 'free';
+}
+const MSG_SO_PAGO = 'Mudar de layout faz parte dos planos pagos. Sobe de plano para usares as outras versões.';
+
+// ======================================================
+// Mudar de layout (1.56.0)
+// ------------------------------------------------------
+// Para sites já criados (incluindo os de antes do estúdio): gera 3 versões
+// novas enquanto o site continua no ar, e troca o visual escrevendo no
+// MESMO ficheiro (o link e o domínio não mudam). Produtos, montra,
+// avaliações, pagamentos e contacto ficam guardados à parte e não se
+// perdem. Alterações feitas com o botão Editar ficam no HTML antigo.
+// Tokens: só a primeira versão posta no ar de cada lote conta no plano.
+// ======================================================
+app.post('/novas-variantes', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (site['Status'] !== 'Pronto' || !site['CDN URL'] || !site['Bunny Path']) return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
+    const anterior = lerJsonSeguro(site['Variantes Json'], null);
+    if (anterior && Array.isArray(anterior.variantes) && anterior.variantes.some(v => v.estado === 'a gerar')
+        && anterior.inicio && Date.now() - Date.parse(anterior.inicio) < 15 * 60 * 1000) {
+      return res.json({ status: 'error', message: 'Já estamos a desenhar versões novas para este projecto.' });
+    }
+    const user = await bubbleGet('user', owner);
+    if (!user) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const planId = await garantirPlano(owner, user);
+    const plano = planId ? await bubbleGet('plan', planId) : null;
+    if (!plano) return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
+    if ((user['Tokens Usados Mes'] || 0) >= (plano['Tokens Incluidos'] || 0)) {
+      return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
+    }
+    const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
+    if (mostrarMarcaDeAgua) return res.json({ status: 'error', codigo: 'plano', message: MSG_SO_PAGO });
+    // O idioma do site está no HTML publicado.
+    let idioma = 'pt';
+    try { const r = await fetch(site['CDN URL']); if (r.ok) idioma = idiomaDoHtml(await r.text()) || 'pt'; } catch (e) {}
+    const prompt = site['Prompt Original'] || site['Nome'] || '';
+    const generationId = await bubbleCreate('generation', {
+      'Site': site_id, 'Prompt': 'Mudar de layout: ' + prompt, 'Status': 'A gerar', 'Tentativas': 1, 'Created Date': new Date().toISOString()
+    });
+    res.json({ status: 'success', response: { site_id } });
+    processarVariantes({
+      owner, nome: site['Nome'] || '', tipo: site['Tipo'] || 'Landing Page', prompt, logo_data_url: '', imagens_data_url: [],
+      siteId: site_id, generationId, mostrarMarcaDeAgua, idioma, manterSite: true, logoExistente: site['Logo URL'] || ''
+    }).catch(erro => console.error('Erro em processarVariantes (mudar):', erro));
+  } catch (erro) {
+    console.error('Erro em /novas-variantes:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível começar as versões novas. Tenta novamente.' });
+  }
+});
+
+app.post('/trocar-variante', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const n = parseInt(req.body.variante, 10);
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (site['Status'] !== 'Pronto' || !site['Bunny Path']) return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
+    const e = lerJsonSeguro(site['Variantes Json'], null);
+    if (!e || !Array.isArray(e.variantes)) return res.json({ status: 'error', message: 'Este projecto não tem versões para escolher.' });
+    const v = e.variantes.find(x => x.n === n);
+    if (!v || v.estado !== 'pronto' || !v.caminho) return res.json({ status: 'error', message: 'Esta versão ainda não está pronta.' });
+    if (e.escolhida === n) return res.json({ status: 'success', response: { cdn_url: site['CDN URL'], escolhida: n } });
+    if (!(await temPlanoPago(owner))) return res.json({ status: 'error', codigo: 'plano', message: MSG_SO_PAGO });
+
+    const html = await descarregarDoBunny(v.caminho);
+    await uploadParaBunny(site['Bunny Path'], html, 'text/html; charset=utf-8');
+    await purgeCacheBunny(site['CDN URL']).catch(() => {});
+    if (!e.cobrado) {
+      const user = await bubbleGet('user', owner);
+      if (user) await bubblePatch('user', owner, { 'Tokens Usados Mes': (Number(user['Tokens Usados Mes']) || 0) + (v.tokens || 0) });
+      if (e.generation_id) await bubblePatch('generation', e.generation_id, { 'Status': 'Pronto', 'Tokens Usados': v.tokens || 0 }).catch(() => {});
+      e.cobrado = true;
+    }
+    e.escolhida = n;
+    await bubblePatch('site', site_id, { 'Variantes Json': JSON.stringify(e) });
+    return res.json({ status: 'success', response: { cdn_url: site['CDN URL'], escolhida: n } });
+  } catch (erro) {
+    console.error('Erro em /trocar-variante:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível trocar o layout. Tenta novamente.' });
+  }
+});
 
 // O que a página pode ver das versões (sem caminhos internos nem tokens).
 function variantesPublicas(site) {
@@ -4972,6 +5071,7 @@ function variantesPublicas(site) {
   if (!e || !Array.isArray(e.variantes)) return null;
   return {
     escolhida: e.escolhida || null,
+    modo: e.modo || 'criar',
     variantes: e.variantes.map(v => ({
       n: v.n, estado: v.estado, url: v.estado === 'pronto' ? v.url : '', direcao: v.direcao || {},
       paleta: v.paleta || [], fontes: v.fontes || [], segundos: v.segundos || 0
@@ -4988,6 +5088,7 @@ app.post('/escolher-variante', async (req, res) => {
     if (!site || site['Owner'] !== owner) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
     const e = lerJsonSeguro(site['Variantes Json'], null);
     if (!e || !Array.isArray(e.variantes)) return res.json({ status: 'error', message: 'Este projecto não tem versões para escolher.' });
+    if (e.modo === 'mudar') return res.json({ status: 'error', message: 'Pedido inválido.' });
     if (e.escolhida) {
       if (e.escolhida === n && site['CDN URL']) return res.json({ status: 'success', response: { cdn_url: site['CDN URL'], tipo: site['Tipo'] } });
       return res.json({ status: 'error', message: 'Já escolheste uma versão para este projecto.' });
@@ -4999,6 +5100,7 @@ app.post('/escolher-variante', async (req, res) => {
     const caminhoSite = `sites/${owner}/${e.slug}/index.html`;
     const cdnUrl = await uploadParaBunny(caminhoSite, html, 'text/html; charset=utf-8');
     e.escolhida = n;
+    e.cobrado = true;
     await bubblePatch('site', site_id, { 'Variantes Json': JSON.stringify(e) });
     if (e.generation_id) {
       await bubblePatch('generation', e.generation_id, { 'Status': 'Pronto', 'Tokens Usados': v.tokens || 0 }).catch(() => {});
@@ -5006,7 +5108,8 @@ app.post('/escolher-variante', async (req, res) => {
     const user = await bubbleGet('user', owner);
     if (user) await bubblePatch('user', owner, { 'Tokens Usados Mes': (Number(user['Tokens Usados Mes']) || 0) + (v.tokens || 0) });
     await bubblePatch('site', site_id, { 'Status': 'Pronto', 'Bunny Path': caminhoSite, 'CDN URL': cdnUrl, 'Logo URL': e.logo || '' });
-    return res.json({ status: 'success', response: { cdn_url: cdnUrl, tipo: site['Tipo'] } });
+    const outrasProntas = e.variantes.filter(x => x.n !== n && x.estado === 'pronto').length;
+    return res.json({ status: 'success', response: { cdn_url: cdnUrl, tipo: site['Tipo'], plano_pago: await temPlanoPago(owner).catch(() => false), outras_prontas: outrasProntas } });
   } catch (erro) {
     console.error('Erro em /escolher-variante:', erro);
     return res.json({ status: 'error', message: 'Não foi possível escolher esta versão. Tenta novamente.' });
@@ -5270,16 +5373,19 @@ app.post('/generate-status', async (req, res) => {
     // "gerar" para sempre. Passados 15 minutos, as que faltam contam como
     // falhadas e a pessoa escolhe entre as que ficaram prontas.
     const bruto = lerJsonSeguro(site['Variantes Json'], null);
-    if (bruto && site['Status'] === 'A gerar' && bruto.inicio && Date.now() - Date.parse(bruto.inicio) > 15 * 60 * 1000) {
+    const presas = bruto && Array.isArray(bruto.variantes) && bruto.variantes.some(v => v.estado === 'a gerar');
+    if (presas && (site['Status'] === 'A gerar' || bruto.modo === 'mudar') && bruto.inicio && Date.now() - Date.parse(bruto.inicio) > 15 * 60 * 1000) {
       bruto.variantes.forEach(v => { if (v.estado === 'a gerar') v.estado = 'erro'; });
       const prontas = bruto.variantes.some(v => v.estado === 'pronto');
       site['Variantes Json'] = JSON.stringify(bruto);
-      site['Status'] = prontas ? 'A escolher' : 'Erro';
+      const mudancas = { 'Variantes Json': site['Variantes Json'] };
+      if (bruto.modo !== 'mudar') { site['Status'] = prontas ? 'A escolher' : 'Erro'; mudancas['Status'] = site['Status']; }
       response.estado = site['Status'];
-      await bubblePatch('site', site_id, { 'Variantes Json': site['Variantes Json'], 'Status': site['Status'] }).catch(() => {});
+      await bubblePatch('site', site_id, mudancas).catch(() => {});
     }
     const variantes = variantesPublicas(site);
     if (variantes) response.variantes = variantes;
+    if (req.body.owner && site['Owner'] === req.body.owner) response.plano_pago = await temPlanoPago(req.body.owner).catch(() => false);
 
     if (generation_id) {
       const generation = await bubbleGet('generation', generation_id);
