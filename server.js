@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.54.0'; // 15/10/2026 - loja v3 + arrumação automática (categorias por IA, sugestões ao dono)
+const VERSION = '1.55.0'; // 16/10/2026 - estúdio de layouts (3 sites em paralelo, a pessoa escolhe) + KYC só na loja
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -140,7 +140,7 @@ const ORIGENS_PERMITIDAS = new Set(
 // Rotas da conta: exigem sessão e só aceitam as origens do Daniel IA.
 const ROTAS_PRIVADAS = new Set([
   '/dominio-configurar', '/dominio-cloudflare-auto', '/dominio-verificar',
-  '/generate', '/editar', '/generate-status', '/account', '/meus-sites',
+  '/generate', '/editar', '/generate-status', '/escolher-variante', '/account', '/meus-sites',
   '/loja-produto-criar', '/loja-meus-produtos', '/loja-produto-editar',
   '/portfolio-trabalho-criar', '/portfolio-meus-trabalhos', '/portfolio-trabalho-editar',
   '/blog-post-criar', '/blog-meus-posts', '/blog-post-editar', '/contacto-guardar',
@@ -232,6 +232,7 @@ const LIMITES = {
   '/loja-organizar': [['owner', 12, 60 * MIN]],
   '/loja-organizar-aplicar': [['owner', 30, 10 * MIN]],
   '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
+  '/escolher-variante': [['owner', 20, 10 * MIN]],
   '/editar': [['owner', 15, 10 * MIN]],
   '/kyc-enviar': [['owner', 5, 60 * MIN], ['ip', 10, 60 * MIN]],
   '/dominio-cloudflare-auto': [['owner', 10, 60 * MIN]],
@@ -1640,6 +1641,102 @@ const HEROS_SORTEIO = [
 function sortear(lista) {
   return lista[Math.floor(Math.random() * lista.length)];
 }
+
+// ======================================================
+// Estúdio de layouts (1.55.0): 3 versões do mesmo site, cada uma com uma
+// direcção de arte própria, geradas em paralelo. A pessoa compara e
+// escolhe; só o escolhido conta nos tokens do plano dela.
+// Cada família garante contraste entre as 3: uma clara, uma escura ou
+// intensa, uma vibrante.
+// ======================================================
+const DIRECOES_LAYOUT = {
+  claro: [
+    { id: 'editorial', nome: 'Editorial', resumo: 'Revista elegante, títulos grandes e muito espaço',
+      prompt: 'editorial de revista: fundo claro (branco-papel ou creme), títulos serifados enormes com carácter, grelha assimétrica, legendas pequenas em maiúsculas espaçadas, linhas finas a separar secções, composições grandes e números de secção' },
+    { id: 'suico', nome: 'Minimal suíço', resumo: 'Grelha rigorosa, uma cor forte, nada a mais',
+      prompt: 'minimal suíço: fundo branco, grelha rígida e visível no alinhamento, uma só cor de destaque forte e saturada, tipografia sem serifa geométrica em pesos contrastantes, muito espaço negativo, sem sombras' },
+    { id: 'sereno', nome: 'Sereno', resumo: 'Tons suaves, curvas leves e muita calma',
+      prompt: 'pastel sereno: fundo claro com tons suaves (salva, areia, lavanda ou pêssego), cantos muito arredondados, tipografia elegante e leve, formas orgânicas desfocadas em fundo, ritmo calmo' },
+    { id: 'luminoso', nome: 'Luminoso', resumo: 'Claro, fresco e com um brilho de cor',
+      prompt: 'claro e luminoso: fundo quase branco, um degradê suave e fresco como acento, cartões flutuantes com sombras longas e leves, tipografia moderna com títulos pesados, detalhes em vidro (backdrop-filter)' }
+  ],
+  escuro: [
+    { id: 'cinema', nome: 'Cinematográfico', resumo: 'Escuro, contraste forte e um brilho de cor',
+      prompt: 'escuro e cinematográfico: fundo quase preto, contraste forte, uma única cor de destaque intensa que brilha, títulos enormes e condensados, secções de ecrã inteiro, revelações dramáticas ao fazer scroll' },
+    { id: 'luxo', nome: 'Luxo nocturno', resumo: 'Profundo, sofisticado, detalhes metálicos',
+      prompt: 'luxo nocturno: fundos profundos (preto-azulado, verde-garrafa ou bordeaux muito escuro), detalhes metálicos discretos (dourado, champanhe ou cobre), serifas finas e altas, muito espaço, linhas finíssimas, ritmo lento e sofisticado' },
+    { id: 'tecno', nome: 'Tecnológico', resumo: 'Linhas finas, grelhas e detalhes de código',
+      prompt: 'tecnológico: fundo escuro com grelha subtil, linhas finas, pormenores em letra monoespaçada (etiquetas, números, coordenadas), uma cor néon de destaque, cartões com bordas de 1px e brilho nas arestas' }
+  ],
+  vibrante: [
+    { id: 'blocos', nome: 'Blocos de cor', resumo: 'Cores sólidas, letras grossas e confiança',
+      prompt: 'blocos de cor: secções em cores sólidas e saturadas que alternam, letras grossas e confiantes, botões grandes, composição em blocos rectangulares, alto contraste' },
+    { id: 'brutal', nome: 'Brutalista', resumo: 'Bordas grossas, sombras duras e atitude',
+      prompt: 'brutalista colorido: bordas pretas grossas, sombras duras deslocadas (sem desfoque), cores directas, tipografia pesada, elementos ligeiramente rodados, autocolantes e etiquetas' },
+    { id: 'tropical', nome: 'Tropical', resumo: 'Mar, areia e padrões de capulana',
+      prompt: 'tropical moçambicano: cores do mar, da areia, do sol e da natureza, padrões geométricos inspirados em capulanas desenhados em SVG, formas onduladas entre secções, energia quente e acolhedora' },
+    { id: 'ludico', nome: 'Lúdico', resumo: 'Alegre, redondo e cheio de energia',
+      prompt: 'lúdico e arredondado: cores alegres, cantos muito redondos, formas soltas e flutuantes, tipografia redonda e amigável, pequenos movimentos divertidos' },
+    { id: 'retro', nome: 'Retro 70', resumo: 'Calor, curvas e títulos com carácter',
+      prompt: 'retro anos 70: laranjas, castanhos, mostarda e creme, formas redondas e faixas curvas, títulos com muito carácter (serifa gorda ou display arredondada), grão subtil' },
+    { id: 'artesanal', nome: 'Artesanal', resumo: 'Tons de terra, texturas e formas orgânicas',
+      prompt: 'quente e artesanal: tons de terra, texturas suaves (papel, grão), formas orgânicas desenhadas à mão em SVG, tipografia com carácter humano, sensação de feito com cuidado' }
+  ]
+};
+const ESTRUTURAS_LAYOUT = [
+  'estrutura clássica mas refinada: secções bem separadas, ritmo regular e hierarquia clara',
+  'grelha "bento": cartões de tamanhos diferentes encaixados, informação em mosaico',
+  'narrativa em faixas de largura total que alternam fundo e cor, como capítulos',
+  'composição assimétrica: colunas desencontradas, sobreposições e elementos que saem da grelha',
+  'escala gigante: números e palavras enormes como elemento gráfico, poucas secções muito fortes'
+];
+const HEROS_LAYOUT = [
+  'hero de ecrã inteiro com o título por cima de uma composição',
+  'hero só tipográfico: título gigante, sem imagem',
+  'hero dividido em duas colunas assimétricas',
+  'hero em mosaico de formas ou imagens com o título encaixado',
+  'hero com uma faixa de texto em movimento contínuo'
+];
+const ESTILOS_CARTAO_LOJA = ['suave', 'moldura', 'minimal'];
+function baralhar(lista) {
+  const a = lista.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+function escolherDirecoes() {
+  const familias = baralhar(['claro', 'escuro', 'vibrante']);
+  const estruturas = baralhar(ESTRUTURAS_LAYOUT);
+  const heros = baralhar(HEROS_LAYOUT);
+  return familias.map((f, i) => {
+    const d = baralhar(DIRECOES_LAYOUT[f])[0];
+    return { id: d.id, nome: d.nome, resumo: d.resumo, prompt: d.prompt, familia: f, estrutura: estruturas[i], hero: heros[i], cartao: ESTILOS_CARTAO_LOJA[i] };
+  });
+}
+function instrucaoDirecao(direcao, outras, tipo) {
+  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  return `\nVERSÃO ${direcao.n} DE 3: a pessoa vai ver três versões do site lado a lado e escolher uma. Esta versão tem de ser CLARAMENTE diferente das outras - nas cores, nas letras, na composição e no ambiente.
+DIRECÇÃO DE ARTE DESTA VERSÃO: ${direcao.prompt}.
+${ehLoja ? 'ESTRUTURA: é uma loja, por isso a estrutura das secções é a do guia acima. A diferença está no cabeçalho, nas cores, nas letras, na faixa de confiança, no contacto e no rodapé.' : `ESTRUTURA: ${direcao.estrutura}. HERO: ${direcao.hero}.`}
+As outras duas versões seguem "${outras.join('" e "')}" - não te aproximes delas.
+Se a descrição da pessoa pedir um estilo, cores ou ambiente concretos, isso MANDA: mantém o que ela pediu e usa esta direcção só para variar a composição, a tipografia e o ritmo.`;
+}
+// Paleta e letras de uma versão, lidas das fichas --dia-* do próprio HTML.
+function resumoVisual(html) {
+  const raiz = (/:root\s*\{([^}]*)\}/i.exec(html) || [])[1] || '';
+  const v = nome => { const m = new RegExp('--dia-' + nome + '\\s*:\\s*([^;]+);', 'i').exec(raiz); return m ? m[1].trim() : ''; };
+  const cor = c => /^(#[0-9a-f]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\))$/i.test(c) ? c : '';
+  const paleta = [v('fundo'), v('superficie'), v('primaria'), v('texto'), v('borda')].map(cor).filter(Boolean);
+  const fonte = c => (String(c || '').split(',')[0] || '').replace(/["']/g, '').trim().slice(0, 40);
+  const fontes = [fonte(v('fonte-titulos')), fonte(v('fonte-texto'))].filter((f, i, a) => f && !/^(var\(|sans-serif|serif|system)/i.test(f) && a.indexOf(f) === i);
+  return { paleta: [...new Set(paleta)].slice(0, 5), fontes };
+}
+// Loja: cada versão sugere o estilo dos cartões da montra automática.
+function marcarEstiloLoja(html, cartao) {
+  const meta = `<meta name="daniel-ia-estilo-loja" content="${cartao}">`;
+  html = html.replace(/\s*<meta name="daniel-ia-estilo-loja"[^>]*>/i, '');
+  return /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>\n${meta}`) : meta + html;
+}
+
 function pontoDePartidaVisual() {
   return `\nPONTO DE PARTIDA SORTEADO (usa só se a descrição da pessoa não disser nada sobre o visual - se disser, ignora isto por completo): estilo "${sortear(ESTILOS_SORTEIO)}"; hero "${sortear(HEROS_SORTEIO)}". Adapta-o ao negócio. Se não fizer sentido nenhum para este negócio, escolhe outra direcção, mas nunca o clichê do sector.`;
 }
@@ -1653,7 +1750,40 @@ const GUIA_TIPO = {
   'Galeria': 'Site de fotógrafo, videógrafo ou de qualquer pessoa que mostra o seu trabalho em imagens. Obrigatório: o nome, a zona dos álbuns (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: hero, sobre, serviços ou pacotes, testemunhos, processo de trabalho. O estilo segue a descrição e não um molde: pode ser branco e silencioso para as fotos falarem sozinhas, cheio de cor e energia, escuro e cinematográfico, revista de moda, documental e cru, romântico e suave. As fotos são as protagonistas. NÃO desenhes álbuns, fotos ou vídeos falsos nem o visualizador - os álbuns a sério aparecem sozinhos, tratados à parte.'
 };
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma }) {
+
+// ---- Gerações com a OpenAI: fila e tempo máximo (1.55.0) ----
+// O estúdio de layouts faz 3 gerações por cliente. Para muitos clientes ao
+// mesmo tempo não esgotarem os limites da OpenAI, no máximo
+// GERACOES_EM_PARALELO correm juntas; as outras esperam a vez. Cada uma tem
+// um tempo máximo, para nenhuma versão ficar presa para sempre.
+const GERACOES_EM_PARALELO = parseInt(clean(process.env.GERACOES_EM_PARALELO), 10) || 12;
+const GERACAO_TEMPO_MAX_MS = 6 * 60 * 1000;
+let geracoesActivas = 0;
+const filaGeracoes = [];
+function pedirVez() {
+  if (geracoesActivas < GERACOES_EM_PARALELO) { geracoesActivas++; return Promise.resolve(); }
+  return new Promise(resolve => filaGeracoes.push(resolve));
+}
+function largarVez() {
+  const proximo = filaGeracoes.shift();
+  if (proximo) proximo(); else geracoesActivas = Math.max(0, geracoesActivas - 1);
+}
+async function fetchGeracao(url, opcoes) {
+  await pedirVez();
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), GERACAO_TEMPO_MAX_MS);
+  try {
+    return await fetch(url, Object.assign({}, opcoes, { signal: ctrl.signal }));
+  } catch (erro) {
+    if (erro && erro.name === 'AbortError') throw new Error('A OpenAI demorou mais de 6 minutos a responder.');
+    throw erro;
+  } finally {
+    clearTimeout(t);
+    largarVez();
+  }
+}
+
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes }) {
   const lingua = normalizarIdioma(idioma);
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
@@ -1718,7 +1848,7 @@ Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo 
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional.
 IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
-${DIRECAO_DE_ARTE}${pontoDePartidaVisual()}
+${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : pontoDePartidaVisual()}
 IMPORTANTE: o site tem de parecer acabado e profissional - nunca com ar de esqueleto, com caixas vazias ou textos de enchimento. Acabado não quer dizer comprido: o tamanho e a quantidade de secções seguem a descrição. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, desenvolve o suficiente para aquele negócio, com textos com substância.
 ${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
@@ -1738,7 +1868,7 @@ Descrição pedida pela pessoa: ${prompt}`;
     imagensUrls.forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
   }
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
@@ -1998,7 +2128,7 @@ ${htmlAtual}`;
     imagensUrls.forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
   }
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
@@ -2078,7 +2208,7 @@ const LOJA_CART_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos"}};
+  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products", "Produto {n}": "Product {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Your real products appear here, with photos, prices and options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Preview: here the customer would add the product to the cart.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Preview with sample products - yours will appear here.", "Clássicos": "Classics", "Edição limitada": "Limited edition"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits", "Produto {n}": "Produit {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Vos vrais produits apparaissent ici, avec photos, prix et options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Aperçu : ici, le client ajouterait le produit au panier.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Aperçu avec des produits d'exemple - les vôtres apparaîtront ici.", "Clássicos": "Classiques", "Edição limitada": "Édition limitée"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos", "Produto {n}": "Producto {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Tus productos reales aparecen aquí, con fotos, precios y opciones.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Vista previa: aquí el cliente añadiría el producto al carrito.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Vista previa con productos de ejemplo - los tuyos aparecerán aquí.", "Clássicos": "Clásicos", "Edição limitada": "Edición limitada"}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -2248,6 +2378,7 @@ const LOJA_CART_JS = `/*
     }).filter(function(x){ return x; });
   }
   function adicionar(id, vi, qtd){
+    if (PREVIA && String(id).indexOf('exemplo') === 0) { toast(tx('Pré-visualização: aqui o cliente juntaria o produto ao carrinho.')); return false; }
     var p = produtoPorId(id);
     if (!p) return false;
     if (p.variantes && p.variantes.length && (vi === null || vi === undefined)) { abrirProduto(id); return false; }
@@ -2421,6 +2552,17 @@ const LOJA_CART_JS = `/*
       '.dia-produto-img.dia-segunda{position:absolute;inset:0;opacity:0;}',
       '.dia-produto-card:hover .dia-produto-img{transform:scale(1.05);}',
       '.dia-produto-card:hover .dia-produto-img.dia-segunda{opacity:1;}',
+      '.dia-demo-arte{position:absolute;inset:0;overflow:hidden;}',
+      '.dia-demo-arte i{position:absolute;left:22%;top:20%;width:56%;height:56%;border-radius:32% 46% 40% 34%;background:color-mix(in srgb,var(--_p) 70%,#fff);box-shadow:0 22px 40px -18px color-mix(in srgb,var(--_p) 80%,#000);}',
+      '.dia-demo-0{background:linear-gradient(150deg,color-mix(in srgb,var(--_p) 14%,var(--_s)),color-mix(in srgb,var(--_p) 30%,var(--_s)));}',
+      '.dia-demo-1{background:linear-gradient(200deg,color-mix(in srgb,var(--_t) 8%,var(--_s)),color-mix(in srgb,var(--_t) 18%,var(--_s)));}',
+      '.dia-demo-1 i{border-radius:50%;background:color-mix(in srgb,var(--_t) 70%,var(--_s));}',
+      '.dia-demo-2{background:linear-gradient(120deg,color-mix(in srgb,var(--_p) 24%,var(--_s)),color-mix(in srgb,var(--_p) 8%,var(--_s)));}',
+      '.dia-demo-2 i{border-radius:14px;transform:rotate(-8deg);background:var(--_p);}',
+      '.dia-demo-3{background:color-mix(in srgb,var(--_t) 6%,var(--_s));}',
+      '.dia-demo-3 i{border-radius:50% 50% 12px 12px;height:62%;background:color-mix(in srgb,var(--_p) 45%,var(--_t));}',
+      '.dia-modo-previa .dia-carrinho-botao{display:none !important;}',
+      '.dia-previa{display:flex;align-items:center;justify-content:center;gap:8px;margin:0 0 16px;padding:10px 14px;border-radius:999px;font-size:13px;font-weight:700;background:color-mix(in srgb,var(--_p) 12%,transparent);color:var(--_t);border:1px dashed color-mix(in srgb,var(--_p) 45%,transparent);text-align:center;}',
       '.dia-produto-vazio{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--_ts);}',
       '.dia-produto-vazio svg{width:38%;height:38%;opacity:.45;}',
       '.dia-badges{position:absolute;top:10px;left:10px;display:flex;flex-direction:column;align-items:flex-start;gap:5px;z-index:2;}',
@@ -2670,7 +2812,19 @@ const LOJA_CART_JS = `/*
   }
   window.addEventListener('load', marcarSelo);
 
-  function montra(){ return (loja.montra && loja.montra.blocos && loja.montra.blocos.length) ? loja.montra : MONTRA_PADRAO; }
+  // Cada versão do estúdio de layouts sugere um estilo de cartões (meta no
+  // HTML). Vale enquanto o dono não escolher o seu na montra.
+  function estiloSugerido(){
+    var m = document.querySelector('meta[name="daniel-ia-estilo-loja"]');
+    var v = m ? m.getAttribute('content') : '';
+    return /^(suave|moldura|minimal)$/.test(v || '') ? v : '';
+  }
+  function montra(){
+    var m = (loja.montra && loja.montra.blocos && loja.montra.blocos.length) ? loja.montra : MONTRA_PADRAO;
+    var sug = estiloSugerido();
+    if (sug && (m === MONTRA_PADRAO || m.padrao)) return { blocos: m.blocos, estilo: { cartao: sug, colunas: (m.estilo && m.estilo.colunas) || 4 } };
+    return m;
+  }
 
   // ======================================================
   // Dados para os blocos
@@ -2748,7 +2902,8 @@ const LOJA_CART_JS = `/*
       ? '<div class="dia-produto-aval">' + estrelas(p.avaliacao.media) + '<span>(' + p.avaliacao.total + ')</span></div>' : '';
     return '<article class="dia-produto-card" data-id="' + esc(p.id) + '" tabindex="0">'
       + '<div class="dia-produto-media">'
-      + (img ? fundoDe(img) + '<img class="dia-produto-img" src="' + esc(img) + '" alt="' + esc(p.nome) + '" loading="lazy">' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>')
+      + (img ? fundoDe(img) + '<img class="dia-produto-img" src="' + esc(img) + '" alt="' + esc(p.nome) + '" loading="lazy">'
+        : (p.demo ? '<div class="dia-demo-arte dia-demo-' + (Number(String(p.id).slice(7)) % 4) + '"><i></i></div>' : '<div class="dia-produto-vazio">' + ICONES.caixa + '</div>'))
       + (segunda ? '<img class="dia-produto-img dia-segunda" src="' + esc(segunda) + '" alt="" loading="lazy">' : '')
       + (badges ? '<div class="dia-badges">' + badges + '</div>' : '')
       + (p.destaque ? '<span class="dia-badge-destaque" title="' + esc(tx('Em destaque')) + '">' + ICONES.estrela + '</span>' : '')
@@ -2940,6 +3095,12 @@ const LOJA_CART_JS = `/*
     raiz.className = 'dia-loja dia-cartao-' + (estilo.cartao || 'suave') + ' dia-cols-' + (estilo.colunas || 4) + (filtrando() ? ' dia-filtrando' : '');
     var el = $('dia-montra');
     el.innerHTML = '';
+    if (PREVIA && produtos.length && produtos[0].demo) {
+      var aviso = document.createElement('div');
+      aviso.className = 'dia-previa';
+      aviso.textContent = tx('Pré-visualização com produtos de exemplo - os teus aparecem aqui.');
+      el.appendChild(aviso);
+    }
     var barraPosta = false;
     m.blocos.forEach(function(b){
       if (!b || b.activo === false || !RENDER[b.tipo]) return;
@@ -3560,10 +3721,25 @@ const LOJA_CART_JS = `/*
   // ======================================================
   // Arranque
   // ======================================================
+  // ---- Pré-visualização (estúdio de layouts): produtos de exemplo ----
+  var PREVIA = /[?&]dia_previa=1/.test(window.location.search);
+  function produtosDeExemplo(){
+    var precos = [1500, 2900, 850, 4200, 1250, 3600, 990, 2450];
+    var antigos = [0, 3500, 0, 0, 1600, 0, 1300, 0];
+    return precos.map(function(preco, i){
+      return {
+        id: 'exemplo' + i, demo: true, nome: tx('Produto {n}', { n: i + 1 }), preco: preco, preco_antigo: antigos[i],
+        categoria: [tx('Clássicos'), tx('Novidades'), tx('Edição limitada')][i % 3], destaque: i < 4, descricao: tx('Os teus produtos reais aparecem aqui, com fotos, preços e opções.'),
+        imagem: '', imagens: [], variantes: [], stock: null, esgotado: false, vendidos: 8 - i,
+        criado: new Date(Date.now() - i * 86400000).toISOString(), avaliacao: { media: i % 2 ? 4.5 : 0, total: i % 2 ? 12 - i : 0 }
+      };
+    });
+  }
   function recarregarProdutos(){
     return post('/loja-produtos', { site_id: SITE_ID }).then(function(r){
       if (r.status !== 'success') throw new Error();
       produtos = r.response.produtos || [];
+      if (PREVIA && !produtos.length) produtos = produtosDeExemplo();
       if (r.response.loja) loja = r.response.loja;
       renderMontra();
       renderCarrinho();
@@ -3571,6 +3747,7 @@ const LOJA_CART_JS = `/*
   }
   function iniciar(){
     injectarEstilos();
+    if (PREVIA) document.documentElement.classList.add('dia-modo-previa');
     if (!montarUI()) return;
     renderCarrinho();
     recarregarProdutos().catch(function(){
@@ -3616,7 +3793,7 @@ const GALERIA_VIEWER_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"A carregar álbuns...": "Loading albums...", "Ainda não há álbuns aqui.": "No albums here yet.", "Sem ficheiros": "No files", "{n} ficheiro": "{n} file", "{n} ficheiros": "{n} files", "Não foi possível abrir este álbum.": "Could not open this album.", "Ainda não há fotos ou vídeos neste álbum.": "No photos or videos in this album yet.", "Não foi possível carregar os álbuns.": "Could not load the albums.", "Seguinte": "Next", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server.", "Anterior": "Previous"}, "fr": {"A carregar álbuns...": "Chargement des albums...", "Ainda não há álbuns aqui.": "Aucun album pour le moment.", "Sem ficheiros": "Aucun fichier", "{n} ficheiro": "{n} fichier", "{n} ficheiros": "{n} fichiers", "Não foi possível abrir este álbum.": "Impossible d'ouvrir cet album.", "Ainda não há fotos ou vídeos neste álbum.": "Aucune photo ni vidéo dans cet album pour le moment.", "Não foi possível carregar os álbuns.": "Impossible de charger les albums.", "Seguinte": "Suivant", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur.", "Anterior": "Précédent"}, "es": {"A carregar álbuns...": "Cargando álbumes...", "Ainda não há álbuns aqui.": "Todavía no hay álbumes.", "Sem ficheiros": "Sin archivos", "{n} ficheiro": "{n} archivo", "{n} ficheiros": "{n} archivos", "Não foi possível abrir este álbum.": "No se pudo abrir este álbum.", "Ainda não há fotos ou vídeos neste álbum.": "Todavía no hay fotos ni vídeos en este álbum.", "Não foi possível carregar os álbuns.": "No se pudieron cargar los álbumes.", "Seguinte": "Siguiente", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor.", "Anterior": "Anterior"}};
+  var DIA_TXT = {"en": {"A carregar álbuns...": "Loading albums...", "Ainda não há álbuns aqui.": "No albums here yet.", "Sem ficheiros": "No files", "{n} ficheiro": "{n} file", "{n} ficheiros": "{n} files", "Não foi possível abrir este álbum.": "Could not open this album.", "Ainda não há fotos ou vídeos neste álbum.": "No photos or videos in this album yet.", "Não foi possível carregar os álbuns.": "Could not load the albums.", "Seguinte": "Next", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server.", "Anterior": "Previous", "Pré-visualização: os teus álbuns aparecem aqui.": "Preview: your albums will appear here."}, "fr": {"A carregar álbuns...": "Chargement des albums...", "Ainda não há álbuns aqui.": "Aucun album pour le moment.", "Sem ficheiros": "Aucun fichier", "{n} ficheiro": "{n} fichier", "{n} ficheiros": "{n} fichiers", "Não foi possível abrir este álbum.": "Impossible d'ouvrir cet album.", "Ainda não há fotos ou vídeos neste álbum.": "Aucune photo ni vidéo dans cet album pour le moment.", "Não foi possível carregar os álbuns.": "Impossible de charger les albums.", "Seguinte": "Suivant", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur.", "Anterior": "Précédent", "Pré-visualização: os teus álbuns aparecem aqui.": "Aperçu : vos albums apparaîtront ici."}, "es": {"A carregar álbuns...": "Cargando álbumes...", "Ainda não há álbuns aqui.": "Todavía no hay álbumes.", "Sem ficheiros": "Sin archivos", "{n} ficheiro": "{n} archivo", "{n} ficheiros": "{n} archivos", "Não foi possível abrir este álbum.": "No se pudo abrir este álbum.", "Ainda não há fotos ou vídeos neste álbum.": "Todavía no hay fotos ni vídeos en este álbum.", "Não foi possível carregar os álbuns.": "No se pudieron cargar los álbumes.", "Seguinte": "Siguiente", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor.", "Anterior": "Anterior", "Pré-visualização: os teus álbuns aparecem aqui.": "Vista previa: tus álbumes aparecerán aquí."}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -3709,6 +3886,16 @@ const GALERIA_VIEWER_JS = `/*
     var grelha = document.getElementById('dig-grelha');
     if (!grelha) return;
     if (!albuns || albuns.length === 0) {
+      if (/[?&]dia_previa=1/.test(window.location.search)) {
+        // Pré-visualização (estúdio de layouts): mosaico de exemplo com as cores do site.
+        var tons = [14, 26, 8, 20, 32, 11];
+        var mosaico = '';
+        for (var i = 0; i < 6; i++) {
+          mosaico += '<div style="aspect-ratio:4/3;border-radius:var(--dia-raio,12px);background:linear-gradient(' + (130 + i * 40) + 'deg,color-mix(in srgb,var(--dia-primaria,#888) ' + tons[i % 6] + '%,var(--dia-superficie,#fff)),color-mix(in srgb,var(--dia-primaria,#888) ' + (tons[i % 6] + 18) + '%,var(--dia-superficie,#fff)));border:1px solid var(--dia-borda,rgba(0,0,0,.08));"></div>';
+        }
+        grelha.innerHTML = mosaico + '<p class="dig-vazio" style="grid-column:1/-1;opacity:.75">' + tx('Pré-visualização: os teus álbuns aparecem aqui.') + '</p>';
+        return;
+      }
       grelha.innerHTML = '<p class="dig-vazio">' + tx('Ainda não há álbuns aqui.') + '</p>';
       return;
     }
@@ -3979,7 +4166,7 @@ const PORTFOLIO_VIEWER_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"A carregar trabalhos...": "Loading projects...", "Ainda não há trabalhos aqui.": "No projects here yet.", "Ver projecto": "View project", "Não foi possível carregar os trabalhos.": "Could not load the projects.", "Sem imagem": "No image", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server."}, "fr": {"A carregar trabalhos...": "Chargement des projets...", "Ainda não há trabalhos aqui.": "Aucun projet pour le moment.", "Ver projecto": "Voir le projet", "Não foi possível carregar os trabalhos.": "Impossible de charger les projets.", "Sem imagem": "Pas d'image", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur."}, "es": {"A carregar trabalhos...": "Cargando proyectos...", "Ainda não há trabalhos aqui.": "Todavía no hay proyectos.", "Ver projecto": "Ver proyecto", "Não foi possível carregar os trabalhos.": "No se pudieron cargar los proyectos.", "Sem imagem": "Sin imagen", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor."}};
+  var DIA_TXT = {"en": {"A carregar trabalhos...": "Loading projects...", "Ainda não há trabalhos aqui.": "No projects here yet.", "Ver projecto": "View project", "Não foi possível carregar os trabalhos.": "Could not load the projects.", "Sem imagem": "No image", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server.", "Pré-visualização: os teus trabalhos aparecem aqui.": "Preview: your work will appear here."}, "fr": {"A carregar trabalhos...": "Chargement des projets...", "Ainda não há trabalhos aqui.": "Aucun projet pour le moment.", "Ver projecto": "Voir le projet", "Não foi possível carregar os trabalhos.": "Impossible de charger les projets.", "Sem imagem": "Pas d'image", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur.", "Pré-visualização: os teus trabalhos aparecem aqui.": "Aperçu : vos réalisations apparaîtront ici."}, "es": {"A carregar trabalhos...": "Cargando proyectos...", "Ainda não há trabalhos aqui.": "Todavía no hay proyectos.", "Ver projecto": "Ver proyecto", "Não foi possível carregar os trabalhos.": "No se pudieron cargar los proyectos.", "Sem imagem": "Sin imagen", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor.", "Pré-visualização: os teus trabalhos aparecem aqui.": "Vista previa: tus trabajos aparecerán aquí."}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -4050,6 +4237,16 @@ const PORTFOLIO_VIEWER_JS = `/*
     var grelha = document.getElementById('dip-grelha');
     if (!grelha) return;
     if (!trabalhos || trabalhos.length === 0) {
+      if (/[?&]dia_previa=1/.test(window.location.search)) {
+        // Pré-visualização (estúdio de layouts): mosaico de exemplo com as cores do site.
+        var tons = [14, 26, 8, 20, 32, 11];
+        var mosaico = '';
+        for (var i = 0; i < 6; i++) {
+          mosaico += '<div style="aspect-ratio:4/3;border-radius:var(--dia-raio,12px);background:linear-gradient(' + (130 + i * 40) + 'deg,color-mix(in srgb,var(--dia-primaria,#888) ' + tons[i % 6] + '%,var(--dia-superficie,#fff)),color-mix(in srgb,var(--dia-primaria,#888) ' + (tons[i % 6] + 18) + '%,var(--dia-superficie,#fff)));border:1px solid var(--dia-borda,rgba(0,0,0,.08));"></div>';
+        }
+        grelha.innerHTML = mosaico + '<p class="dip-vazio" style="grid-column:1/-1;opacity:.75">' + tx('Pré-visualização: os teus trabalhos aparecem aqui.') + '</p>';
+        return;
+      }
       grelha.innerHTML = '<p class="dip-vazio">' + tx('Ainda não há trabalhos aqui.') + '</p>';
       return;
     }
@@ -4182,7 +4379,7 @@ const BLOG_VIEWER_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"A carregar artigos...": "Loading articles...", "Ainda não há artigos aqui.": "No articles here yet.", "Não foi possível carregar os artigos.": "Could not load the articles.", "Sem imagem": "No image", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server."}, "fr": {"A carregar artigos...": "Chargement des articles...", "Ainda não há artigos aqui.": "Aucun article pour le moment.", "Não foi possível carregar os artigos.": "Impossible de charger les articles.", "Sem imagem": "Pas d'image", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur."}, "es": {"A carregar artigos...": "Cargando artículos...", "Ainda não há artigos aqui.": "Todavía no hay artículos.", "Não foi possível carregar os artigos.": "No se pudieron cargar los artículos.", "Sem imagem": "Sin imagen", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor."}};
+  var DIA_TXT = {"en": {"A carregar artigos...": "Loading articles...", "Ainda não há artigos aqui.": "No articles here yet.", "Não foi possível carregar os artigos.": "Could not load the articles.", "Sem imagem": "No image", "Fechar": "Close", "Não foi possível ligar ao servidor.": "Could not connect to the server.", "Pré-visualização: os teus artigos aparecem aqui.": "Preview: your articles will appear here."}, "fr": {"A carregar artigos...": "Chargement des articles...", "Ainda não há artigos aqui.": "Aucun article pour le moment.", "Não foi possível carregar os artigos.": "Impossible de charger les articles.", "Sem imagem": "Pas d'image", "Fechar": "Fermer", "Não foi possível ligar ao servidor.": "Impossible de se connecter au serveur.", "Pré-visualização: os teus artigos aparecem aqui.": "Aperçu : vos articles apparaîtront ici."}, "es": {"A carregar artigos...": "Cargando artículos...", "Ainda não há artigos aqui.": "Todavía no hay artículos.", "Não foi possível carregar os artigos.": "No se pudieron cargar los artículos.", "Sem imagem": "Sin imagen", "Fechar": "Cerrar", "Não foi possível ligar ao servidor.": "No se pudo conectar con el servidor.", "Pré-visualização: os teus artigos aparecem aqui.": "Vista previa: tus artículos aparecerán aquí."}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -4263,6 +4460,16 @@ const BLOG_VIEWER_JS = `/*
     var grelha = document.getElementById('dib-grelha');
     if (!grelha) return;
     if (!posts || posts.length === 0) {
+      if (/[?&]dia_previa=1/.test(window.location.search)) {
+        // Pré-visualização (estúdio de layouts): mosaico de exemplo com as cores do site.
+        var tons = [14, 26, 8, 20, 32, 11];
+        var mosaico = '';
+        for (var i = 0; i < 3; i++) {
+          mosaico += '<div style="aspect-ratio:16/10;border-radius:var(--dia-raio,12px);background:linear-gradient(' + (130 + i * 40) + 'deg,color-mix(in srgb,var(--dia-primaria,#888) ' + tons[i % 6] + '%,var(--dia-superficie,#fff)),color-mix(in srgb,var(--dia-primaria,#888) ' + (tons[i % 6] + 18) + '%,var(--dia-superficie,#fff)));border:1px solid var(--dia-borda,rgba(0,0,0,.08));"></div>';
+        }
+        grelha.innerHTML = mosaico + '<p class="dib-vazio" style="grid-column:1/-1;opacity:.75">' + tx('Pré-visualização: os teus artigos aparecem aqui.') + '</p>';
+        return;
+      }
       grelha.innerHTML = '<p class="dib-vazio">' + tx('Ainda não há artigos aqui.') + '</p>';
       return;
     }
@@ -4657,18 +4864,152 @@ app.post('/generate', async (req, res) => {
       'Created Date': new Date().toISOString()
     });
 
+    const variantes = Number(req.body.variantes) === 3 ? 3 : 1;
     res.json({
       status: 'success',
-      response: { site_id: siteId, generation_id: generationId }
+      response: { site_id: siteId, generation_id: generationId, variantes }
     });
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
+    if (variantes === 3) {
+      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma })
+        .catch(erro => console.error('Erro em processarVariantes:', erro));
+      return;
+    }
     processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
     console.error('Erro em /generate:', erro);
     return res.json({ status: 'error', message: 'Não foi possível iniciar a geração. Tenta novamente.' });
+  }
+});
+
+
+// Guarda o estado das 3 versões no Site ('Variantes Json'), um pedido de
+// cada vez por site (as 3 gerações acabam em alturas diferentes).
+const filaVariantes = new Map();
+function guardarVariantes(siteId, estado) {
+  const anterior = filaVariantes.get(siteId) || Promise.resolve();
+  const proximo = anterior.then(() => bubblePatch('site', siteId, { 'Variantes Json': JSON.stringify(estado) }))
+    .catch(erro => console.error('Não foi possível guardar as variantes:', erro.message || erro));
+  filaVariantes.set(siteId, proximo);
+  return proximo;
+}
+
+async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma }) {
+  const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const direcoes = escolherDirecoes();
+  const estado = {
+    slug, logo: '', generation_id: generationId, escolhida: null, inicio: new Date().toISOString(),
+    variantes: direcoes.map((d, i) => ({
+      n: i + 1, estado: 'a gerar', caminho: '', url: '', tokens: 0,
+      direcao: { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia }, paleta: [], fontes: [], segundos: 0
+    }))
+  };
+  try {
+    // Logótipo e imagens: carregados uma vez só, para as 3 versões.
+    if (logo_data_url) {
+      const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(logo_data_url);
+      if (match) {
+        const buffer = Buffer.from(match[2], 'base64');
+        const espacoLogo = await verificarEspaco(owner, buffer.length);
+        if (espacoLogo.ok) {
+          const extensao = match[1].split('/')[1].replace('+xml', '').replace('jpeg', 'jpg');
+          estado.logo = await uploadParaBunny(`logos/${owner}-${Date.now()}.${extensao}`, buffer, match[1]);
+          await somarEspacoUsado(owner, buffer.length);
+        }
+      }
+    }
+    let imagensUrls = [];
+    if (imagens_data_url && imagens_data_url.length) {
+      const r = await uploadMultiplasImagensBase64('imagens-pedido', owner, imagens_data_url);
+      if (r.erro) throw new Error('Não foi possível enviar as imagens anexadas: ' + r.erro);
+      imagensUrls = r.urls;
+    }
+    await guardarVariantes(siteId, estado);
+
+    const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+    const t0 = Date.now();
+    await Promise.all(direcoes.map(async (d, i) => {
+      const v = estado.variantes[i];
+      try {
+        const outras = direcoes.filter((_, j) => j !== i).map(x => x.nome);
+        let { html, tokens } = await gerarComOpenAI({
+          nome, tipo, prompt, logoUrl: estado.logo, imagensUrls, siteId, mostrarMarcaDeAgua, idioma,
+          direcao: Object.assign({ n: i + 1 }, d), outrasDirecoes: outras
+        });
+        if (ehLoja) html = marcarEstiloLoja(html, d.cartao);
+        const caminho = `sites/${owner}/${slug}/v${i + 1}.html`;
+        const url = await uploadParaBunny(caminho, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+        const visual = resumoVisual(html);
+        Object.assign(v, { estado: 'pronto', caminho, url, tokens, paleta: visual.paleta, fontes: visual.fontes, segundos: Math.round((Date.now() - t0) / 1000) });
+      } catch (erro) {
+        console.error(`Versão ${i + 1} falhou:`, erro.message || erro);
+        Object.assign(v, { estado: 'erro', segundos: Math.round((Date.now() - t0) / 1000) });
+      }
+      await guardarVariantes(siteId, estado);
+    }));
+
+    // Se a pessoa já escolheu uma versão entretanto, o site já está pronto.
+    const site = await bubbleGet('site', siteId);
+    if (!site || site['Status'] !== 'A gerar') return;
+    const prontas = estado.variantes.filter(v => v.estado === 'pronto').length;
+    await bubblePatch('site', siteId, { 'Status': prontas ? 'A escolher' : 'Erro' });
+    if (!prontas) await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
+  } catch (erro) {
+    console.error('Erro em processarVariantes:', erro);
+    estado.variantes.forEach(v => { if (v.estado === 'a gerar') v.estado = 'erro'; });
+    await guardarVariantes(siteId, estado);
+    await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {});
+    await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
+  }
+}
+
+// O que a página pode ver das versões (sem caminhos internos nem tokens).
+function variantesPublicas(site) {
+  const e = lerJsonSeguro(site && site['Variantes Json'], null);
+  if (!e || !Array.isArray(e.variantes)) return null;
+  return {
+    escolhida: e.escolhida || null,
+    variantes: e.variantes.map(v => ({
+      n: v.n, estado: v.estado, url: v.estado === 'pronto' ? v.url : '', direcao: v.direcao || {},
+      paleta: v.paleta || [], fontes: v.fontes || [], segundos: v.segundos || 0
+    }))
+  };
+}
+
+// A pessoa escolhe uma versão: passa a ser o site, e só ela conta nos tokens.
+app.post('/escolher-variante', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const n = parseInt(req.body.variante, 10);
+    const site = await bubbleGet('site', site_id);
+    if (!site || site['Owner'] !== owner) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    const e = lerJsonSeguro(site['Variantes Json'], null);
+    if (!e || !Array.isArray(e.variantes)) return res.json({ status: 'error', message: 'Este projecto não tem versões para escolher.' });
+    if (e.escolhida) {
+      if (e.escolhida === n && site['CDN URL']) return res.json({ status: 'success', response: { cdn_url: site['CDN URL'], tipo: site['Tipo'] } });
+      return res.json({ status: 'error', message: 'Já escolheste uma versão para este projecto.' });
+    }
+    const v = e.variantes.find(x => x.n === n);
+    if (!v || v.estado !== 'pronto' || !v.caminho) return res.json({ status: 'error', message: 'Esta versão ainda não está pronta.' });
+
+    const html = await descarregarDoBunny(v.caminho);
+    const caminhoSite = `sites/${owner}/${e.slug}/index.html`;
+    const cdnUrl = await uploadParaBunny(caminhoSite, html, 'text/html; charset=utf-8');
+    e.escolhida = n;
+    await bubblePatch('site', site_id, { 'Variantes Json': JSON.stringify(e) });
+    if (e.generation_id) {
+      await bubblePatch('generation', e.generation_id, { 'Status': 'Pronto', 'Tokens Usados': v.tokens || 0 }).catch(() => {});
+    }
+    const user = await bubbleGet('user', owner);
+    if (user) await bubblePatch('user', owner, { 'Tokens Usados Mes': (Number(user['Tokens Usados Mes']) || 0) + (v.tokens || 0) });
+    await bubblePatch('site', site_id, { 'Status': 'Pronto', 'Bunny Path': caminhoSite, 'CDN URL': cdnUrl, 'Logo URL': e.logo || '' });
+    return res.json({ status: 'success', response: { cdn_url: cdnUrl, tipo: site['Tipo'] } });
+  } catch (erro) {
+    console.error('Erro em /escolher-variante:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível escolher esta versão. Tenta novamente.' });
   }
 });
 
@@ -4921,8 +5262,24 @@ app.post('/generate-status', async (req, res) => {
 
     const response = {
       estado: site['Status'],
-      cdn_url: site['CDN URL'] || ''
+      cdn_url: site['CDN URL'] || '',
+      nome: site['Nome'] || '',
+      tipo: site['Tipo'] || ''
     };
+    // Recuperação: se o servidor reiniciou a meio, as versões ficariam a
+    // "gerar" para sempre. Passados 15 minutos, as que faltam contam como
+    // falhadas e a pessoa escolhe entre as que ficaram prontas.
+    const bruto = lerJsonSeguro(site['Variantes Json'], null);
+    if (bruto && site['Status'] === 'A gerar' && bruto.inicio && Date.now() - Date.parse(bruto.inicio) > 15 * 60 * 1000) {
+      bruto.variantes.forEach(v => { if (v.estado === 'a gerar') v.estado = 'erro'; });
+      const prontas = bruto.variantes.some(v => v.estado === 'pronto');
+      site['Variantes Json'] = JSON.stringify(bruto);
+      site['Status'] = prontas ? 'A escolher' : 'Erro';
+      response.estado = site['Status'];
+      await bubblePatch('site', site_id, { 'Variantes Json': site['Variantes Json'], 'Status': site['Status'] }).catch(() => {});
+    }
+    const variantes = variantesPublicas(site);
+    if (variantes) response.variantes = variantes;
 
     if (generation_id) {
       const generation = await bubbleGet('generation', generation_id);
