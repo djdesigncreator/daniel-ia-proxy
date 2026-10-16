@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.58.0'; // 16/10/2026 - painel de administração (KYC, planos manuais, utilizadores, sites, pagamentos)
+const VERSION = '1.59.0'; // 16/10/2026 - cartão embutido na página, recargas de tokens, planos e pacotes geridos no painel
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -147,8 +147,9 @@ const ROTAS_PRIVADAS = new Set([
   '/blog-post-criar', '/blog-meus-posts', '/blog-post-editar', '/contacto-guardar',
   '/galeria-album-criar', '/galeria-meus-albuns', '/galeria-album-editar', '/galeria-album-media',
   '/galeria-foto-adicionar', '/galeria-video-iniciar', '/galeria-video-estado', '/galeria-media-apagar',
-  '/assinatura-iniciar', '/assinatura-pagar', '/assinatura-estado',
-  '/loja-config-ler', '/loja-config-guardar', '/loja-montra-guardar', '/loja-avaliacoes-gerir', '/loja-avaliacao-decidir', '/loja-organizar', '/loja-organizar-aplicar',
+  '/assinatura-iniciar', '/assinatura-pagar', '/assinatura-estado', '/recarga-iniciar',
+  '/admin-planos', '/admin-plano-guardar', '/admin-pacote-guardar', '/admin-pacotes-sugeridos', '/admin-tokens-extra',
+  '/loja-config-ler', '/loja-config-guardar', '/loja-montra-guardar', '/loja-categorias', '/loja-categorias-guardar', '/loja-categoria-renomear', '/loja-categoria-remover', '/loja-avaliacoes-gerir', '/loja-avaliacao-decidir', '/loja-organizar', '/loja-organizar-aplicar',
   '/kyc-estado', '/kyc-enviar', '/sair'
 ]);
 // Sem sessão (ainda não há conta entrada), mas só a partir das nossas
@@ -171,7 +172,14 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-  res.setHeader('X-Frame-Options', 'DENY');
+  // As páginas de "obrigado" do cartão abrem DENTRO da janela de pagamento
+  // (o checkout fica embutido na app e nas lojas), por isso podem ser
+  // mostradas noutra página. Tudo o resto continua proibido de embutir.
+  if (req.path === '/assinatura-obrigado' || req.path === '/loja-obrigado') {
+    res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+  } else {
+    res.setHeader('X-Frame-Options', 'DENY');
+  }
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
@@ -230,6 +238,9 @@ const LIMITES = {
   '/loja-pagar': [['ip', 10, 10 * MIN]],
   '/loja-avaliar': [['ip', 5, 60 * MIN]],
   '/loja-montra-guardar': [['owner', 40, 10 * MIN]],
+  '/loja-categorias-guardar': [['owner', 40, 10 * MIN]],
+  '/loja-categoria-renomear': [['owner', 40, 10 * MIN]],
+  '/loja-categoria-remover': [['owner', 40, 10 * MIN]],
   '/loja-organizar': [['owner', 12, 60 * MIN]],
   '/loja-organizar-aplicar': [['owner', 30, 10 * MIN]],
   '/generate': [['owner', 10, 10 * MIN], ['ip', 20, 10 * MIN]],
@@ -247,7 +258,12 @@ const LIMITES = {
   '/admin-kyc-lista': [['ip', 60, 15 * MIN]],
   '/admin-kyc-imagem': [['ip', 200, 15 * MIN]],
   '/admin-kyc-decidir': [['ip', 60, 15 * MIN]],
-  '/plan-warnings-teste-7hq2fx': [['ip', 10, 60 * MIN]]
+  '/plan-warnings-teste-7hq2fx': [['ip', 10, 60 * MIN]],
+  '/assinatura-confirmacao': [['ip', 150, 10 * MIN]],
+  '/recarga-iniciar': [['owner', 20, 10 * MIN]],
+  '/admin-plano-guardar': [['owner', 60, 10 * MIN]],
+  '/admin-pacote-guardar': [['owner', 60, 10 * MIN]],
+  '/admin-tokens-extra': [['owner', 60, 10 * MIN]]
 };
 const MSG_LIMITE = 'Demasiados pedidos. Espera um pouco e tenta outra vez.';
 function recusarLimite(res, req, regra) {
@@ -295,7 +311,7 @@ app.use((req, res, next) => {
 // "?", "&", espaços ou objectos é recusada antes de chegar à Data API.
 const ID_VALIDO = /^[A-Za-z0-9_-]{1,64}$/;
 const CAMPOS_ID = ['owner', 'user_id', 'site_id', 'produto_id', 'album_id', 'media_id', 'post_id', 'trabalho_id',
-  'encomenda_id', 'assinatura_id', 'plano_id', 'generation_id', 'avaliacao_id', 'id'];
+  'encomenda_id', 'assinatura_id', 'plano_id', 'pacote_id', 'generation_id', 'avaliacao_id', 'id'];
 app.use((req, res, next) => {
   const corpo = req.body;
   if (corpo && typeof corpo === 'object') {
@@ -1611,7 +1627,7 @@ PADRÃO VISUAL (obrigatório - nenhum site pode parecer um modelo repetido nem t
 5. Composição com ritmo. A estrutura e a ordem das secções saem da descrição e do negócio, não de um molde fixo. Hero memorável e à medida (pode ser só tipográfico, de ecrã inteiro, dividido, em mosaico, minimalista...), nunca um bloco centrado banal. Varia as secções: largura total, grelhas assimétricas, sobreposições, números ou palavras gigantes, faixas de cor, cartões. Não empilhes secções todas iguais e centradas.
 6. Detalhe e acabamento. Ícones em SVG inline desenhados por ti (nunca emojis como ícones). Estados de hover e foco em botões, links e cartões. Transições suaves e revelação das secções ao fazer scroll (IntersectionObserver), respeitando prefers-reduced-motion - num site simples, movimento discreto. Texturas, formas, padrões ou ilustrações em SVG/CSS só quando servirem a identidade. Cantos, sombras e espaçamentos consistentes.
 7. Imagens. Usa as imagens que a pessoa forneceu. Nunca inventes URLs de imagens externas (ficam partidas). Quando faltarem imagens, cria composições bonitas em CSS/SVG (formas, degradês, padrões, ilustrações simples) em vez de caixas cinzentas vazias.
-8. Telemóvel primeiro. A maioria dos clientes vê no telemóvel: tem de ficar impecável a 360px de largura, com menu próprio para telemóvel, botões fáceis de tocar (mínimo 44px) e nada a sair do ecrã.
+8. Telemóvel primeiro (OBRIGATÓRIO). A maioria dos clientes vê no telemóvel: o site tem de ficar impecável a 360px, 768px e 1280px de largura. Regras: escreve o CSS a pensar primeiro no telemóvel e usa @media (min-width:...) para ecrãs maiores; títulos com clamp() que nunca passem de 11vw no telemóvel; grelhas e colunas viram 1 coluna (ou 2 cartões pequenos) abaixo de 640px; nenhuma largura fixa maior que o ecrã (usa max-width:100% e minmax(0,1fr)); imagens com max-width:100% e height:auto; menu próprio para telemóvel (botão de 3 linhas que abre e fecha de verdade, com JavaScript); botões e links fáceis de tocar (mínimo 44px de altura); espaçamentos laterais de 16 a 20px no telemóvel; textos com pelo menos 15px; nada a sair do ecrã nem barra de deslocamento horizontal; elementos decorativos posicionados de forma absoluta escondidos ou reduzidos no telemóvel.
 9. Fichas de tema obrigatórias. No CSS, dentro de :root, define SEMPRE estas variáveis com os valores da tua paleta (os sistemas automáticos do site - produtos, carrinho, galeria, portefólio, blog e contacto - usam-nas para ficarem com o mesmo visual do resto do site):
    --dia-primaria (cor dos botões principais), --dia-primaria-texto (texto em cima da primária, com bom contraste), --dia-fundo (fundo da página), --dia-superficie (fundo de cartões), --dia-texto (texto principal), --dia-texto-suave (texto secundário), --dia-borda (linhas e bordas), --dia-raio (raio dos cantos: 0px para um visual recto e editorial, 4 a 10px para sóbrio, 16px ou mais para arredondado e amigável), --dia-fonte-titulos e --dia-fonte-texto (as famílias de letra que escolheste).
 Antes de responder, revê o resultado como um director de arte exigente: confirma que respeita o que a pessoa descreveu (se pediu simples, não carregues; se pediu impacto, não fiques tímido) e que não parece genérico, vazio ou desalinhado.`;
@@ -1703,25 +1719,48 @@ const HEROS_LAYOUT = [
   'hero com uma faixa de texto em movimento contínuo'
 ];
 const ESTILOS_CARTAO_LOJA = ['suave', 'moldura', 'minimal'];
+// Lojas (1.59.0): as 3 versões de uma loja já não mudam só as cores - cada
+// uma recebe um TEMA com uma estrutura de loja própria. O módulo da loja
+// (loja-cart.js) lê o tema numa <meta> e monta a capa, as categorias, as
+// faixas e os cartões de produto de forma diferente; a IA desenha o
+// cabeçalho, as faixas e o rodapé a condizer.
+const TEMAS_LOJA = [
+  { id: 'mercado', nome: 'Mercado', cartao: 'moldura',
+    resumo: 'Marketplace cheio de vida: mosaico de banners, ofertas da semana e categorias em destaque',
+    prompt: 'MERCADO (como os grandes marketplaces): cabeçalho em duas linhas - uma barra fina no topo, na cor mais escura da paleta, com uma frase curta de aviso (ex: entrega em todo o país) e, por baixo, a linha principal com o logótipo, um menu curto e um ícone de ajuda/WhatsApp; fundo claro e limpo para os produtos brilharem (a montra automática traz um mosaico de banners, categorias em círculos, uma faixa escura de ofertas da semana e grelhas de 5 produtos); depois da div da loja, uma faixa larga e colorida a convidar a seguir a loja no WhatsApp e nas redes (título forte, texto curto, botão), e um rodapé escuro em 4 colunas.' },
+  { id: 'editorial', nome: 'Editorial', cartao: 'minimal',
+    resumo: 'Revista de decoração: título gigante, fotos grandes e muito espaço',
+    prompt: 'EDITORIAL (como uma revista de decoração ou uma marca de luxo): cabeçalho minimalista numa só linha, com o nome da loja em maiúsculas espaçadas à esquerda e um menu pequeno em maiúsculas à direita, com uma linha fina por baixo; muito espaço vazio e poucas cores (a montra automática abre com um título gigante centrado, filtros discretos e fotos grandes); depois da div da loja, uma secção "sobre" em duas colunas assimétricas com um título GIGANTE em maiúsculas à esquerda (2 a 4 palavras sobre a marca) e um parágrafo curto à direita com um botão discreto; rodapé com o nome da loja enorme, a ocupar a largura toda.' },
+  { id: 'tech', nome: 'Tecnologia', cartao: 'suave',
+    resumo: 'Arrumado e eficiente: barra de cor, categorias com ícones e filas de produtos',
+    prompt: 'TECNOLOGIA (como as grandes lojas de electrónica): por cima, uma linha fina com contactos; por baixo, uma barra de navegação sólida na cor primária com o logótipo, o menu e o telefone de apoio; visual arrumado e eficiente, cantos médios (a montra automática traz uma capa dividida com um produto em destaque, categorias em quadrados e filas de produtos); depois da div da loja, uma faixa com 4 garantias em linha (ícone SVG + título + frase curta) e um rodapé claro em colunas com contactos e redes.' },
+  { id: 'moda', nome: 'Moda', cartao: 'minimal',
+    resumo: 'Jovem e atrevido: letras pesadas, faixas de cor e fotos ao alto',
+    prompt: 'MODA (como uma marca jovem de roupa e estilo): cabeçalho leve com o logótipo em letras pesadas e um botão em forma de pílula; tipografia display muito grossa e confiante, uma cor de destaque forte e alegre (a montra automática traz uma capa tipográfica enorme, uma faixa de categorias em movimento e fotos de produto ao alto); depois da div da loja, uma faixa grande na cor de destaque a convidar para a comunidade (título ENORME em maiúsculas, texto curto, botão preto) e um rodapé preto.' }
+];
 function baralhar(lista) {
   const a = lista.slice();
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 }
-function escolherDirecoes() {
+function escolherDirecoes(tipo) {
   const familias = baralhar(['claro', 'escuro', 'vibrante']);
   const estruturas = baralhar(ESTRUTURAS_LAYOUT);
   const heros = baralhar(HEROS_LAYOUT);
+  const temas = tipo === 'E-commerce' ? baralhar(TEMAS_LOJA) : [];
   return familias.map((f, i) => {
     const d = baralhar(DIRECOES_LAYOUT[f])[0];
-    return { id: d.id, nome: d.nome, resumo: d.resumo, prompt: d.prompt, familia: f, estrutura: estruturas[i], hero: heros[i], cartao: ESTILOS_CARTAO_LOJA[i] };
+    const base = { id: d.id, nome: d.nome, resumo: d.resumo, prompt: d.prompt, familia: f, estrutura: estruturas[i], hero: heros[i], cartao: ESTILOS_CARTAO_LOJA[i] };
+    const t = temas[i];
+    if (t) Object.assign(base, { tema: t.id, temaPrompt: t.prompt, nome: t.nome + ' · ' + d.nome, resumo: t.resumo, cartao: t.cartao });
+    return base;
   });
 }
 function instrucaoDirecao(direcao, outras, tipo) {
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   return `\nVERSÃO ${direcao.n} DE 3: a pessoa vai ver três versões do site lado a lado e escolher uma. Esta versão tem de ser CLARAMENTE diferente das outras - nas cores, nas letras, na composição e no ambiente.
 DIRECÇÃO DE ARTE DESTA VERSÃO: ${direcao.prompt}.
-${ehLoja ? 'ESTRUTURA: é uma loja, por isso a estrutura das secções é a do guia acima. A diferença está no cabeçalho, nas cores, nas letras, na faixa de confiança, no contacto e no rodapé.' : `ESTRUTURA: ${direcao.estrutura}. HERO: ${direcao.hero}.`}
+${ehLoja ? (direcao.temaPrompt ? `ESTRUTURA DA LOJA NESTA VERSÃO - ${direcao.temaPrompt} As cores e as letras seguem a direcção de arte acima.` : 'ESTRUTURA: é uma loja, por isso a estrutura das secções é a do guia acima. A diferença está no cabeçalho, nas cores, nas letras, na faixa de confiança, no contacto e no rodapé.') : `ESTRUTURA: ${direcao.estrutura}. HERO: ${direcao.hero}.`}
 As outras duas versões seguem "${outras.join('" e "')}" - não te aproximes delas.
 Se a descrição da pessoa pedir um estilo, cores ou ambiente concretos, isso MANDA: mantém o que ela pediu e usa esta direcção só para variar a composição, a tipografia e o ritmo.`;
 }
@@ -1736,10 +1775,18 @@ function resumoVisual(html) {
   return { paleta: [...new Set(paleta)].slice(0, 5), fontes };
 }
 // Loja: cada versão sugere o estilo dos cartões da montra automática.
-function marcarEstiloLoja(html, cartao) {
-  const meta = `<meta name="daniel-ia-estilo-loja" content="${cartao}">`;
-  html = html.replace(/\s*<meta name="daniel-ia-estilo-loja"[^>]*>/i, '');
+function marcarEstiloLoja(html, cartao, tema) {
+  let meta = `<meta name="daniel-ia-estilo-loja" content="${cartao}">`;
+  if (tema && TEMAS_LOJA.some(t => t.id === tema)) meta += `\n<meta name="daniel-ia-tema-loja" content="${tema}">`;
+  html = html.replace(/\s*<meta name="daniel-ia-(estilo|tema)-loja"[^>]*>/gi, '');
   return /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>\n${meta}`) : meta + html;
+}
+// Na edição, a IA pode apagar as <meta> da loja - voltamos a pô-las.
+function manterMetasLoja(antes, depois) {
+  const cartao = (/<meta name="daniel-ia-estilo-loja" content="([a-z]+)"/i.exec(antes || '') || [])[1];
+  const tema = (/<meta name="daniel-ia-tema-loja" content="([a-z]+)"/i.exec(antes || '') || [])[1];
+  if (!cartao && !tema) return depois;
+  return marcarEstiloLoja(depois, cartao || 'suave', tema);
 }
 
 function pontoDePartidaVisual() {
@@ -1910,6 +1957,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   }
 
   html = fixarIdiomaHtml(html, lingua);
+  html = aplicarRedeResponsiva(html);
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
@@ -1935,6 +1983,19 @@ function aplicarMarcaDeAgua(html, mostrar) {
     return html.replace(/<\/body>/i, selo + '</body>');
   }
   return html + selo;
+}
+
+// Rede de segurança para telemóvel (1.59.0): umas poucas regras no início
+// do <head> (o CSS do próprio site continua a mandar) que evitam os erros
+// clássicos - página a fugir para o lado, imagens maiores do que o ecrã,
+// palavras compridas a partir a grelha e o zoom do iPhone nos campos.
+const CSS_RESPONSIVO = '<style id="daniel-ia-responsivo">html{-webkit-text-size-adjust:100%;text-size-adjust:100%;overflow-x:clip}body{overflow-x:clip;overflow-wrap:break-word}img,video{max-width:100%;height:auto}h1,h2{overflow-wrap:anywhere}input,select,textarea,table{max-width:100%}pre{white-space:pre-wrap}@media (max-width:640px){input,select,textarea{font-size:16px}}</style>';
+function aplicarRedeResponsiva(html) {
+  html = html.replace(/\s*<style id="daniel-ia-responsivo">[\s\S]*?<\/style>/i, '');
+  if (!/<meta[^>]+name=["']viewport["']/i.test(html)) {
+    html = html.replace(/<head([^>]*)>/i, '<head$1>\n<meta name="viewport" content="width=device-width, initial-scale=1">');
+  }
+  return /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>\n' + CSS_RESPONSIVO) : CSS_RESPONSIVO + html;
 }
 
 // Para E-commerce/Checkout: garante a div dos produtos (defesa, caso a IA
@@ -2170,6 +2231,8 @@ ${htmlAtual}`;
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = injectarContactoSeNecessario(html, siteId);
   html = fixarIdiomaHtml(html, idiomaDoHtml(html) || linguaActual);
+  html = aplicarRedeResponsiva(html);
+  if (ehLoja) html = manterMetasLoja(htmlAtual, html);
   html = aplicarMarcaDeAgua(html, mostrarMarcaDeAgua);
 
   return { html, tokens };
@@ -2213,7 +2276,7 @@ const LOJA_CART_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products", "Produto {n}": "Product {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Your real products appear here, with photos, prices and options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Preview: here the customer would add the product to the cart.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Preview with sample products - yours will appear here.", "Clássicos": "Classics", "Edição limitada": "Limited edition"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits", "Produto {n}": "Produit {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Vos vrais produits apparaissent ici, avec photos, prix et options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Aperçu : ici, le client ajouterait le produit au panier.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Aperçu avec des produits d'exemple - les vôtres apparaîtront ici.", "Clássicos": "Classiques", "Edição limitada": "Édition limitée"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos", "Produto {n}": "Producto {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Tus productos reales aparecen aquí, con fotos, precios y opciones.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Vista previa: aquí el cliente añadiría el producto al carrito.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Vista previa con productos de ejemplo - los tuyos aparecerán aquí.", "Clássicos": "Clásicos", "Edição limitada": "Edición limitada"}};
+  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products", "Produto {n}": "Product {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Your real products appear here, with photos, prices and options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Preview: here the customer would add the product to the cart.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Preview with sample products - yours will appear here.", "Clássicos": "Classics", "Edição limitada": "Limited edition", "Recomendado para ti": "Recommended for you", "Categoria": "Category", "Promoção": "Sale", "Até {n}% de desconto": "Up to {n}% off", "Ver ofertas": "See deals", "Colecção": "Collection", "Explorar categorias": "Browse categories", "Compra por categoria": "Shop by category", "Ofertas da semana": "Weekly best deals", "Mais recentes": "Newest", "Preço mais baixo": "Lowest price", "Preço mais alto": "Highest price", "Ordenar": "Sort by", "Mostrar mais": "Show more", "A mostrar {a} de {b}": "Showing {a} of {b}", "Pagamento recebido. A confirmar...": "Payment received. Confirming...", "Pagamento seguro": "Secure payment", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Your bank opens the payment in a secure window. Pay and come back here - this page confirms it automatically.", "Abrir pagamento seguro": "Open secure payment", "Não aparece? Abrir numa janela nova": "Not showing? Open in a new window", "À espera da confirmação do pagamento...": "Waiting for payment confirmation...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Still waiting. If you've already paid, confirmation may take a moment.", "Adicionar": "Add"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits", "Produto {n}": "Produit {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Vos vrais produits apparaissent ici, avec photos, prix et options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Aperçu : ici, le client ajouterait le produit au panier.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Aperçu avec des produits d'exemple - les vôtres apparaîtront ici.", "Clássicos": "Classiques", "Edição limitada": "Édition limitée", "Recomendado para ti": "Recommandé pour vous", "Categoria": "Catégorie", "Promoção": "Promo", "Até {n}% de desconto": "Jusqu'à -{n} %", "Ver ofertas": "Voir les offres", "Colecção": "Collection", "Explorar categorias": "Explorer les catégories", "Compra por categoria": "Acheter par catégorie", "Ofertas da semana": "Offres de la semaine", "Mais recentes": "Plus récents", "Preço mais baixo": "Prix le plus bas", "Preço mais alto": "Prix le plus élevé", "Ordenar": "Trier", "Mostrar mais": "Voir plus", "A mostrar {a} de {b}": "Affichage de {a} sur {b}", "Pagamento recebido. A confirmar...": "Paiement reçu. Confirmation...", "Pagamento seguro": "Paiement sécurisé", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Votre banque ouvre le paiement dans une fenêtre sécurisée. Payez puis revenez ici - cette page le confirme automatiquement.", "Abrir pagamento seguro": "Ouvrir le paiement sécurisé", "Não aparece? Abrir numa janela nova": "Rien ne s'affiche ? Ouvrir dans une nouvelle fenêtre", "À espera da confirmação do pagamento...": "En attente de la confirmation du paiement...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Toujours en attente. Si vous avez déjà payé, la confirmation peut prendre un moment.", "Adicionar": "Ajouter"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos", "Produto {n}": "Producto {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Tus productos reales aparecen aquí, con fotos, precios y opciones.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Vista previa: aquí el cliente añadiría el producto al carrito.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Vista previa con productos de ejemplo - los tuyos aparecerán aquí.", "Clássicos": "Clásicos", "Edição limitada": "Edición limitada", "Recomendado para ti": "Recomendado para ti", "Categoria": "Categoría", "Promoção": "Oferta", "Até {n}% de desconto": "Hasta {n}% de descuento", "Ver ofertas": "Ver ofertas", "Colecção": "Colección", "Explorar categorias": "Explorar categorías", "Compra por categoria": "Compra por categoría", "Ofertas da semana": "Ofertas de la semana", "Mais recentes": "Más recientes", "Preço mais baixo": "Precio más bajo", "Preço mais alto": "Precio más alto", "Ordenar": "Ordenar", "Mostrar mais": "Mostrar más", "A mostrar {a} de {b}": "Mostrando {a} de {b}", "Pagamento recebido. A confirmar...": "Pago recibido. Confirmando...", "Pagamento seguro": "Pago seguro", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Tu banco abre el pago en una ventana segura. Paga y vuelve aquí: esta página lo confirma sola.", "Abrir pagamento seguro": "Abrir pago seguro", "Não aparece? Abrir numa janela nova": "¿No aparece? Abrir en una ventana nueva", "À espera da confirmação do pagamento...": "Esperando la confirmación del pago...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Seguimos esperando. Si ya pagaste, la confirmación puede tardar un poco.", "Adicionar": "Añadir"}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -2338,6 +2401,7 @@ const LOJA_CART_JS = `/*
   }
 
   var ICONES = {
+    cadeado: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
     carrinho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1.4"/><circle cx="19" cy="21" r="1.4"/><path d="M2.5 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.3a2 2 0 0 0 2-1.5L22 7H6.2"/></svg>',
     lupa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
     mais: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
@@ -2737,6 +2801,7 @@ const LOJA_CART_JS = `/*
       '.dia-ref{display:inline-block;font-weight:800;letter-spacing:.06em;background:color-mix(in srgb,var(--_t) 7%,transparent);padding:6px 12px;border-radius:999px;margin-top:10px;}',
       '.dia-spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--_b);border-top-color:var(--_p);animation:dia-girar .8s linear infinite;margin:0 auto 14px;}',
       '@keyframes dia-girar{to{transform:rotate(360deg);}}',
+      ".dia-add-txt{display:none;}.dia-modal.dia-modal-cartao{max-width:560px;}.dia-cartao-pag{display:flex;flex-direction:column;gap:12px;}.dia-cartao-topo{display:flex;align-items:center;gap:12px;padding-right:40px;}.dia-cartao-topo b{display:block;font-size:15px;}.dia-cartao-topo small{display:block;font-size:12px;color:var(--_ts);margin-top:2px;}.dia-cartao-topo strong{margin-left:auto;font-size:16px;white-space:nowrap;}.dia-cartao-ic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--_p) 14%,transparent);color:var(--_p);flex-shrink:0;}.dia-cartao-ic svg{width:19px;height:19px;}.dia-cartao-palco{position:relative;height:min(620px,62vh);border-radius:calc(var(--_r) - 2px);overflow:hidden;background:#fff;border:1px solid var(--_b);}.dia-cartao-palco iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;}.dia-cartao-carregar{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;z-index:1;transition:opacity .3s ease;}.dia-cartao-palco.dia-carregado .dia-cartao-carregar{opacity:0;pointer-events:none;}.dia-cartao-link{font-size:12.5px;color:var(--_ts);text-align:center;}.dia-cartao-fora{text-align:center;padding:20px 10px;border:1px dashed var(--_b);border-radius:calc(var(--_r) - 2px);}.dia-cartao-fora p{color:var(--_ts);font-size:14px;line-height:1.55;margin:0 0 14px;}.dia-cartao-estado{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:var(--_ts);margin:0;text-align:center;}.dia-cartao-estado i{width:8px;height:8px;border-radius:50%;background:#F59E0B;flex-shrink:0;animation:dia-brilhar 1.4s ease-in-out infinite;}@media (max-width:760px){.dia-cartao-palco{height:68vh;}}.dia-tema-mercado .dia-bloco{margin-bottom:34px;}.dia-mosaico{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(0,1fr);gap:14px;}.dia-mos-so{grid-template-columns:1fr;}.dia-mos-grande{position:relative;min-height:clamp(270px,34vw,430px);border-radius:calc(var(--_r) + 10px);overflow:hidden;background:linear-gradient(135deg,color-mix(in srgb,var(--_p) 12%,var(--_f)),color-mix(in srgb,var(--_p) 28%,var(--_f)));display:flex;align-items:center;isolation:isolate;color:var(--_t);}.dia-mos-foto{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;}.dia-mos-grande.dia-com-foto::after{content:\\"\\";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.08) 72%);}.dia-mos-grande.dia-com-foto{color:#fff;}.dia-mos-arte{position:absolute;right:4%;top:8%;bottom:8%;width:44%;z-index:-1;display:flex;align-items:center;justify-content:center;}.dia-mos-arte img{max-width:100%;max-height:100%;object-fit:contain;filter:drop-shadow(0 30px 40px rgba(0,0,0,.22));}.dia-mos-arte .dia-demo-arte{background:none;}.dia-mos-texto{position:relative;padding:clamp(22px,4vw,48px);max-width:58%;}.dia-mos-eti{display:inline-block;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;background:var(--_f);color:var(--_t);padding:6px 11px;border-radius:999px;margin-bottom:14px;}.dia-com-foto .dia-mos-eti{background:rgba(255,255,255,.94);color:#111;}.dia-mos-texto h2{font-family:var(--_ft);font-weight:800;font-size:clamp(26px,3.6vw,46px);line-height:1.05;letter-spacing:-.03em;margin:0 0 10px;}.dia-mos-texto p{font-size:clamp(13.5px,1.3vw,16px);line-height:1.5;margin:0 0 18px;opacity:.85;}.dia-mos-btn{display:inline-flex;align-items:center;gap:8px;background:var(--_p);color:var(--_pt);border:none;border-radius:999px;padding:12px 20px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;min-height:44px;}.dia-mos-btn svg,.dia-mos-link svg{width:15px;height:15px;}.dia-mos-lado{display:grid;grid-template-rows:1fr 1fr;gap:14px;}.dia-mos-telha{position:relative;display:flex;flex-direction:column;border:none;border-radius:calc(var(--_r) + 10px);padding:18px;cursor:pointer;text-align:left;font-family:inherit;color:var(--_t);overflow:hidden;min-height:150px;transition:transform .25s ease;isolation:isolate;}.dia-mos-telha:hover{transform:translateY(-3px);}.dia-mos-t0{background:color-mix(in srgb,#F59E0B 18%,var(--_f));}.dia-mos-t1{background:color-mix(in srgb,var(--_p) 13%,var(--_f));}.dia-mos-telha-txt{display:flex;flex-direction:column;gap:5px;max-width:60%;flex:1;}.dia-mos-telha-txt small{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.65;}.dia-mos-telha-txt b{font-family:var(--_ft);font-size:clamp(17px,1.8vw,22px);line-height:1.15;letter-spacing:-.02em;}.dia-mos-link{margin-top:auto;padding-top:10px;display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:800;color:var(--_p);}.dia-mos-telha-arte{position:absolute;right:-4%;bottom:-6%;width:50%;aspect-ratio:1;z-index:-1;display:flex;align-items:center;justify-content:center;}.dia-mos-telha-arte img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 18px 24px rgba(0,0,0,.2));}.dia-mos-telha-arte .dia-demo-arte{background:none;}.dia-tema-mercado .dia-seccao-titulo{position:relative;padding-bottom:9px;}.dia-tema-mercado .dia-seccao-titulo::after{content:\\"\\";position:absolute;left:0;bottom:0;width:40px;height:3px;border-radius:3px;background:var(--_p);}.dia-tema-mercado .dia-produto-card{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) - 2px);padding:8px;}.dia-tema-mercado .dia-produto-media{border-radius:calc(var(--_r) - 6px);background:color-mix(in srgb,var(--_t) 4%,transparent);}.dia-tema-mercado .dia-produto-corpo{padding:10px 4px 8px;gap:4px;}.dia-tema-mercado .dia-produto-nome{font-size:13.5px;font-weight:600;font-family:inherit;}.dia-tema-mercado .dia-produto-precos{padding-right:0;}.dia-tema-mercado .dia-btn-add{position:static;width:auto;height:40px;margin:2px 0 0;border-radius:calc(var(--_r) - 6px);gap:6px;font-weight:800;font-size:13px;font-family:inherit;box-shadow:none;}.dia-tema-mercado .dia-btn-add:hover{transform:none;filter:brightness(1.08);}.dia-tema-mercado .dia-btn-add svg{width:16px;height:16px;}.dia-tema-mercado .dia-add-txt{display:inline;}.dia-banda{border-radius:calc(var(--_r) + 12px);padding:clamp(18px,3vw,32px);background:radial-gradient(circle at 92% 0%,color-mix(in srgb,var(--_p) 55%,transparent),transparent 42%),color-mix(in srgb,var(--_p) 22%,#0c0c0f);color:#fff;}.dia-banda-topo{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px;}.dia-banda-titulo{display:flex;align-items:center;gap:10px;margin:0;font-family:var(--_ft);font-weight:800;font-size:clamp(20px,2.6vw,28px);letter-spacing:-.02em;}.dia-banda-titulo svg{width:24px;height:24px;color:#FCD34D;}.dia-banda-tabs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;max-width:100%;}.dia-banda-tabs::-webkit-scrollbar{display:none;}.dia-banda-tab{flex-shrink:0;border:1px solid rgba(255,255,255,.24);background:transparent;color:#fff;border-radius:999px;padding:9px 15px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;}.dia-banda-tab.dia-activo{background:#FCD34D;color:#111;border-color:transparent;}.dia-banda-grelha{--_t:#16161a;--_ts:#6b6b74;--_b:#e7e7ea;--_s:#ffffff;--_f:#ffffff;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;}.dia-banda-grelha .dia-produto-card{color:var(--_t);}@media (max-width:1100px){.dia-banda-grelha{grid-template-columns:repeat(4,minmax(0,1fr));}.dia-banda-grelha > :nth-child(n+9){display:none;}}@media (max-width:860px){.dia-mosaico{grid-template-columns:1fr;}.dia-mos-lado{grid-template-rows:none;grid-template-columns:1fr 1fr;}.dia-banda-grelha{grid-template-columns:repeat(3,minmax(0,1fr));}.dia-banda-grelha > :nth-child(n+7){display:none;}}@media (max-width:560px){.dia-mos-grande{align-items:flex-start;min-height:340px;}.dia-mos-texto{max-width:none;padding:24px 20px;}.dia-mos-grande:not(.dia-com-foto) .dia-mos-texto{padding-bottom:150px;}.dia-mos-arte{width:56%;top:auto;height:44%;right:4%;bottom:4%;}.dia-mos-lado{gap:10px;}.dia-mos-telha{min-height:176px;padding:14px;}.dia-mos-telha-txt{max-width:100%;}.dia-mos-telha-txt b{font-size:16px;}.dia-mos-telha-arte{width:56%;right:-8%;bottom:-10%;opacity:.95;}.dia-banda-grelha{grid-auto-flow:column;grid-template-columns:none;grid-auto-columns:46%;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding-bottom:4px;}.dia-banda-grelha::-webkit-scrollbar{display:none;}.dia-banda-grelha > *{scroll-snap-align:start;}.dia-banda-grelha > :nth-child(n+7){display:flex;}}.dia-tema-editorial .dia-bloco{margin-bottom:48px;}.dia-tema-editorial .dia-categorias{display:none !important;}.dia-ed-capa{text-align:center;padding:clamp(26px,6vw,74px) 0 clamp(14px,3vw,28px);}.dia-ed-eti{display:inline-block;font-size:12px;letter-spacing:.26em;text-transform:uppercase;color:var(--_ts);margin-bottom:18px;}.dia-ed-titulo{font-family:var(--_ft);font-weight:500;text-transform:uppercase;font-size:clamp(36px,8.4vw,120px);line-height:.95;letter-spacing:-.035em;margin:0 auto;max-width:16ch;overflow-wrap:anywhere;}.dia-ed-sub{max-width:520px;margin:20px auto 0;color:var(--_ts);font-size:clamp(14px,1.4vw,17px);line-height:1.6;}.dia-ed-foto{margin-top:clamp(24px,4vw,46px);border-radius:var(--_r);overflow:hidden;aspect-ratio:21/9;}.dia-ed-foto img{width:100%;height:100%;object-fit:cover;display:block;}.dia-ed-barra{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:14px 0;border-top:1px solid var(--_b);border-bottom:1px solid var(--_b);margin-bottom:28px;}.dia-ed-tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;max-width:100%;}.dia-ed-tabs::-webkit-scrollbar{display:none;}.dia-ed-tab{flex-shrink:0;background:none;border:none;border-radius:999px;padding:9px 15px;font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--_ts);cursor:pointer;font-family:inherit;white-space:nowrap;min-height:40px;}.dia-ed-tab:hover{color:var(--_t);}.dia-ed-tab.dia-activo{background:var(--_t);color:var(--_f);}.dia-ed-ordem{display:flex;align-items:center;gap:10px;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--_ts);}.dia-ed-ordem select{border:1px solid var(--_b);background:transparent;color:var(--_t);border-radius:999px;padding:10px 14px;font-size:13px;font-family:inherit;letter-spacing:0;text-transform:none;outline:none;min-height:40px;}.dia-ed-mais{display:flex;flex-direction:column;align-items:center;gap:10px;margin-top:38px;}.dia-ed-mais-btn{background:none;border:none;font-family:var(--_ft);font-size:clamp(20px,2.4vw,30px);font-weight:500;color:var(--_t);cursor:pointer;padding:6px 4px;border-bottom:1.5px solid currentColor;}.dia-ed-mais small{font-size:12px;color:var(--_ts);letter-spacing:.04em;}.dia-tema-editorial .dia-ed-grelha{row-gap:36px;}.dia-tema-editorial .dia-produto-card{background:none;border:none;border-radius:0;overflow:visible;}.dia-tema-editorial .dia-produto-card:hover{transform:none;box-shadow:none;}.dia-tema-editorial .dia-produto-media{aspect-ratio:4/5;border-radius:max(2px,calc(var(--_r) - 8px));}.dia-tema-editorial .dia-produto-img{object-fit:cover;}.dia-tema-editorial .dia-img-fundo{display:none;}.dia-tema-editorial .dia-produto-corpo{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:4px 14px;padding:14px 0 4px;}.dia-tema-editorial .dia-produto-cat,.dia-tema-editorial .dia-produto-aval{display:none;}.dia-tema-editorial .dia-produto-nome{font-family:inherit;font-weight:600;font-size:12.5px;letter-spacing:.07em;text-transform:uppercase;min-height:0;}.dia-tema-editorial .dia-produto-precos{margin:0;padding:0;justify-content:flex-end;}.dia-tema-editorial .dia-produto-preco{font-size:14px;font-weight:600;}.dia-tema-editorial .dia-btn-add{top:12px;right:12px;bottom:auto;width:38px;height:38px;background:var(--_f);color:var(--_t);box-shadow:0 6px 16px rgba(0,0,0,.14);opacity:0;transition:opacity .2s ease;}.dia-tema-editorial .dia-produto-card:hover .dia-btn-add,.dia-tema-editorial .dia-btn-add:focus{opacity:1;}@media (hover:none){.dia-tema-editorial .dia-btn-add{opacity:1;}}.dia-tema-editorial .dia-seccao-titulo{font-family:inherit;font-weight:600;font-size:13px;letter-spacing:.18em;text-transform:uppercase;}.dia-tema-editorial .dia-badge{border-radius:2px;box-shadow:none;}@media (max-width:560px){.dia-ed-barra{flex-direction:column;align-items:stretch;}.dia-ed-ordem{justify-content:space-between;}.dia-tema-editorial .dia-produto-corpo{grid-template-columns:1fr;}.dia-tema-editorial .dia-produto-precos{justify-content:flex-start;}.dia-tema-editorial .dia-ed-grelha{row-gap:24px;}.dia-ed-foto{aspect-ratio:4/3;}}.dia-tc-capa{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);align-items:center;gap:clamp(16px,3vw,40px);border-radius:calc(var(--_r) + 8px);padding:clamp(22px,4vw,52px);background:linear-gradient(120deg,color-mix(in srgb,var(--_p) 9%,var(--_f)),color-mix(in srgb,var(--_p) 22%,var(--_f)));overflow:hidden;position:relative;color:var(--_t);}.dia-tc-pill{display:inline-flex;align-items:center;gap:6px;background:var(--_f);color:var(--_p);font-size:12px;font-weight:800;padding:7px 12px;border-radius:999px;margin-bottom:16px;box-shadow:0 6px 16px -8px rgba(0,0,0,.3);}.dia-tc-pill svg{width:14px;height:14px;}.dia-tc-texto h2{font-family:var(--_ft);font-weight:800;font-size:clamp(28px,4vw,52px);line-height:1.04;letter-spacing:-.03em;margin:0 0 12px;overflow-wrap:anywhere;}.dia-tc-texto p{color:var(--_ts);font-size:clamp(14px,1.4vw,17px);line-height:1.55;margin:0 0 22px;max-width:460px;}.dia-tc-btn{display:inline-flex;align-items:center;gap:8px;background:var(--_p);color:var(--_pt);border:none;border-radius:calc(var(--_r) - 2px);padding:13px 22px;font-weight:800;font-size:14.5px;cursor:pointer;font-family:inherit;min-height:46px;}.dia-tc-btn svg{width:16px;height:16px;}.dia-tc-arte{position:relative;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;}.dia-tc-arte::before{content:\\"\\";position:absolute;width:80%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--_p) 34%,transparent),transparent 70%);}.dia-tc-prod{position:relative;width:100%;height:100%;border:none;background:none;padding:0;cursor:pointer;}.dia-tc-prod img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 30px 36px rgba(0,0,0,.22));transition:transform .5s ease;}.dia-tc-prod:hover img{transform:scale(1.04) rotate(-1deg);}.dia-tc-foto{position:relative;width:100%;height:100%;object-fit:cover;border-radius:var(--_r);}.dia-tc-arte .dia-demo-arte{width:80%;height:80%;left:10%;top:10%;background:none;}.dia-tc-desc{position:absolute;top:6%;right:6%;width:68px;height:68px;border-radius:50%;background:#E11D48;color:#fff;font-weight:800;font-size:17px;display:flex;align-items:center;justify-content:center;transform:rotate(12deg);box-shadow:0 10px 24px rgba(225,29,72,.35);}.dia-cat-icones{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(96px,128px);gap:12px;overflow-x:auto;scrollbar-width:none;padding:2px 2px 8px;}.dia-cat-icones::-webkit-scrollbar{display:none;}.dia-cat-icone{display:flex;flex-direction:column;align-items:center;gap:9px;background:none;border:none;cursor:pointer;color:var(--_t);font-family:inherit;padding:0;}.dia-cat-quad{width:100%;max-width:124px;aspect-ratio:1;border-radius:calc(var(--_r) + 2px);border:1px solid var(--_b);background:var(--_s);display:flex;align-items:center;justify-content:center;overflow:hidden;transition:border-color .2s ease,transform .2s ease;}.dia-cat-quad img{width:74%;height:74%;object-fit:contain;}.dia-cat-icone:hover .dia-cat-quad{border-color:var(--_p);transform:translateY(-3px);}.dia-cat-nome{font-size:12.5px;font-weight:700;text-align:center;line-height:1.3;}.dia-tema-tech .dia-seccao-titulo{padding-left:12px;border-left:4px solid var(--_p);font-size:clamp(18px,2.1vw,22px);}.dia-tema-tech .dia-produto-card{background:var(--_f);border:1px solid var(--_b);}.dia-tema-tech .dia-produto-media{background:var(--_s);margin:8px 8px 0;border-radius:calc(var(--_r) - 4px);}.dia-tema-tech .dia-produto-img{padding:8%;}.dia-tema-tech .dia-img-fundo{display:none;}.dia-tema-tech .dia-produto-cat{color:var(--_p);}.dia-tema-tech .dia-produto-preco{color:var(--_p);font-size:18px;}.dia-tema-tech .dia-btn-add{border-radius:calc(var(--_r) - 4px);width:40px;height:40px;}.dia-tema-tech .dia-badge.dia-novo{background:var(--_p);color:var(--_pt);}@media (max-width:560px){.dia-tema-tech .dia-produto-preco{font-size:15px;}.dia-tema-tech .dia-produto-precos{padding-right:40px;}}@media (max-width:760px){.dia-tc-capa{grid-template-columns:1fr;}.dia-tc-arte{aspect-ratio:16/10;max-height:260px;}.dia-cat-icones{grid-auto-columns:84px;}}.dia-md-capa{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);align-items:center;gap:clamp(22px,4vw,60px);padding:clamp(14px,3vw,32px) 0;}.dia-md-titulo{font-family:var(--_ft);font-weight:900;text-transform:uppercase;font-size:clamp(40px,7.4vw,104px);line-height:.94;letter-spacing:-.04em;margin:0 0 18px;overflow-wrap:anywhere;}.dia-md-titulo mark{background:linear-gradient(transparent 56%,color-mix(in srgb,var(--_p) 72%,transparent) 56%,color-mix(in srgb,var(--_p) 72%,transparent) 92%,transparent 92%);color:inherit;padding:0 .06em;}.dia-md-texto p{font-size:clamp(14px,1.4vw,17px);line-height:1.55;color:var(--_ts);margin:0 0 24px;max-width:420px;}.dia-md-btn{display:inline-flex;align-items:center;gap:10px;background:var(--_t);color:var(--_f);border:none;border-radius:999px;padding:15px 26px;font-weight:800;font-size:13.5px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;font-family:inherit;min-height:48px;}.dia-md-btn svg{width:16px;height:16px;}.dia-md-arte{position:relative;aspect-ratio:4/5;max-height:560px;justify-self:center;width:100%;max-width:440px;}.dia-md-arte > img{position:relative;width:100%;height:100%;object-fit:cover;border-radius:calc(var(--_r) + 14px);z-index:1;display:block;}.dia-md-arte .dia-demo-arte{border-radius:calc(var(--_r) + 14px);z-index:1;}.dia-md-forma{position:absolute;width:62%;aspect-ratio:1;border-radius:50%;background:var(--_p);top:-6%;right:-8%;z-index:0;}.dia-md-forma2{width:34%;border-radius:calc(var(--_r) + 6px);top:auto;right:auto;bottom:-5%;left:-7%;background:var(--_t);opacity:.9;transform:rotate(-10deg);}.dia-md-faixa{overflow:hidden;background:var(--_p);color:var(--_pt);border-radius:calc(var(--_r) + 6px);padding:16px 0;}.dia-md-pista{display:flex;width:max-content;align-items:center;animation:dia-desliza 30s linear infinite;}.dia-md-faixa:hover .dia-md-pista{animation-play-state:paused;}.dia-md-copia{display:flex;align-items:center;}.dia-md-item{background:none;border:none;color:inherit;font-family:var(--_ft);font-weight:900;font-size:clamp(20px,2.8vw,34px);text-transform:uppercase;letter-spacing:-.02em;cursor:pointer;padding:4px 22px;white-space:nowrap;}.dia-md-item:hover{text-decoration:underline;text-underline-offset:6px;}.dia-md-sep svg{width:18px;height:18px;display:block;opacity:.85;}@keyframes dia-desliza{to{transform:translateX(-50%);}}@media (prefers-reduced-motion:reduce){.dia-md-faixa{overflow-x:auto;}.dia-md-copia{display:none;}}.dia-tema-moda .dia-seccao-titulo{font-weight:900;text-transform:uppercase;font-size:clamp(22px,3vw,34px);letter-spacing:-.02em;background:linear-gradient(transparent 60%,color-mix(in srgb,var(--_p) 55%,transparent) 60%);display:inline-flex;padding:0 .1em;}.dia-tema-moda .dia-produto-card{background:none;border:none;overflow:visible;}.dia-tema-moda .dia-produto-card:hover{box-shadow:none;}.dia-tema-moda .dia-produto-media{aspect-ratio:3/4;border-radius:calc(var(--_r) + 12px);}.dia-tema-moda .dia-produto-img{object-fit:cover;}.dia-tema-moda .dia-img-fundo{display:none;}.dia-tema-moda .dia-produto-corpo{padding:14px 4px 4px;}.dia-tema-moda .dia-produto-nome{font-weight:800;text-transform:uppercase;letter-spacing:.01em;min-height:0;}.dia-tema-moda .dia-produto-precos{padding-right:0;}.dia-tema-moda .dia-btn-add{top:12px;right:12px;bottom:auto;background:var(--_f);color:var(--_t);box-shadow:0 8px 20px rgba(0,0,0,.18);}.dia-tema-moda .dia-fila{grid-auto-columns:minmax(220px,270px);}.dia-tema-moda .dia-badge{border-radius:6px;}@media (max-width:760px){.dia-md-capa{grid-template-columns:1fr;}.dia-md-arte{max-width:300px;width:84%;}.dia-md-forma{right:-4%;top:-4%;}.dia-md-forma2{left:-4%;}.dia-md-titulo{font-size:clamp(38px,11vw,66px);}}@media (max-width:560px){.dia-tema-moda .dia-fila{grid-auto-columns:minmax(160px,62%);}.dia-md-faixa{padding:12px 0;}}",
       '@media (prefers-reduced-motion:reduce){.dia-loja *,.dia-modal,.dia-overlay,.dia-painel-carrinho,.dia-carrinho-botao,.dia-toast{animation:none !important;transition:none !important;}}'
     ];
     var style = document.createElement('style');
@@ -2826,9 +2891,16 @@ const LOJA_CART_JS = `/*
   }
   function montra(){
     var m = (loja.montra && loja.montra.blocos && loja.montra.blocos.length) ? loja.montra : MONTRA_PADRAO;
+    var padrao = (m === MONTRA_PADRAO || !!m.padrao);
+    var tema = temaLoja();
     var sug = estiloSugerido();
-    if (sug && (m === MONTRA_PADRAO || m.padrao)) return { blocos: m.blocos, estilo: { cartao: sug, colunas: (m.estilo && m.estilo.colunas) || 4 } };
-    return m;
+    var estilo = { cartao: (m.estilo && m.estilo.cartao) || 'suave', colunas: (m.estilo && m.estilo.colunas) || 4 };
+    if (padrao && sug) estilo.cartao = sug;
+    if (padrao && tema && MONTRAS_TEMA[tema]) {
+      estilo.colunas = MONTRAS_TEMA[tema].colunas;
+      return { blocos: MONTRAS_TEMA[tema].blocos, estilo: estilo, tema: tema, padrao: true };
+    }
+    return { blocos: m.blocos, estilo: estilo, tema: tema, padrao: padrao };
   }
 
   // ======================================================
@@ -2862,20 +2934,28 @@ const LOJA_CART_JS = `/*
   function disponiveis(lista){ return lista.filter(function(p){ return !p.esgotado; }); }
   function marcarMostrados(lista){ lista.forEach(function(p){ mostrados[p.id] = true; }); }
 
+  function configCategorias(){ return (loja.montra && loja.montra.categorias) || []; }
   function categorias(){
     var mapa = {}, ordem = [];
+    var cfg = {};
+    configCategorias().forEach(function(c, i){ cfg[String(c.nome).toLowerCase()] = { i: i, imagem: c.imagem || '' }; });
     produtos.forEach(function(p){
       var c = p.categoria || OUTROS;
       if (!mapa[c]) { mapa[c] = { nome: c, total: 0, imagem: '' }; ordem.push(c); }
       mapa[c].total++;
       if (!mapa[c].imagem && imagemDe(p)) mapa[c].imagem = imagemDe(p);
     });
+    ordem.forEach(function(c){ var k = cfg[c.toLowerCase()]; if (k && k.imagem) mapa[c].imagem = k.imagem; });
     ordem.sort(function(a, b){
       if ((a === OUTROS) !== (b === OUTROS)) return (a === OUTROS) - (b === OUTROS);
+      var ca = cfg[a.toLowerCase()], cb = cfg[b.toLowerCase()];
+      if (ca && cb) return ca.i - cb.i;
+      if (ca || cb) return ca ? -1 : 1;
       return mapa[b].total - mapa[a].total || a.localeCompare(b);
     });
     return ordem.map(function(c){ return mapa[c]; });
   }
+  function temCategorias(cats){ return cats.some(function(c){ return c.nome !== OUTROS; }); }
   function listaDaFonte(fonte, categoria){
     var l = disponiveis(produtos);
     if (fonte === 'novidades') return l.sort(function(a, b){ return String(b.criado).localeCompare(String(a.criado)); }).slice(0, 14);
@@ -2921,7 +3001,7 @@ const LOJA_CART_JS = `/*
       + '<div class="dia-produto-precos">' + preco
       + (d > 0 ? '<s class="dia-produto-antigo">' + mzn(p.preco_antigo) + '</s>' : '') + '</div>'
       + '</div>'
-      + (p.esgotado ? '' : '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="' + esc(tx('Adicionar {nome} ao carrinho', { nome: p.nome })) + '">' + ICONES.mais + '</button>')
+      + (p.esgotado ? '' : '<button class="dia-btn-add" data-add="' + esc(p.id) + '" aria-label="' + esc(tx('Adicionar {nome} ao carrinho', { nome: p.nome })) + '">' + ICONES.mais + '<span class="dia-add-txt">' + tx('Adicionar') + '</span></button>')
       + '</article>';
   }
 
@@ -2963,10 +3043,11 @@ const LOJA_CART_JS = `/*
       if (!b.texto) return false;
       el.innerHTML = '<div class="dia-anuncio dia-cor-' + esc(b.cor || 'primaria') + '">' + ICONES.megafone + '<span>' + esc(b.texto) + '</span></div>';
     },
-    capa: function(b, el){ return renderCapa(el); },
+    capa: function(b, el){ return (temaActual && CAPAS_TEMA[temaActual]) ? CAPAS_TEMA[temaActual](el) : renderCapa(el); },
     categorias: function(b, el){
       var cats = categorias();
-      if (cats.length < 2) return false;
+      if (!temCategorias(cats)) return false;
+      if (temaActual && b.formato !== 'cartoes') return categoriasTema(cats, el);
       var imgs = b.imagens || {};
       var titulo = b.titulo || tx('Categorias');
       var corpo;
@@ -3081,6 +3162,306 @@ const LOJA_CART_JS = `/*
     }
   };
 
+  // ======================================================
+  // Temas de loja (1.59.0): cada versão do estúdio traz uma ESTRUTURA de
+  // loja própria - não só cores. O tema vem numa <meta> do site (ou do
+  // "Gerir loja") e muda a capa, as categorias, as faixas e os cartões.
+  //   mercado   - marketplace: mosaico de banners, círculos, ofertas da semana
+  //   editorial - revista: título gigante, filtros discretos, fotos grandes
+  //   tech      - electrónica: capa dividida, categorias em quadrados, filas
+  //   moda      - jovem: capa tipográfica, faixa de categorias, fotos ao alto
+  // ======================================================
+  var TEMAS = ['mercado', 'editorial', 'tech', 'moda'];
+  var temaActual = '';
+  var montraEhPadrao = true;
+  function temaLoja(){
+    var e = (loja.montra && loja.montra.estilo) || {};
+    if (e.tema === 'classico') return '';
+    if (TEMAS.indexOf(e.tema) !== -1) return e.tema;
+    var m = document.querySelector('meta[name="daniel-ia-tema-loja"]');
+    var v = m ? m.getAttribute('content') : '';
+    return TEMAS.indexOf(v) !== -1 ? v : '';
+  }
+  var MONTRAS_TEMA = {
+    mercado: { colunas: 5, blocos: [
+      { id: 'capa', tipo: 'capa' }, { id: 'cats', tipo: 'categorias' }, { id: 'dest', tipo: 'fila', fonte: 'destaques' },
+      { id: 'banda', tipo: 'banda' }, { id: 'novos', tipo: 'fila', fonte: 'novidades' }, { id: 'cat', tipo: 'catalogo' }, { id: 'vistos', tipo: 'vistos' }
+    ] },
+    editorial: { colunas: 4, blocos: [
+      { id: 'capa', tipo: 'capa' }, { id: 'col', tipo: 'colecao' }, { id: 'vistos', tipo: 'vistos' }
+    ] },
+    tech: { colunas: 4, blocos: [
+      { id: 'capa', tipo: 'capa' }, { id: 'cats', tipo: 'categorias' }, { id: 'dest', tipo: 'fila', fonte: 'destaques', titulo: tx('Recomendado para ti') },
+      { id: 'novos', tipo: 'fila', fonte: 'novidades' }, { id: 'vend', tipo: 'fila', fonte: 'mais_vendidos' }, { id: 'cat', tipo: 'catalogo' }, { id: 'vistos', tipo: 'vistos' }
+    ] },
+    moda: { colunas: 3, blocos: [
+      { id: 'capa', tipo: 'capa' }, { id: 'cats', tipo: 'categorias' }, { id: 'novos', tipo: 'fila', fonte: 'novidades' },
+      { id: 'promo', tipo: 'fila', fonte: 'promocoes' }, { id: 'cat', tipo: 'catalogo' }, { id: 'vistos', tipo: 'vistos' }
+    ] }
+  };
+
+  function dadosCapa(){
+    var s = (loja.capa || [])[0] || {};
+    var destaque = ordenar(disponiveis(produtos)).filter(function(p){ return imagemDe(p); })[0] || null;
+    return {
+      imagem: s.imagem || '',
+      titulo: s.titulo || loja.nome || tx('A nossa loja'),
+      sub: s.subtitulo || (produtos.length ? tx('{n} produtos à tua espera. Escolhe, encomenda e recebe.', { n: produtos.length }) : tx('Descobre os nossos produtos.')),
+      botao: s.botao || tx('Ver produtos'),
+      produto: destaque
+    };
+  }
+  function maiorDesconto(){ return produtos.reduce(function(m, p){ return p.esgotado ? m : Math.max(m, desconto(p)); }, 0); }
+  function arteDe(img, demoN, classe){
+    if (img) return '<img class="' + (classe || '') + '" src="' + esc(img) + '" alt="" loading="lazy">';
+    return '<div class="dia-demo-arte dia-demo-' + ((demoN || 0) % 4) + '"><i></i></div>';
+  }
+  function ligarCapaTema(el){
+    cada(el.querySelectorAll('[data-ir-catalogo]'), function(b){
+      b.addEventListener('click', function(){
+        var alvo = document.querySelector('.dia-bloco-colecao, .dia-bloco-fila, .dia-bloco-banda, .dia-bloco-catalogo') || $('dia-montra');
+        alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+    cada(el.querySelectorAll('[data-accao]'), function(b){
+      b.addEventListener('click', function(){
+        var a = b.getAttribute('data-accao'), v = b.getAttribute('data-valor');
+        if (a === 'cat') filtrarCategoria(v);
+        else if (a === 'prod') abrirProduto(v);
+        else {
+          var alvo = document.querySelector('.dia-bloco-banda, .dia-bloco-fila, .dia-bloco-catalogo');
+          if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+  }
+
+  var CAPAS_TEMA = {
+    // Mosaico: um banner grande e dois mais pequenos (promoção e categorias)
+    mercado: function(el){
+      var d = dadosCapa();
+      var cats = categorias().filter(function(c){ return c.nome !== OUTROS; });
+      var porImagem = ordenar(disponiveis(produtos));
+      var promo = maiorDesconto();
+      var promoProd = disponiveis(produtos).filter(function(p){ return desconto(p) === promo && promo > 0; })[0];
+      function telhaCat(c, n){ return c ? { eti: tx('Categoria'), titulo: c.nome, link: tx(c.total === 1 ? '{n} produto' : '{n} produtos', { n: c.total }), img: c.imagem, demo: n, accao: 'cat', valor: c.nome } : null; }
+      function telhaProd(p, n){ return p ? { eti: tx('Em destaque'), titulo: p.nome, link: mzn(precoMinimo(p)), img: imagemDe(p), demo: n, accao: 'prod', valor: p.id } : null; }
+      var telhas = [];
+      if (promoProd) telhas.push({ eti: tx('Promoção'), titulo: tx('Até {n}% de desconto', { n: promo }), link: tx('Ver ofertas'), img: imagemDe(promoProd), demo: 1, accao: 'promo', valor: '' });
+      cats.slice(0, 2).forEach(function(c, i){ if (telhas.length < 2) telhas.push(telhaCat(c, i + 2)); });
+      porImagem.slice(1, 3).forEach(function(p, i){ if (telhas.length < 2) telhas.push(telhaProd(p, i + 1)); });
+      var grande = '<div class="dia-mos-grande' + (d.imagem ? ' dia-com-foto' : '') + '">'
+        + (d.imagem ? '<img class="dia-mos-foto" src="' + esc(d.imagem) + '" alt="">' : '<div class="dia-mos-arte">' + arteDe(d.produto && imagemDe(d.produto), 0) + '</div>')
+        + '<div class="dia-mos-texto"><span class="dia-mos-eti">' + esc(tx('Novidades')) + '</span><h2>' + esc(d.titulo) + '</h2><p>' + esc(d.sub) + '</p>'
+        + '<button class="dia-mos-btn" data-ir-catalogo>' + esc(d.botao) + ' ' + ICONES.seta + '</button></div></div>';
+      var htmlTelhas = telhas.map(function(t, i){
+        return '<button class="dia-mos-telha dia-mos-t' + i + '" data-accao="' + t.accao + '" data-valor="' + esc(t.valor) + '">'
+          + '<span class="dia-mos-telha-txt"><small>' + esc(t.eti) + '</small><b>' + esc(t.titulo) + '</b><span class="dia-mos-link">' + esc(t.link) + ' ' + ICONES.seta + '</span></span>'
+          + '<span class="dia-mos-telha-arte">' + arteDe(t.img, t.demo) + '</span></button>';
+      }).join('');
+      el.innerHTML = '<div class="dia-mosaico' + (telhas.length ? '' : ' dia-mos-so') + '">' + grande + (telhas.length ? '<div class="dia-mos-lado">' + htmlTelhas + '</div>' : '') + '</div>';
+      ligarCapaTema(el);
+    },
+    // Revista: título gigante centrado, uma linha de apoio e foto larga
+    editorial: function(el){
+      var d = dadosCapa();
+      var eti = (loja.nome && d.titulo !== loja.nome) ? loja.nome : tx('Colecção');
+      el.innerHTML = '<div class="dia-ed-capa"><span class="dia-ed-eti">' + esc(eti) + '</span>'
+        + '<h2 class="dia-ed-titulo">' + esc(d.titulo) + '</h2><p class="dia-ed-sub">' + esc(d.sub) + '</p>'
+        + (d.imagem ? '<div class="dia-ed-foto"><img src="' + esc(d.imagem) + '" alt=""></div>' : '')
+        + '</div>';
+    },
+    // Electrónica: texto à esquerda, produto em destaque à direita
+    tech: function(el){
+      var d = dadosCapa();
+      var p = d.produto, desc = p ? desconto(p) : 0;
+      var arte = d.imagem ? '<img class="dia-tc-foto" src="' + esc(d.imagem) + '" alt="">'
+        : (p ? '<button class="dia-tc-prod" data-accao="prod" data-valor="' + esc(p.id) + '"><img src="' + esc(imagemDe(p)) + '" alt="' + esc(p.nome) + '"></button>' : arteDe('', 2));
+      el.innerHTML = '<div class="dia-tc-capa"><div class="dia-tc-texto"><span class="dia-tc-pill">' + ICONES.raio + esc(tx('Novidades')) + '</span>'
+        + '<h2>' + esc(d.titulo) + '</h2><p>' + esc(d.sub) + '</p>'
+        + '<button class="dia-tc-btn" data-ir-catalogo>' + esc(d.botao) + ' ' + ICONES.seta + '</button></div>'
+        + '<div class="dia-tc-arte">' + arte + (!d.imagem && desc > 0 ? '<span class="dia-tc-desc">-' + desc + '%</span>' : '') + '</div></div>';
+      ligarCapaTema(el);
+    },
+    // Moda: título enorme com uma palavra marcada e foto ao alto
+    moda: function(el){
+      var d = dadosCapa();
+      var palavras = String(d.titulo).split(/\\s+/).filter(Boolean);
+      var maior = 0;
+      palavras.forEach(function(w, i){ if (w.length > palavras[maior].length) maior = i; });
+      var titulo = palavras.map(function(w, i){ return i === maior ? '<mark>' + esc(w) + '</mark>' : esc(w); }).join(' ');
+      var img = d.imagem || (d.produto && imagemDe(d.produto)) || '';
+      el.innerHTML = '<div class="dia-md-capa"><div class="dia-md-texto"><h2 class="dia-md-titulo">' + titulo + '</h2><p>' + esc(d.sub) + '</p>'
+        + '<button class="dia-md-btn" data-ir-catalogo>' + esc(d.botao) + ' ' + ICONES.seta + '</button></div>'
+        + '<div class="dia-md-arte"><span class="dia-md-forma"></span><span class="dia-md-forma dia-md-forma2"></span>'
+        + (img ? '<img src="' + esc(img) + '" alt="">' : arteDe('', 3)) + '</div></div>';
+      ligarCapaTema(el);
+    }
+  };
+
+  // Categorias no formato de cada tema
+  function categoriasTema(cats, el){
+    var formato = { mercado: 'circulos', tech: 'icones', moda: 'faixa', editorial: 'cartoes' }[temaActual] || 'circulos';
+    var corpo;
+    if (formato === 'icones') {
+      corpo = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(tx('Explorar categorias')) + '</h3></div><div class="dia-cat-icones">' + cats.map(function(c){
+        return '<button class="dia-cat-icone" data-cat="' + esc(c.nome) + '"><span class="dia-cat-quad">'
+          + (c.imagem ? '<img src="' + esc(c.imagem) + '" alt="" loading="lazy">' : '<span class="dia-cat-letra">' + esc(c.nome.charAt(0).toUpperCase()) + '</span>')
+          + '</span><span class="dia-cat-nome">' + esc(c.nome) + '</span></button>';
+      }).join('') + '</div>';
+    } else if (formato === 'faixa') {
+      var itens = cats.map(function(c){ return '<button class="dia-md-item" data-cat="' + esc(c.nome) + '">' + esc(c.nome) + '</button><span class="dia-md-sep">' + ICONES.estrela + '</span>'; }).join('');
+      var rep = cats.length < 6 ? itens + itens : itens;
+      corpo = '<div class="dia-md-faixa"><div class="dia-md-pista">' + rep + '<span class="dia-md-copia" aria-hidden="true">' + rep + '</span></div></div>';
+    } else if (formato === 'cartoes') {
+      corpo = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(tx('Categorias')) + '</h3></div><div class="dia-cat-cartoes">' + cats.map(function(c){
+        return '<button class="dia-cat-cartao" data-cat="' + esc(c.nome) + '">' + (c.imagem ? '<img src="' + esc(c.imagem) + '" alt="" loading="lazy">' : '')
+          + '<span>' + esc(c.nome) + '<small>' + tx(c.total === 1 ? '{n} produto' : '{n} produtos', { n: c.total }) + '</small></span></button>';
+      }).join('') + '</div>';
+    } else {
+      corpo = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(tx('Compra por categoria')) + '</h3></div><div class="dia-cat-circulos">' + cats.map(function(c){
+        return '<button class="dia-cat-circulo" data-cat="' + esc(c.nome) + '"><span class="dia-cat-img">'
+          + (c.imagem ? '<img src="' + esc(c.imagem) + '" alt="" loading="lazy">' : '<span class="dia-cat-letra">' + esc(c.nome.charAt(0).toUpperCase()) + '</span>')
+          + '</span>' + esc(c.nome) + '</button>';
+      }).join('') + '</div>';
+    }
+    el.innerHTML = corpo;
+    cada(el.querySelectorAll('[data-cat]'), function(x){
+      x.addEventListener('click', function(){ filtrarCategoria(x.getAttribute('data-cat')); });
+    });
+  }
+
+  // Ofertas da semana (mercado): faixa escura com separadores por categoria
+  RENDER.banda = function(b, el){
+    var base = disponiveis(produtos);
+    if (base.length < 5) return false;
+    var cats = categorias().filter(function(c){ return c.nome !== OUTROS; }).slice(0, 6);
+    var quantos = base.length >= 15 ? 10 : 5;
+    var cat = '';
+    function lista(){
+      var l = cat ? base.filter(function(p){ return (p.categoria || OUTROS) === cat; }) : base;
+      var promo = l.filter(function(p){ return desconto(p) > 0; }).sort(function(a, c){ return desconto(c) - desconto(a); });
+      var resto = ordenar(l).filter(function(p){ return promo.indexOf(p) === -1; });
+      return promo.concat(resto).slice(0, quantos);
+    }
+    el.innerHTML = '<div class="dia-banda"><div class="dia-banda-topo"><h3 class="dia-banda-titulo">' + ICONES.raio + esc(b.titulo || tx('Ofertas da semana')) + '</h3>'
+      + (cats.length ? '<div class="dia-banda-tabs"><button class="dia-banda-tab dia-activo" data-tab="">' + tx('Tudo') + '</button>'
+        + cats.map(function(c){ return '<button class="dia-banda-tab" data-tab="' + esc(c.nome) + '">' + esc(c.nome) + '</button>'; }).join('') + '</div>' : '')
+      + '</div><div class="dia-banda-grelha"></div></div>';
+    var grelha = el.querySelector('.dia-banda-grelha');
+    function desenhar(){
+      grelha.innerHTML = lista().map(cartao).join('');
+      ligarCartoes(grelha);
+      cada(el.querySelectorAll('.dia-banda-tab'), function(t){ t.classList.toggle('dia-activo', t.getAttribute('data-tab') === cat); });
+    }
+    cada(el.querySelectorAll('.dia-banda-tab'), function(t){
+      t.addEventListener('click', function(){ cat = t.getAttribute('data-tab'); desenhar(); });
+    });
+    marcarMostrados(lista());
+    desenhar();
+  };
+
+  // Colecção (editorial): separadores, ordenar e "mostrar mais"
+  RENDER.colecao = function(b, el){
+    if (!produtos.length) {
+      el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>' + tx('Ainda não há produtos à venda aqui.') + '</div></div>';
+      return;
+    }
+    var cats = categorias().filter(function(c){ return c.nome !== OUTROS; });
+    var est = { cat: '', ordem: 'destaques', limite: 8 };
+    var ordens = [['destaques', tx('Em destaque')], ['recentes', tx('Mais recentes')], ['preco_asc', tx('Preço mais baixo')], ['preco_desc', tx('Preço mais alto')]];
+    el.innerHTML = '<div class="dia-ed-col"><div class="dia-ed-barra">'
+      + (cats.length ? '<div class="dia-ed-tabs"><button class="dia-ed-tab dia-activo" data-tab="">' + tx('Tudo') + '</button>'
+        + cats.map(function(c){ return '<button class="dia-ed-tab" data-tab="' + esc(c.nome) + '">' + esc(c.nome) + '</button>'; }).join('') + '</div>' : '<span></span>')
+      + '<label class="dia-ed-ordem"><span>' + tx('Ordenar') + '</span><select>' + ordens.map(function(o){ return '<option value="' + o[0] + '">' + esc(o[1]) + '</option>'; }).join('') + '</select></label></div>'
+      + '<div class="dia-grelha dia-ed-grelha"></div><div class="dia-ed-mais"></div></div>';
+    var grelha = el.querySelector('.dia-ed-grelha'), mais = el.querySelector('.dia-ed-mais');
+    function lista(){
+      var l = est.cat ? produtos.filter(function(p){ return (p.categoria || OUTROS) === est.cat; }) : produtos.slice();
+      if (est.ordem === 'recentes') return l.sort(function(a, c){ return String(c.criado).localeCompare(String(a.criado)); });
+      if (est.ordem === 'preco_asc') return l.sort(function(a, c){ return precoMinimo(a) - precoMinimo(c); });
+      if (est.ordem === 'preco_desc') return l.sort(function(a, c){ return precoMinimo(c) - precoMinimo(a); });
+      return ordenar(l);
+    }
+    function desenhar(){
+      var l = lista();
+      grelha.innerHTML = l.slice(0, est.limite).map(cartao).join('');
+      ligarCartoes(grelha);
+      var mostra = Math.min(est.limite, l.length);
+      mais.innerHTML = (l.length > est.limite ? '<button class="dia-ed-mais-btn">' + tx('Mostrar mais') + '</button>' : '')
+        + (l.length ? '<small>' + tx('A mostrar {a} de {b}', { a: mostra, b: l.length }) + '</small>' : '');
+      var bm = mais.querySelector('.dia-ed-mais-btn');
+      if (bm) bm.addEventListener('click', function(){ est.limite += 8; desenhar(); });
+      cada(el.querySelectorAll('.dia-ed-tab'), function(t){ t.classList.toggle('dia-activo', t.getAttribute('data-tab') === est.cat); });
+    }
+    cada(el.querySelectorAll('.dia-ed-tab'), function(t){
+      t.addEventListener('click', function(){ est.cat = t.getAttribute('data-tab'); est.limite = 8; desenhar(); });
+    });
+    el.querySelector('.dia-ed-ordem select').addEventListener('change', function(){ est.ordem = this.value; desenhar(); });
+    desenhar();
+  };
+
+  // ======================================================
+  // Pagamento com cartão DENTRO da loja (1.59.0): o checkout abre aqui,
+  // numa janela, e a página confirma sozinha - o cliente nunca sai.
+  // ======================================================
+  var cartaoEmCurso = null;
+  var ORIGEM_CONTAINER = CONTAINER_URL.replace(/\\/+$/, '');
+  window.addEventListener('message', function(e){
+    if (e.origin !== ORIGEM_CONTAINER || !e.data || e.data.daniel !== 'pagamento' || !cartaoEmCurso) return;
+    var t = $('dia-estado-texto');
+    if (t) t.textContent = tx('Pagamento recebido. A confirmar...');
+    cartaoEmCurso.verificarJa();
+  });
+  function pagarComCartao(enc, resp){
+    var modal = document.querySelector('#dia-janela .dia-modal');
+    if (modal) modal.classList.add('dia-modal-cartao');
+    var fora = resp.embutivel === false;
+    var el = mostrarEstado('<div class="dia-cartao-pag">'
+      + '<div class="dia-cartao-topo"><span class="dia-cartao-ic">' + ICONES.cadeado + '</span><div><b>' + tx('Pagamento seguro') + '</b><small>Visa · Mastercard</small></div><strong>' + mzn(enc.valor_total) + '</strong></div>'
+      + (fora
+        ? '<div class="dia-cartao-fora"><p>' + tx('O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.') + '</p>'
+          + '<a class="dia-btn-principal" style="text-decoration:none" href="' + esc(resp.checkout_url) + '" target="_blank" rel="noopener"><span>' + tx('Abrir pagamento seguro') + '</span></a></div>'
+        : '<div class="dia-cartao-palco"><div class="dia-cartao-carregar"><div class="dia-spinner"></div></div></div>'
+          + '<a class="dia-cartao-link" href="' + esc(resp.checkout_url) + '" target="_blank" rel="noopener">' + tx('Não aparece? Abrir numa janela nova') + '</a>')
+      + '<p class="dia-cartao-estado"><i></i><span id="dia-estado-texto">' + tx('À espera da confirmação do pagamento...') + '</span></p></div>');
+    if (!fora) {
+      var palco = el.querySelector('.dia-cartao-palco');
+      var fr = document.createElement('iframe');
+      fr.title = tx('Pagamento seguro');
+      fr.setAttribute('allow', 'payment');
+      fr.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+      fr.addEventListener('load', function(){ palco.classList.add('dia-carregado'); });
+      fr.src = resp.checkout_url;
+      palco.appendChild(fr);
+    }
+    var tentativas = 0, temporizador = null, parado = false;
+    function verificar(){
+      if (parado || !$('dia-janela')) { parado = true; cartaoEmCurso = null; return; }
+      post('/loja-estado', { encomenda_id: enc.encomenda_id }).then(function(r){
+        if (parado) return;
+        if (r.status === 'success' && r.response.estado === 'Pago') {
+          parado = true; cartaoEmCurso = null;
+          if (modal) modal.classList.remove('dia-modal-cartao');
+          el.innerHTML = '<div class="dia-estado-pagamento"><div class="dia-ok">' + ICONES.certo + '</div><h3>' + tx('Pagamento confirmado!') + '</h3>'
+            + '<div class="dia-ref">' + esc(enc.referencia) + '</div><p>' + tx('Obrigado pela tua compra. A loja já recebeu a tua encomenda.') + '</p>'
+            + '<button class="dia-btn-sec" data-fechar-final>' + tx('Continuar a comprar') + '</button></div>';
+          el.querySelector('[data-fechar-final]').addEventListener('click', function(){ fecharJanela(); recarregarProdutos(); });
+          return;
+        }
+        seguinte();
+      }).catch(seguinte);
+    }
+    function seguinte(){
+      if (parado) return;
+      tentativas++;
+      if (tentativas === 60) { var t = $('dia-estado-texto'); if (t) t.textContent = tx('Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.'); }
+      if (tentativas < 400) temporizador = setTimeout(verificar, 3000);
+    }
+    cartaoEmCurso = { verificarJa: function(){ clearTimeout(temporizador); verificar(); } };
+    temporizador = setTimeout(verificar, 5000);
+  }
+
   function irPara(destino){
     if (!destino || !destino.valor) return;
     if (destino.tipo === 'categoria') filtrarCategoria(destino.valor);
@@ -3096,8 +3477,10 @@ const LOJA_CART_JS = `/*
     var m = montra();
     var raiz = $('dia-loja');
     if (!raiz) return;
+    temaActual = m.tema || '';
+    montraEhPadrao = !!m.padrao;
     var estilo = m.estilo || {};
-    raiz.className = 'dia-loja dia-cartao-' + (estilo.cartao || 'suave') + ' dia-cols-' + (estilo.colunas || 4) + (filtrando() ? ' dia-filtrando' : '');
+    raiz.className = 'dia-loja dia-cartao-' + (estilo.cartao || 'suave') + ' dia-cols-' + (estilo.colunas || 4) + (temaActual ? ' dia-tema-' + temaActual : '') + (filtrando() ? ' dia-filtrando' : '');
     var el = $('dia-montra');
     el.innerHTML = '';
     if (PREVIA && produtos.length && produtos[0].demo) {
@@ -3150,7 +3533,7 @@ const LOJA_CART_JS = `/*
     var el = barraEl && barraEl.querySelector('#dia-categorias');
     if (!el) return;
     var cats = categorias();
-    if (cats.length < 2) { el.innerHTML = ''; el.style.display = 'none'; return; }
+    if (!temCategorias(cats)) { el.innerHTML = ''; el.style.display = 'none'; return; }
     el.style.display = 'flex';
     el.innerHTML = '<button class="dia-chip' + (!filtro.categoria ? ' dia-activo' : '') + '" data-cat="">' + tx('Tudo') + ' <small>' + produtos.length + '</small></button>'
       + cats.map(function(c){
@@ -3638,7 +4021,7 @@ const LOJA_CART_JS = `/*
       if (enc.modo === 'daniel') {
         return post('/loja-pagar', { encomenda_id: enc.encomenda_id, metodo: metodoSeleccionado }).then(function(rp){
           if (rp.status !== 'success') throw new Error((DIA_LANG === 'pt' && rp.message) || tx('Não foi possível iniciar o pagamento.'));
-          if (rp.response.tipo === 'cartao') { window.location.href = rp.response.checkout_url; return; }
+          if (rp.response.tipo === 'cartao') { limparCarrinho(); renderCarrinho(); pagarComCartao(enc, rp.response); return; }
           limparCarrinho(); renderCarrinho();
           esperarPagamento(enc.encomenda_id, enc.referencia);
         });
@@ -3746,6 +4129,15 @@ const LOJA_CART_JS = `/*
       produtos = r.response.produtos || [];
       if (PREVIA && !produtos.length) produtos = produtosDeExemplo();
       if (r.response.loja) loja = r.response.loja;
+      var ocultas = {};
+      configCategorias().forEach(function(c){ if (c.oculta) ocultas[String(c.nome).toLowerCase()] = true; });
+      produtos = produtos.filter(function(p){ return !ocultas[String(p.categoria || '').toLowerCase()]; });
+      // "Roupa" e "roupa" são a mesma categoria: fica a grafia da configuração ou a mais usada.
+      var grafias = {}, canon = {};
+      produtos.forEach(function(p){ var c = String(p.categoria || '').trim(); if (!c) return; var k = c.toLowerCase(); grafias[k] = grafias[k] || {}; grafias[k][c] = (grafias[k][c] || 0) + 1; });
+      Object.keys(grafias).forEach(function(k){ var g = grafias[k]; canon[k] = Object.keys(g).sort(function(a, b){ return g[b] - g[a]; })[0]; });
+      configCategorias().forEach(function(c){ var k = String(c.nome).toLowerCase(); if (canon[k]) canon[k] = c.nome; });
+      produtos.forEach(function(p){ var c = String(p.categoria || '').trim(); p.categoria = c ? (canon[c.toLowerCase()] || c) : ''; });
       renderMontra();
       renderCarrinho();
     });
@@ -4844,8 +5236,8 @@ app.post('/generate', async (req, res) => {
     // ---- 3. Verificar limite de tokens do mês ----
     const tokensUsados = user['Tokens Usados Mes'] || 0;
     const tokensIncluidos = plano['Tokens Incluidos'] || 0;
-    if (tokensUsados >= tokensIncluidos) {
-      return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
+    if (semTokens(user, plano)) {
+      return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
     }
 
     // ---- 4. Registar já o Site e a Generation, com estado "A gerar" ----
@@ -4904,13 +5296,13 @@ function guardarVariantes(siteId, estado) {
 
 async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente }) {
   const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const direcoes = escolherDirecoes();
+  const direcoes = escolherDirecoes(tipo);
   const estado = {
     slug, logo: logoExistente || '', generation_id: generationId, escolhida: null, inicio: new Date().toISOString(),
     modo: manterSite ? 'mudar' : 'criar', cobrado: false,
     variantes: direcoes.map((d, i) => ({
       n: i + 1, estado: 'a gerar', caminho: '', url: '', tokens: 0,
-      direcao: { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia }, paleta: [], fontes: [], segundos: 0
+      direcao: { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia, tema: d.tema || '' }, paleta: [], fontes: [], segundos: 0
     }))
   };
   try {
@@ -4945,7 +5337,7 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
           nome, tipo, prompt, logoUrl: estado.logo, imagensUrls, siteId, mostrarMarcaDeAgua, idioma,
           direcao: Object.assign({ n: i + 1 }, d), outrasDirecoes: outras
         });
-        if (ehLoja) html = marcarEstiloLoja(html, d.cartao);
+        if (ehLoja) html = marcarEstiloLoja(html, d.cartao, d.tema);
         const caminho = `sites/${owner}/${slug}/v${i + 1}.html`;
         const url = await uploadParaBunny(caminho, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
         const visual = resumoVisual(html);
@@ -4988,6 +5380,42 @@ async function temPlanoPago(owner) {
 const MSG_SO_PAGO = 'Mudar de layout faz parte dos planos pagos. Sobe de plano para usares as outras versões.';
 
 // ======================================================
+// Tokens (1.59.0): os do plano (por mês) + os recarregados
+// ------------------------------------------------------
+// Cada plano traz os seus tokens do mês. Quando acabam, a pessoa pode
+// recarregar (pacotes pagos à parte) - esses ficam no campo "Tokens Extra"
+// do User e não expiram. Gasta-se primeiro o que o plano traz e só depois
+// os recarregados.
+// ======================================================
+const MSG_SEM_TOKENS = 'Os tokens do teu plano acabaram. Recarrega tokens para continuar a criar e editar.';
+function saldoTokens(user, plano) {
+  const incluidos = Math.max(0, Number(plano && plano['Tokens Incluidos']) || 0);
+  const usados = Math.max(0, Number(user && user['Tokens Usados Mes']) || 0);
+  const extra = Math.max(0, Number(user && user['Tokens Extra']) || 0);
+  return { incluidos, usados, extra, livres: Math.max(0, incluidos - usados) + extra };
+}
+function semTokens(user, plano) { return saldoTokens(user, plano).livres <= 0; }
+function patchCobrarTokens(user, plano, tokens) {
+  const s = saldoTokens(user, plano);
+  const doMes = Math.min(tokens, Math.max(0, s.incluidos - s.usados));
+  const resto = tokens - doMes;
+  const doExtra = Math.min(resto, s.extra);
+  const sobra = resto - doExtra; // passou do que havia: fica registado no mês
+  const dados = { 'Tokens Usados Mes': s.usados + doMes + sobra };
+  if (doExtra > 0) dados['Tokens Extra'] = s.extra - doExtra;
+  return dados;
+}
+async function cobrarTokens(owner, tokens) {
+  tokens = Math.max(0, Math.round(Number(tokens) || 0));
+  if (!tokens) return;
+  const user = await bubbleGet('user', owner);
+  if (!user) return;
+  const plano = user['Plan'] ? await bubbleGet('plan', user['Plan']).catch(() => null) : null;
+  await bubblePatch('user', owner, patchCobrarTokens(user, plano, tokens));
+}
+function milhares(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+
+// ======================================================
 // Mudar de layout (1.56.0)
 // ------------------------------------------------------
 // Para sites já criados (incluindo os de antes do estúdio): gera 3 versões
@@ -5013,8 +5441,8 @@ app.post('/novas-variantes', async (req, res) => {
     const planId = await garantirPlano(owner, user);
     const plano = planId ? await bubbleGet('plan', planId) : null;
     if (!plano) return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
-    if ((user['Tokens Usados Mes'] || 0) >= (plano['Tokens Incluidos'] || 0)) {
-      return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
+    if (semTokens(user, plano)) {
+      return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
     }
     const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
     if (mostrarMarcaDeAgua) return res.json({ status: 'error', codigo: 'plano', message: MSG_SO_PAGO });
@@ -5054,8 +5482,7 @@ app.post('/trocar-variante', async (req, res) => {
     await uploadParaBunny(site['Bunny Path'], html, 'text/html; charset=utf-8');
     await purgeCacheBunny(site['CDN URL']).catch(() => {});
     if (!e.cobrado) {
-      const user = await bubbleGet('user', owner);
-      if (user) await bubblePatch('user', owner, { 'Tokens Usados Mes': (Number(user['Tokens Usados Mes']) || 0) + (v.tokens || 0) });
+      await cobrarTokens(owner, v.tokens || 0);
       if (e.generation_id) await bubblePatch('generation', e.generation_id, { 'Status': 'Pronto', 'Tokens Usados': v.tokens || 0 }).catch(() => {});
       e.cobrado = true;
     }
@@ -5108,8 +5535,7 @@ app.post('/escolher-variante', async (req, res) => {
     if (e.generation_id) {
       await bubblePatch('generation', e.generation_id, { 'Status': 'Pronto', 'Tokens Usados': v.tokens || 0 }).catch(() => {});
     }
-    const user = await bubbleGet('user', owner);
-    if (user) await bubblePatch('user', owner, { 'Tokens Usados Mes': (Number(user['Tokens Usados Mes']) || 0) + (v.tokens || 0) });
+    await cobrarTokens(owner, v.tokens || 0);
     await bubblePatch('site', site_id, { 'Status': 'Pronto', 'Bunny Path': caminhoSite, 'CDN URL': cdnUrl, 'Logo URL': e.logo || '' });
     const outrasProntas = e.variantes.filter(x => x.n !== n && x.estado === 'pronto').length;
     return res.json({ status: 'success', response: { cdn_url: cdnUrl, tipo: site['Tipo'], plano_pago: await temPlanoPago(owner).catch(() => false), outras_prontas: outrasProntas } });
@@ -5177,9 +5603,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     });
 
     // ---- Actualizar os tokens usados do utilizador ----
-    await bubblePatch('user', owner, {
-      'Tokens Usados Mes': tokensUsados + tokens
-    });
+    await cobrarTokens(owner, tokens);
 
     // ---- Só agora marcamos o Site como "Pronto" ----
     // Chegar aqui significa que a Generation e o User já foram actualizados
@@ -5245,8 +5669,8 @@ app.post('/editar', async (req, res) => {
 
     const tokensUsados = user['Tokens Usados Mes'] || 0;
     const tokensIncluidos = plano['Tokens Incluidos'] || 0;
-    if (tokensUsados >= tokensIncluidos) {
-      return res.json({ status: 'error', message: 'Já atingiste o limite de tokens de IA incluídos no teu plano este mês.' });
+    if (semTokens(user, plano)) {
+      return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
     }
 
     // Esta vai ser a primeira edição deste site se só existir, até agora,
@@ -5324,10 +5748,11 @@ async function processarEdicao({ owner, site_id, site, prompt, imagens_data_url,
     });
 
     // ---- Tokens: regra especial do plano Free ----
-    const novoTotalTokens = (ehPlanoFree && ehPrimeiraEdicao)
-      ? tokensIncluidos
-      : tokensUsados + tokens;
-    await bubblePatch('user', owner, { 'Tokens Usados Mes': novoTotalTokens });
+    if (ehPlanoFree && ehPrimeiraEdicao) {
+      await bubblePatch('user', owner, { 'Tokens Usados Mes': Math.max(tokensIncluidos, tokensUsados) });
+    } else {
+      await cobrarTokens(owner, tokens);
+    }
 
     // ---- Site volta a "Pronto", com o mesmo link ----
     await bubblePatch('site', site_id, {
@@ -5446,7 +5871,8 @@ app.post('/account', async (req, res) => {
         nome: user['Full Name'] || '',
         plano: nomePlano,
         tokens_usados: user['Tokens Usados Mes'] || 0,
-        tokens_incluidos: tokensIncluidos
+        tokens_incluidos: tokensIncluidos,
+        tokens_extra: Math.max(0, Number(user['Tokens Extra']) || 0)
       }
     });
   } catch (erro) {
@@ -6851,7 +7277,7 @@ app.post('/loja-pagar', async (req, res) => {
       'ID Pagamento': String(identificador)
     });
 
-    return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl } });
+    return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl, embutivel: await checkoutEmbutivel(checkoutUrl) } });
 
   } catch (erro) {
     console.error('Erro em /loja-pagar:', erro);
@@ -6996,9 +7422,18 @@ app.get('/loja-obrigado', async (req, res) => {
 
 <script>
 var ENCOMENDA_ID = ${JSON.stringify(encomendaId)};
+var EMBUTIDA = false;
+try { EMBUTIDA = window.self !== window.top; } catch (e) { EMBUTIDA = true; }
+function avisarPai(estado){ try { window.parent.postMessage({ daniel: 'pagamento', estado: estado }, '*'); } catch (e) {} }
+if (EMBUTIDA) {
+  avisarPai('voltou');
+  var estiloEmb = document.createElement('style');
+  estiloEmb.textContent = 'body{background:transparent!important;padding:16px!important;min-height:0!important;}body>svg{display:none!important;}#btn-voltar{display:none!important;}.caixa{border:none!important;background:transparent!important;}';
+  document.head.appendChild(estiloEmb);
+}
 var CDN_URL = ${JSON.stringify(cdnUrl)};
 var tentativas = 0;
-var MAX_TENTATIVAS = 15;
+var MAX_TENTATIVAS = 40;
 
 function mostrarEstado(tipo, titulo, texto){
   var icone = document.getElementById('icone');
@@ -7026,6 +7461,7 @@ function verificar(){
     .then(function(r){
       if (r.status === 'success' && r.response.estado === 'Pago') {
         mostrarEstado('pago', 'Pagamento confirmado!', 'Obrigado pela tua compra.');
+        if (EMBUTIDA) { avisarPai('pago'); return; }
         if (CDN_URL) {
           setTimeout(function(){ window.location.href = CDN_URL; }, 4000);
         }
@@ -7282,6 +7718,9 @@ app.post('/assinatura-pagar', async (req, res) => {
     if (assinatura['Estado'] !== 'Pendente') {
       return res.json({ status: 'error', message: 'Esta assinatura já foi paga ou já não está disponível para pagamento.' });
     }
+    if (req.body.owner && assinatura['User'] !== req.body.owner) {
+      return res.json({ status: 'error', message: 'Assinatura não encontrada.' });
+    }
 
     const user = await bubbleGet('user', assinatura['User']);
     if (!user) {
@@ -7332,7 +7771,7 @@ app.post('/assinatura-pagar', async (req, res) => {
         valor: String(valor),
         nome_cliente: nome,
         carteira: MOZPAYMENT_WALLET,
-        nome_producto: 'Assinatura Daniel IA',
+        nome_producto: assinatura['Tipo'] === 'Recarga' ? 'Recarga de tokens Daniel IA' : 'Assinatura Daniel IA',
         return_url: returnUrl
       })
     });
@@ -7361,7 +7800,7 @@ app.post('/assinatura-pagar', async (req, res) => {
       'ID Pagamento': String(identificador)
     });
 
-    return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl } });
+    return res.json({ status: 'success', response: { tipo: 'cartao', checkout_url: checkoutUrl, embutivel: await checkoutEmbutivel(checkoutUrl) } });
 
   } catch (erro) {
     console.error('Erro em /assinatura-pagar:', erro);
@@ -7381,12 +7820,30 @@ app.post('/assinatura-estado', async (req, res) => {
     if (!assinatura) {
       return res.json({ status: 'error', message: 'Assinatura não encontrada.' });
     }
+    if (req.body.owner && assinatura['User'] !== req.body.owner) {
+      return res.json({ status: 'error', message: 'Assinatura não encontrada.' });
+    }
     return res.json({
       status: 'success',
-      response: { estado: assinatura['Estado'], valor_mzn: assinatura['Valor MZN'] }
+      response: {
+        estado: assinatura['Estado'], valor_mzn: assinatura['Valor MZN'],
+        tipo: assinatura['Tipo'] === 'Recarga' ? 'recarga' : 'plano', tokens: Number(assinatura['Tokens']) || 0
+      }
     });
   } catch (erro) {
     console.error('Erro em /assinatura-estado:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
+  }
+});
+
+// A página de "obrigado" (que abre dentro da janela do cartão, sem sessão)
+// só precisa de saber se já está pago - mais nada sai daqui.
+app.post('/assinatura-confirmacao', async (req, res) => {
+  try {
+    const assinatura = await bubbleGet('assinatura', req.body.assinatura_id).catch(() => null);
+    if (!assinatura) return res.json({ status: 'error', message: 'Não encontrado.' });
+    return res.json({ status: 'success', response: { estado: assinatura['Estado'] === 'Pago' ? 'Pago' : 'Pendente' } });
+  } catch (erro) {
     return res.json({ status: 'error', message: 'Não foi possível consultar o estado.' });
   }
 });
@@ -7487,9 +7944,18 @@ app.get('/assinatura-obrigado', async (req, res) => {
 
 <script>
 var ASSINATURA_ID = ${JSON.stringify(assinaturaId)};
+var EMBUTIDA = false;
+try { EMBUTIDA = window.self !== window.top; } catch (e) { EMBUTIDA = true; }
+function avisarPai(estado){ try { window.parent.postMessage({ daniel: 'pagamento', estado: estado }, '*'); } catch (e) {} }
+if (EMBUTIDA) {
+  avisarPai('voltou');
+  var estiloEmb = document.createElement('style');
+  estiloEmb.textContent = 'body{background:transparent!important;padding:16px!important;min-height:0!important;}body>svg{display:none!important;}#btn-voltar{display:none!important;}.caixa{border:none!important;background:transparent!important;}';
+  document.head.appendChild(estiloEmb);
+}
 var APP_URL_JS = ${JSON.stringify(APP_URL)};
 var tentativas = 0;
-var MAX_TENTATIVAS = 15;
+var MAX_TENTATIVAS = 40;
 
 function mostrarEstado(tipo, titulo, texto){
   var icone = document.getElementById('icone');
@@ -7509,14 +7975,15 @@ function verificar(){
     mostrarEstado('erro', 'Não encontrámos a tua assinatura', 'Volta ao dashboard e tenta novamente.');
     return;
   }
-  fetch('/assinatura-estado', {
+  fetch('/assinatura-confirmacao', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ assinatura_id: ASSINATURA_ID })
   }).then(function(r){ return r.json(); })
     .then(function(r){
       if (r.status === 'success' && r.response.estado === 'Pago') {
-        mostrarEstado('pago', 'Pagamento confirmado!', 'O teu plano já está actualizado.');
+        mostrarEstado('pago', 'Pagamento confirmado!', 'A tua conta já está actualizada.');
+        if (EMBUTIDA) { avisarPai('pago'); return; }
         setTimeout(function(){ window.location.href = APP_URL_JS; }, 4000);
         return;
       }
@@ -7597,6 +8064,12 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
       'Transaction ID': String(body.transaction_id || ''),
       'Webhook Processado': true
     });
+
+    // ---- Recarga de tokens (1.59.0): soma aos tokens extra e fica por aqui ----
+    if (assinatura['Tipo'] === 'Recarga') {
+      await aplicarRecarga(assinatura);
+      return;
+    }
 
     // ---- Aplica o plano novo ao utilizador ----
     const agora = new Date();
@@ -8475,7 +8948,8 @@ app.post('/admin-resumo', async (req, res) => {
           openai: !!OPENAI_API_KEY, resend: !!clean(process.env.RESEND_KEY), bunny_api: !!clean(process.env.BUNNY_API_KEY),
           stream: !!clean(process.env.STREAM_KEY), mozpayment: !!clean(process.env.MOZPAYMENT_EMAIL), kyc_cifra: !!clean(process.env.KYC_ENC_KEY),
           admin_secret: !!ADMIN_SECRET, admin_emails: ADMIN_EMAILS.length
-        }
+        },
+        cartao: estadoCartaoEmbutir
       },
       planos: planos.map(p => ({ id: p._id, nome: p['Name'] || '', preco: Number(p['Price MZN']) || 0, tokens: Number(p['Tokens Incluidos']) || 0, sites: Number(p['Sites Limit']) || 0, activo: !!p['Is Active'] }))
         .sort((a, b) => a.preco - b.preco)
@@ -8493,6 +8967,7 @@ function utilizadorParaAdmin(u, planos, sitesPorDono, kycPorDono) {
     id: u._id, nome: u['Full Name'] || '', email: emailDoUsuario(u) || '',
     plano_id: u['Plan'] || '', plano: plano ? (plano['Name'] || '') : '', plano_expira: u['Plan Expires'] || '',
     tokens_usados: Number(u['Tokens Usados Mes']) || 0, tokens_incluidos: plano ? (Number(plano['Tokens Incluidos']) || 0) : 0,
+    tokens_extra: Math.max(0, Number(u['Tokens Extra']) || 0),
     sites: sitesPorDono[u._id] || 0, kyc: k ? (k['Estado'] || 'Pendente') : 'Nenhum', criado: u['Created Date'] || ''
   };
 }
@@ -8531,7 +9006,7 @@ app.post('/admin-utilizador', async (req, res) => {
       plano_inicio: u['Plan Started'] || '',
       sessao_activa: !!u['Token Sessao'] && depoisDe(u['Token Sessao Expira'], Date.now()),
       sites_lista: sites.map(x => ({ id: x._id, nome: x['Nome'] || '', tipo: x['Tipo'] || '', estado: x['Status'] || '', url: x['CDN URL'] || '', criado: x['Created Date'] || '' })),
-      assinaturas: assinaturas.slice(0, 20).map(a => ({ plano: nomePlanoDe(planos, a['Plano']), valor: Number(a['Valor MZN']) || 0, metodo: a['Metodo'] || '', estado: a['Estado'] || '', criado: a['Created Date'] || '' }))
+      assinaturas: assinaturas.slice(0, 20).map(a => ({ plano: rotuloAssinatura(planos, a), recarga: a['Tipo'] === 'Recarga', valor: Number(a['Valor MZN']) || 0, metodo: a['Metodo'] || '', estado: a['Estado'] || '', criado: a['Created Date'] || '' }))
     }) });
   } catch (erro) {
     console.error('Erro em /admin-utilizador:', erro);
@@ -8640,7 +9115,7 @@ app.post('/admin-pagamentos', async (req, res) => {
     const emailPorId = {}; users.forEach(u => { emailPorId[u._id] = emailDoUsuario(u) || ''; });
     const sitePorId = {}; sites.forEach(x => { sitePorId[x._id] = x['Nome'] || ''; });
     return res.json({ status: 'success', response: {
-      assinaturas: assinaturas.slice(0, 150).map(a => ({ email: emailPorId[a['User']] || '', plano: nomePlanoDe(planos, a['Plano']), valor: Number(a['Valor MZN']) || 0,
+      assinaturas: assinaturas.slice(0, 150).map(a => ({ email: emailPorId[a['User']] || '', plano: rotuloAssinatura(planos, a), recarga: a['Tipo'] === 'Recarga', valor: Number(a['Valor MZN']) || 0,
         metodo: a['Metodo'] || '', estado: a['Estado'] || '', criado: a['Created Date'] || '' })),
       encomendas: encomendas.slice(0, 150).map(e => ({ loja: sitePorId[e['Site']] || '', cliente: e['Cliente Nome'] || '', valor: Number(e['Valor Total']) || 0,
         metodo: e['Metodo'] || '', estado: e['Estado'] || '', criado: e['Created Date'] || '' }))
@@ -8648,6 +9123,275 @@ app.post('/admin-pagamentos', async (req, res) => {
   } catch (erro) {
     console.error('Erro em /admin-pagamentos:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os pagamentos.' });
+  }
+});
+
+// ======================================================
+// Cartão embutido (1.59.0)
+// ------------------------------------------------------
+// O checkout do cartão abre DENTRO da página (app e lojas), numa janela
+// por cima, e a página fica à espera da confirmação - a pessoa nunca sai.
+// Algumas páginas de pagamento proíbem ser mostradas dentro de outra
+// (cabeçalhos X-Frame-Options / frame-ancestors). Verificamos isso aqui,
+// no servidor, e a página mostra um botão para abrir à parte nesses casos.
+// CARTAO_EMBUTIR no Bunny: "sim" força embutir, "nao" nunca embute,
+// vazio = verifica sozinho (recomendado).
+// ======================================================
+const CARTAO_EMBUTIR = (clean(process.env.CARTAO_EMBUTIR) || 'auto').toLowerCase();
+const cacheEmbutir = new Map();
+let estadoCartaoEmbutir = { verificado: false, embutivel: null, origem: '', quando: '', modo: CARTAO_EMBUTIR };
+function cabecalhosDeixamEmbutir(h) {
+  const xfo = String(h.get('x-frame-options') || '').toLowerCase();
+  if (xfo.includes('deny') || xfo.includes('sameorigin')) return false;
+  const csp = String(h.get('content-security-policy') || '').toLowerCase();
+  const m = csp.match(/frame-ancestors([^;]*)/);
+  if (m && !m[1].trim().split(/\s+/).includes('*')) return false;
+  return true;
+}
+async function checkoutEmbutivel(url) {
+  if (CARTAO_EMBUTIR === 'sim') return true;
+  if (CARTAO_EMBUTIR === 'nao') return false;
+  let origem = '';
+  try { origem = new URL(url).origin; } catch (e) { return false; }
+  const c = cacheEmbutir.get(origem);
+  if (c && c.ate > Date.now()) return c.ok;
+  let ok = true;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 5000);
+    const r = await fetch(url, { method: 'GET', redirect: 'follow', signal: ctl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (DanielIA verificar checkout)' } });
+    clearTimeout(t);
+    ok = cabecalhosDeixamEmbutir(r.headers);
+    try { if (r.body && r.body.cancel) r.body.cancel(); } catch (e) {}
+  } catch (e) {
+    ok = true; // sem resposta a tempo: tentamos embutir; a página tem sempre o botão alternativo
+  }
+  cacheEmbutir.set(origem, { ok, ate: Date.now() + 10 * 60 * 1000 });
+  estadoCartaoEmbutir = { verificado: true, embutivel: ok, origem, quando: new Date().toISOString(), modo: CARTAO_EMBUTIR };
+  if (!ok) console.warn('[cartao] a página de pagamento de', origem, 'não deixa ser embutida - a app mostra o botão para abrir à parte.');
+  return ok;
+}
+
+// ======================================================
+// Recargas de tokens (1.59.0)
+// ------------------------------------------------------
+// Pacotes no tipo "Pacote" do Bubble (Name, Tokens, Price MZN, Is Active,
+// Sort Order), geridos no painel de administração. Cada compra é uma
+// Assinatura com Tipo "Recarga" - usa o mesmo pagamento (M-Pesa, e-Mola,
+// cartão) e o mesmo webhook dos planos.
+// ======================================================
+function pacoteParaLista(p) {
+  return { id: p._id, nome: p['Name'] || '', tokens: Number(p['Tokens']) || 0, preco_mzn: Number(p['Price MZN']) || 0,
+    activo: !!p['Is Active'], ordem: Number(p['Sort Order']) || 0 };
+}
+function ordenarPacotes(a, b) { return (a.ordem - b.ordem) || (a.tokens - b.tokens); }
+function rotuloAssinatura(planos, a) {
+  if (a['Tipo'] === 'Recarga') return 'Recarga · ' + milhares(a['Tokens']) + ' tokens';
+  return nomePlanoDe(planos, a['Plano']);
+}
+
+app.post('/pacotes', async (req, res) => {
+  try {
+    const lista = (await bubbleList('pacote', [{ key: 'Is Active', constraint_type: 'equals', value: true }]).catch(() => []))
+      .map(pacoteParaLista).filter(p => p.tokens > 0 && p.preco_mzn > 0).sort(ordenarPacotes);
+    return res.json({ status: 'success', response: { pacotes: lista } });
+  } catch (erro) {
+    console.error('Erro em /pacotes:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar as recargas.' });
+  }
+});
+
+app.post('/recarga-iniciar', async (req, res) => {
+  try {
+    const { owner, pacote_id } = req.body;
+    if (!owner || !pacote_id) return res.json({ status: 'error', message: 'Escolhe um pacote de tokens.' });
+    const user = await bubbleGet('user', owner);
+    if (!user) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const pacote = await bubbleGet('pacote', pacote_id).catch(() => null);
+    const tokens = pacote ? Math.round(Number(pacote['Tokens']) || 0) : 0;
+    const valor = pacote ? Math.round((Number(pacote['Price MZN']) || 0) * 100) / 100 : 0;
+    if (!pacote || !pacote['Is Active'] || tokens <= 0 || valor <= 0) {
+      return res.json({ status: 'error', message: 'Este pacote já não está disponível.' });
+    }
+    const assinaturaId = await bubbleCreate('assinatura', {
+      'User': owner, 'Valor MZN': valor, 'Metodo': '', 'ID Pagamento': '', 'Estado': 'Pendente',
+      'Transaction ID': '', 'Webhook Processado': false, 'Tipo': 'Recarga', 'Tokens': tokens, 'Pacote': pacote._id,
+      'Created Date': new Date().toISOString()
+    });
+    return res.json({ status: 'success', response: { assinatura_id: assinaturaId, tokens, valor_mzn: valor } });
+  } catch (erro) {
+    console.error('Erro em /recarga-iniciar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível iniciar a recarga.' });
+  }
+});
+
+async function aplicarRecarga(assinatura) {
+  const user = await bubbleGet('user', assinatura['User']);
+  if (!user) return;
+  const tokens = Math.max(0, Math.round(Number(assinatura['Tokens']) || 0));
+  const novo = Math.max(0, Number(user['Tokens Extra']) || 0) + tokens;
+  await bubblePatch('user', user._id, { 'Tokens Extra': novo });
+  console.log('Recarga paga e aplicada:', assinatura._id, '+' + tokens, 'tokens');
+  try {
+    const email = emailDoUsuario(user);
+    if (email) {
+      await enviarEmail(email, 'Recarga de tokens confirmada - Daniel IA', templateEmailKyc(
+        'Recarga confirmada', 'Olá' + (user['Full Name'] ? ', ' + escaparHtml(String(user['Full Name']).split(' ')[0]) : '') + '!',
+        [`Recebemos o teu pagamento de <strong>${escaparHtml(milhares(assinatura['Valor MZN']))} MZN</strong>.`,
+          `Juntámos <strong>${escaparHtml(milhares(tokens))} tokens</strong> à tua conta. Tens agora ${escaparHtml(milhares(novo))} tokens recarregados, que não expiram e são usados depois dos tokens do teu plano.`],
+        { texto: 'Ir para o dashboard', url: APP_URL }));
+    }
+  } catch (erroEmail) {
+    console.error('Recarga aplicada, mas o email falhou:', erroEmail.message);
+  }
+}
+
+// ======================================================
+// Painel: planos e pacotes de recarga (1.59.0)
+// ======================================================
+function numeroEntre(v, min, max) {
+  const n = Number(v);
+  if (!isFinite(n)) return null;
+  return Math.min(max, Math.max(min, n));
+}
+function planoParaAdmin(p, contas) {
+  return { id: p._id, nome: p['Name'] || '', preco: Number(p['Price MZN']) || 0, tokens: Number(p['Tokens Incluidos']) || 0,
+    sites: Number(p['Sites Limit']) || 0, colaboradores: Number(p['Max Colaboradores']) || 0, dominio: !!p['Permite Dominio'],
+    activo: !!p['Is Active'], contas: contas || 0 };
+}
+
+app.post('/admin-planos', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const [planos, users] = await Promise.all([listaAdmin('plan', true), listaAdmin('user')]);
+    let pacotes = null;
+    try { pacotes = await listaAdmin('pacote', true); } catch (e) { pacotes = null; }
+    const porPlano = {};
+    users.forEach(u => { porPlano[u['Plan']] = (porPlano[u['Plan']] || 0) + 1; });
+    return res.json({ status: 'success', response: {
+      planos: planos.map(p => planoParaAdmin(p, porPlano[p._id])).sort((a, b) => a.preco - b.preco),
+      pacotes: pacotes ? pacotes.map(pacoteParaLista).sort(ordenarPacotes) : [],
+      pacotes_ok: !!pacotes
+    } });
+  } catch (erro) {
+    console.error('Erro em /admin-planos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar os planos.' });
+  }
+});
+
+app.post('/admin-plano-guardar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const b = req.body;
+    const nome = textoLimpo(b.nome, 40);
+    if (nome.length < 2) return res.json({ status: 'error', message: 'Dá um nome ao plano.' });
+    const preco = numeroEntre(b.preco, 0, 1000000);
+    const tokens = numeroEntre(b.tokens, 0, 1000000000);
+    const sites = numeroEntre(b.sites, 0, 100000);
+    const colab = numeroEntre(b.colaboradores || 0, 0, 1000);
+    if (preco === null || tokens === null || sites === null || colab === null) return res.json({ status: 'error', message: 'Confirma os números do plano.' });
+    const todos = await listaAdmin('plan', true);
+    const igual = todos.find(p => String(p['Name'] || '').trim().toLowerCase() === nome.toLowerCase() && p._id !== b.plano_id);
+    if (igual) return res.json({ status: 'error', message: 'Já existe um plano com o nome "' + nome + '".' });
+    const dados = {
+      'Name': nome, 'Price MZN': Math.round(preco * 100) / 100, 'Tokens Incluidos': Math.round(tokens), 'Sites Limit': Math.round(sites),
+      'Max Colaboradores': Math.round(colab), 'Permite Dominio': !!b.dominio, 'Is Active': !!b.activo
+    };
+    let id = b.plano_id;
+    if (id) {
+      const antes = todos.find(p => p._id === id);
+      if (!antes) return res.json({ status: 'error', message: 'Plano não encontrado.' });
+      if (String(antes['Name'] || '').trim().toLowerCase() === 'free' && nome.toLowerCase() !== 'free') {
+        return res.json({ status: 'error', message: 'O plano Free tem de continuar a chamar-se "Free" - é por esse nome que o sistema o reconhece.' });
+      }
+      if (String(antes['Name'] || '').trim().toLowerCase() === 'free' && !dados['Is Active']) {
+        return res.json({ status: 'error', message: 'O plano Free tem de ficar activo - é o plano de quem acaba de criar conta.' });
+      }
+      await bubblePatch('plan', id, dados);
+      registar(admin, 'Plano editado', `${nome}: ${dados['Price MZN']} MZN, ${dados['Tokens Incluidos']} tokens, ${dados['Sites Limit']} sites${dados['Is Active'] ? '' : ' (inactivo)'}`);
+    } else {
+      id = await bubbleCreate('plan', dados);
+      registar(admin, 'Plano criado', `${nome}: ${dados['Price MZN']} MZN, ${dados['Tokens Incluidos']} tokens, ${dados['Sites Limit']} sites`);
+    }
+    limparCacheAdmin();
+    return res.json({ status: 'success', response: { id } });
+  } catch (erro) {
+    console.error('Erro em /admin-plano-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar o plano.' });
+  }
+});
+
+app.post('/admin-pacote-guardar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const b = req.body;
+    const tokens = numeroEntre(b.tokens, 1, 1000000000);
+    const preco = numeroEntre(b.preco, 1, 1000000);
+    const ordem = numeroEntre(b.ordem || 0, 0, 1000);
+    if (tokens === null || preco === null || ordem === null) return res.json({ status: 'error', message: 'Confirma os tokens e o preço do pacote.' });
+    const nome = textoLimpo(b.nome, 40) || (milhares(tokens) + ' tokens');
+    const dados = { 'Name': nome, 'Tokens': Math.round(tokens), 'Price MZN': Math.round(preco * 100) / 100, 'Is Active': !!b.activo, 'Sort Order': Math.round(ordem) };
+    let id = b.pacote_id;
+    if (id) {
+      await bubblePatch('pacote', id, dados);
+      registar(admin, 'Recarga editada', `${nome}: ${dados['Tokens']} tokens por ${dados['Price MZN']} MZN${dados['Is Active'] ? '' : ' (inactiva)'}`);
+    } else {
+      id = await bubbleCreate('pacote', dados);
+      registar(admin, 'Recarga criada', `${nome}: ${dados['Tokens']} tokens por ${dados['Price MZN']} MZN`);
+    }
+    limparCacheAdmin();
+    return res.json({ status: 'success', response: { id } });
+  } catch (erro) {
+    console.error('Erro em /admin-pacote-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar o pacote. Confirma que o tipo "Pacote" já existe no Bubble.' });
+  }
+});
+
+// Três pacotes para começar (editáveis depois). Só se ainda não houver nenhum.
+app.post('/admin-pacotes-sugeridos', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    let existentes = [];
+    try { existentes = await listaAdmin('pacote', true); } catch (e) {
+      return res.json({ status: 'error', message: 'Cria primeiro o tipo "Pacote" no Bubble.' });
+    }
+    if (existentes.length) return res.json({ status: 'error', message: 'Já tens pacotes criados.' });
+    const sugeridos = [
+      { 'Name': 'Recarga pequena', 'Tokens': 50000, 'Price MZN': 350, 'Is Active': true, 'Sort Order': 1 },
+      { 'Name': 'Recarga média', 'Tokens': 150000, 'Price MZN': 900, 'Is Active': true, 'Sort Order': 2 },
+      { 'Name': 'Recarga grande', 'Tokens': 500000, 'Price MZN': 2500, 'Is Active': true, 'Sort Order': 3 }
+    ];
+    for (const p of sugeridos) await bubbleCreate('pacote', p);
+    limparCacheAdmin();
+    registar(admin, 'Recargas sugeridas criadas', '50 000 / 150 000 / 500 000 tokens');
+    return res.json({ status: 'success' });
+  } catch (erro) {
+    console.error('Erro em /admin-pacotes-sugeridos:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar os pacotes.' });
+  }
+});
+
+// Dar (ou acertar) tokens recarregados a uma pessoa - ex: pagou por fora.
+app.post('/admin-tokens-extra', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const u = await bubbleGet('user', req.body.user_id);
+    if (!u) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const valor = numeroEntre(req.body.valor, -1000000000, 1000000000);
+    if (valor === null) return res.json({ status: 'error', message: 'Escreve quantos tokens.' });
+    const antes = Math.max(0, Number(u['Tokens Extra']) || 0);
+    const novo = req.body.modo === 'definir' ? Math.max(0, Math.round(valor)) : Math.max(0, antes + Math.round(valor));
+    await bubblePatch('user', u._id, { 'Tokens Extra': novo });
+    limparCacheAdmin();
+    registar(admin, 'Tokens recarregados', `${emailDoUsuario(u) || u._id}: ${antes} -> ${novo}` + (req.body.nota ? ' - ' + textoLimpo(req.body.nota, 120) : ''));
+    return res.json({ status: 'success', response: { tokens_extra: novo } });
+  } catch (erro) {
+    console.error('Erro em /admin-tokens-extra:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível mudar os tokens. Confirma que o campo "Tokens Extra" já existe no User.' });
   }
 });
 
@@ -8911,7 +9655,7 @@ async function baixarStock(itens) {
 }
 
 // ---- Montra por blocos ----
-const TIPOS_BLOCO = ['anuncio', 'capa', 'categorias', 'fila', 'banners', 'oferta', 'catalogo', 'vistos'];
+const TIPOS_BLOCO = ['anuncio', 'capa', 'categorias', 'fila', 'banners', 'oferta', 'catalogo', 'vistos', 'banda', 'colecao'];
 const FONTES_FILA = ['novidades', 'promocoes', 'mais_vendidos', 'destaques', 'categoria'];
 function textoLimpo(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').trim().slice(0, max); }
 function linkImagem(v) { const t = String(v || ''); return /^https:\/\/[^\s"'<>]+$/.test(t) ? t.slice(0, 600) : ''; }
@@ -8977,13 +9721,30 @@ const MONTRA_PADRAO = [
 function limparEstilo(e) {
   e = e || {};
   const colunas = Math.min(6, Math.max(3, parseInt(e.colunas, 10) || 4));
-  return { cartao: ['suave', 'moldura', 'minimal'].includes(e.cartao) ? e.cartao : 'suave', colunas };
+  const tema = ['mercado', 'editorial', 'tech', 'moda', 'classico'].includes(e.tema) ? e.tema : '';
+  return { cartao: ['suave', 'moldura', 'minimal'].includes(e.cartao) ? e.cartao : 'suave', colunas, tema };
+}
+// Categorias configuradas pelo dono (1.59.0): ordem, imagem e se aparecem.
+// Ficam no mesmo campo da montra ("Loja Blocos Json"), em "categorias".
+function limparCategoriasCfg(lista) {
+  const vistas = {};
+  return (Array.isArray(lista) ? lista : []).slice(0, 60).map(c => ({
+    nome: textoLimpo(c && c.nome, 40),
+    imagem: linkImagem(c && c.imagem),
+    oculta: !!(c && c.oculta)
+  })).filter(c => {
+    const k = c.nome.toLowerCase();
+    if (!c.nome || vistas[k]) return false;
+    vistas[k] = true;
+    return true;
+  });
 }
 function montraLoja(site) {
   const m = lerJsonSeguro(site && site['Loja Blocos Json'], null);
+  const categorias = limparCategoriasCfg(m && m.categorias);
   const blocos = m && Array.isArray(m.blocos) ? m.blocos.slice(0, 30).map(limparBloco).filter(Boolean) : [];
-  if (!blocos.length) return { blocos: MONTRA_PADRAO.map(b => Object.assign({}, b)), estilo: limparEstilo(m && m.estilo), padrao: true };
-  return { blocos, estilo: limparEstilo(m.estilo), padrao: false };
+  if (!blocos.length) return { blocos: MONTRA_PADRAO.map(b => Object.assign({}, b)), estilo: limparEstilo(m && m.estilo), padrao: true, categorias };
+  return { blocos, estilo: limparEstilo(m.estilo), padrao: false, categorias };
 }
 
 // Média e total das avaliações aprovadas, por produto.
@@ -9182,6 +9943,7 @@ app.post('/loja-config-ler', async (req, res) => {
         config: cfg,
         capa: capaLoja(site),
         montra: montraLoja(site),
+        tema_site: await temaDoSite(site),
         modo_efectivo: modo,
         kyc_estado: kyc ? (kyc['Estado'] || 'Pendente') : 'Nenhum'
       }
@@ -9191,6 +9953,18 @@ app.post('/loja-config-ler', async (req, res) => {
     return res.json({ status: 'error', message: 'Não foi possível carregar as definições da loja.' });
   }
 });
+
+// Tema de loja escrito no HTML publicado (cada versão do estúdio tem o seu).
+async function temaDoSite(site) {
+  try {
+    if (!site || !site['Bunny Path']) return '';
+    const html = (await descarregarDoBunny(site['Bunny Path'])).toString('utf8');
+    const m = /<meta name="daniel-ia-tema-loja" content="([a-z]+)"/i.exec(html);
+    return m && TEMAS_LOJA.some(t => t.id === m[1]) ? m[1] : '';
+  } catch (e) {
+    return '';
+  }
+}
 
 // ---- Dono: guardar as definições da loja (capa + pagamentos) ----
 // Cada slide da capa pode trazer "imagem" (link já guardado) ou
@@ -9304,13 +10078,145 @@ app.post('/loja-montra-guardar', async (req, res) => {
       const limpo = limparBloco(copia);
       if (limpo) blocos.push(limpo);
     }
-    const valor = { blocos, estilo: limparEstilo(montra.estilo) };
+    const valor = { blocos, estilo: limparEstilo(montra.estilo), categorias: limparCategoriasCfg((lerJsonSeguro(site['Loja Blocos Json'], {}) || {}).categorias) };
     await bubblePatch('site', site_id, { 'Loja Blocos Json': JSON.stringify(valor) });
     return res.json({ status: 'success', response: { montra: montraLoja({ 'Loja Blocos Json': JSON.stringify(valor) }) } });
   } catch (erro) {
     if (erro && erro.utilizador) return res.json({ status: 'error', message: erro.utilizador });
     console.error('Erro em /loja-montra-guardar:', erro);
     return res.json({ status: 'error', message: 'Não foi possível guardar a montra.' });
+  }
+});
+
+// ======================================================
+// Categorias da loja (1.59.0) - um sítio só para as configurar
+// ------------------------------------------------------
+// As categorias nascem dos produtos (campo "Categoria"). Aqui o dono
+// ordena-as, põe uma imagem, esconde, cria novas (ainda sem produtos),
+// muda o nome (muda em todos os produtos) ou apaga (os produtos ficam
+// sem categoria). A configuração fica em "Loja Blocos Json".categorias.
+// ======================================================
+async function produtosDaLoja(siteId) {
+  return bubbleListTodos('produto', [{ key: 'Site', constraint_type: 'equals', value: siteId }], 3000);
+}
+function categoriasDaLoja(produtosLoja, cfg) {
+  const mapa = {};
+  produtosLoja.forEach(p => {
+    const nome = String(p['Categoria'] || '').trim();
+    if (!nome) return;
+    const k = nome.toLowerCase();
+    if (!mapa[k]) mapa[k] = { nome, total: 0, imagem_auto: '', grafias: {} };
+    mapa[k].total++;
+    mapa[k].grafias[nome] = (mapa[k].grafias[nome] || 0) + 1;
+    mapa[k].nome = Object.keys(mapa[k].grafias).sort((x, y) => mapa[k].grafias[y] - mapa[k].grafias[x])[0];
+    if (!mapa[k].imagem_auto) mapa[k].imagem_auto = linkImagem(p['Imagem URL'] || p['Image URL'] || '') || (extraProduto(p).imagens[0] || '');
+  });
+  const lista = [];
+  cfg.forEach(c => {
+    const k = c.nome.toLowerCase();
+    const m = mapa[k];
+    lista.push({ nome: c.nome, total: m ? m.total : 0, imagem: c.imagem, imagem_auto: m ? m.imagem_auto : '', oculta: c.oculta });
+    delete mapa[k];
+  });
+  Object.values(mapa).sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome))
+    .forEach(m => lista.push({ nome: m.nome, total: m.total, imagem: '', imagem_auto: m.imagem_auto, oculta: false }));
+  const semCategoria = produtosLoja.filter(p => !String(p['Categoria'] || '').trim()).length;
+  return { lista, semCategoria };
+}
+async function guardarCategoriasCfg(site, cfg) {
+  const m = lerJsonSeguro(site['Loja Blocos Json'], {}) || {};
+  m.categorias = limparCategoriasCfg(cfg);
+  if (!Array.isArray(m.blocos)) m.blocos = [];
+  await bubblePatch('site', site._id, { 'Loja Blocos Json': JSON.stringify(m) });
+  return m.categorias;
+}
+
+app.post('/loja-categorias', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para ver esta loja.' });
+    const cfg = limparCategoriasCfg((lerJsonSeguro(site['Loja Blocos Json'], {}) || {}).categorias);
+    const r = categoriasDaLoja(await produtosDaLoja(site_id), cfg);
+    return res.json({ status: 'success', response: { categorias: r.lista, sem_categoria: r.semCategoria } });
+  } catch (erro) {
+    console.error('Erro em /loja-categorias:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível carregar as categorias.' });
+  }
+});
+
+// Guarda a ordem, as imagens e o que fica escondido (e as categorias novas).
+app.post('/loja-categorias-guardar', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const entrada = Array.isArray(req.body.categorias) ? req.body.categorias.slice(0, 60) : [];
+    let envios = 0;
+    const cfg = [];
+    for (const c of entrada) {
+      if (!c || !textoLimpo(c.nome, 40)) continue;
+      let imagem = c.imagem || '';
+      if (typeof c.imagem_data_url === 'string' && c.imagem_data_url.indexOf('data:image/') === 0) {
+        if (++envios > 12) return res.json({ status: 'error', message: 'Demasiadas imagens de uma vez. Guarda e depois continua.' });
+        const up = await uploadImagemBase64('loja-categorias', owner, c.imagem_data_url);
+        if (up.erro) return res.json({ status: 'error', message: up.erro });
+        imagem = up.url;
+      }
+      cfg.push({ nome: c.nome, imagem, oculta: !!c.oculta });
+    }
+    await guardarCategoriasCfg(site, cfg);
+    const r = categoriasDaLoja(await produtosDaLoja(site_id), limparCategoriasCfg(cfg));
+    return res.json({ status: 'success', response: { categorias: r.lista, sem_categoria: r.semCategoria } });
+  } catch (erro) {
+    console.error('Erro em /loja-categorias-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar as categorias.' });
+  }
+});
+
+// Muda o nome de uma categoria em todos os produtos (se o nome novo já
+// existir, as duas juntam-se numa só).
+app.post('/loja-categoria-renomear', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const de = textoLimpo(req.body.de, 40), para = textoLimpo(req.body.para, 40);
+    if (!de || !para) return res.json({ status: 'error', message: 'Escreve o nome novo da categoria.' });
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const lista = await produtosDaLoja(site_id);
+    const alvo = lista.filter(p => String(p['Categoria'] || '').trim().toLowerCase() === de.toLowerCase());
+    for (const p of alvo) await bubblePatch('produto', p._id, { 'Categoria': para });
+    const cfgAntes = limparCategoriasCfg((lerJsonSeguro(site['Loja Blocos Json'], {}) || {}).categorias);
+    const jaExiste = cfgAntes.some(c => c.nome.toLowerCase() === para.toLowerCase() && c.nome.toLowerCase() !== de.toLowerCase());
+    const cfg = jaExiste
+      ? cfgAntes.filter(c => c.nome.toLowerCase() !== de.toLowerCase())
+      : cfgAntes.map(c => c.nome.toLowerCase() === de.toLowerCase() ? Object.assign({}, c, { nome: para }) : c);
+    await guardarCategoriasCfg(site, cfg);
+    const r = categoriasDaLoja(await produtosDaLoja(site_id), limparCategoriasCfg(cfg));
+    return res.json({ status: 'success', response: { mudados: alvo.length, categorias: r.lista, sem_categoria: r.semCategoria } });
+  } catch (erro) {
+    console.error('Erro em /loja-categoria-renomear:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível mudar o nome da categoria.' });
+  }
+});
+
+// Apaga uma categoria: os produtos continuam à venda, só ficam sem categoria.
+app.post('/loja-categoria-remover', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const nome = textoLimpo(req.body.nome, 40);
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const lista = await produtosDaLoja(site_id);
+    const alvo = lista.filter(p => String(p['Categoria'] || '').trim().toLowerCase() === nome.toLowerCase());
+    for (const p of alvo) await bubblePatch('produto', p._id, { 'Categoria': '' });
+    const cfg = limparCategoriasCfg((lerJsonSeguro(site['Loja Blocos Json'], {}) || {}).categorias).filter(c => c.nome.toLowerCase() !== nome.toLowerCase());
+    await guardarCategoriasCfg(site, cfg);
+    const r = categoriasDaLoja(await produtosDaLoja(site_id), cfg);
+    return res.json({ status: 'success', response: { mudados: alvo.length, categorias: r.lista, sem_categoria: r.semCategoria } });
+  } catch (erro) {
+    console.error('Erro em /loja-categoria-remover:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível apagar a categoria.' });
   }
 });
 
