@@ -1766,12 +1766,160 @@ function escolherDirecoes(tipo) {
   });
 }
 function instrucaoDirecao(direcao, outras, tipo) {
+  if (direcao.referencia) return instrucaoReferencia(direcao, tipo, false);
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
   return `\nVERSÃO ${direcao.n} DE 3: a pessoa vai ver três versões do site lado a lado e escolher uma. Esta versão tem de ser CLARAMENTE diferente das outras - nas cores, nas letras, na composição e no ambiente.
 DIRECÇÃO DE ARTE DESTA VERSÃO: ${direcao.prompt}.
 ${ehLoja ? (direcao.temaPrompt ? `ESTRUTURA DA LOJA NESTA VERSÃO - ${direcao.temaPrompt} As cores e as letras seguem a direcção de arte acima.` : 'ESTRUTURA: é uma loja, por isso a estrutura das secções é a do guia acima. A diferença está no cabeçalho, nas cores, nas letras, na faixa de confiança, no contacto e no rodapé.') : `ESTRUTURA: ${direcao.estrutura}. HERO: ${direcao.hero}.`}
 As outras duas versões seguem "${outras.join('" e "')}" - não te aproximes delas.
 Se a descrição da pessoa pedir um estilo, cores ou ambiente concretos, isso MANDA: mantém o que ela pediu e usa esta direcção só para variar a composição, a tipografia e o ritmo.`;
+}
+// ======================================================
+// Referência (1.59.0): criar um site ou uma loja PARECIDOS com uma imagem
+// ------------------------------------------------------
+// A pessoa carrega um print de um site, de uma loja ou de um design. Antes
+// de gerar, a IA estuda a imagem (cores, letras, cabeçalho, capa, secções,
+// cartões, rodapé) e, nas lojas, escolhe os 3 temas de loja mais
+// parecidos. As 3 versões partem todas da imagem, com graus diferentes de
+// semelhança: fiel, parecida e inspirada. Copia-se sempre o estilo, nunca o
+// conteúdo nem a marca de outra empresa.
+// ======================================================
+const MAX_REFERENCIA_CHARS = 8 * 1024 * 1024;
+const NIVEIS_REFERENCIA = [
+  { id: 'fiel', nome: 'Fiel à imagem', resumo: 'O mais parecido possível com a tua imagem' },
+  { id: 'parecida', nome: 'Parecida', resumo: 'O mesmo estilo, com outra composição' },
+  { id: 'inspirada', nome: 'Inspirada', resumo: 'Parte da tua imagem e dá-lhe um toque novo' }
+];
+const NIVEL_REFERENCIA_TEXTO = {
+  fiel: 'FIEL: o mais parecido possível com a imagem - as mesmas cores (usa os valores da análise nas variáveis --dia-*), o mesmo tipo de letra (ou o mais parecido do Google Fonts), a mesma disposição do cabeçalho, da capa e das secções, as mesmas proporções, cantos, sombras e espaçamentos. Quem puser as duas lado a lado tem de reconhecer o estilo de imediato.',
+  parecida: 'PARECIDA: as mesmas cores, o mesmo tipo de letra e o mesmo ambiente da imagem, mas a composição muda um pouco (outra capa, outra ordem das faixas, outro cabeçalho dentro do mesmo espírito). Continua claramente "da mesma família" da imagem.',
+  inspirada: 'INSPIRADA: parte da imagem (a paleta, o ambiente e um ou dois pormenores marcantes) e dá-lhe um toque novo - pode trocar a cor de destaque por outra da mesma família, usar outra tipografia que combine e uma composição mais livre. Nota-se a inspiração, mas não é uma cópia.'
+};
+function referenciaValida(dataUrl) {
+  return typeof dataUrl === 'string' && dataUrl.length <= MAX_REFERENCIA_CHARS
+    && /^data:image\/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$/.test(dataUrl);
+}
+function textoCurto(t, max) { return String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, max || 240); }
+function limparAnaliseReferencia(o, tipo) {
+  o = (o && typeof o === 'object') ? o : {};
+  const cor = c => { const v = String(c || '').trim(); return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v.toUpperCase() : ''; };
+  const cores = {};
+  ['fundo', 'superficie', 'primaria', 'destaque', 'texto'].forEach(k => { const v = cor(o.cores && o.cores[k]); if (v) cores[k] = v; });
+  const lista = (l, n, max) => (Array.isArray(l) ? l : []).map(x => textoCurto(x, max)).filter(Boolean).slice(0, n);
+  const a = {
+    e_site: o.e_site !== false,
+    resumo: textoCurto(o.resumo, 220),
+    ambiente: ['claro', 'escuro', 'vibrante'].includes(o.ambiente) ? o.ambiente : 'claro',
+    cores,
+    tipografia: textoCurto(o.tipografia), cantos: textoCurto(o.cantos, 120), cabecalho: textoCurto(o.cabecalho),
+    capa: textoCurto(o.capa), produtos: textoCurto(o.produtos), categorias: textoCurto(o.categorias), rodape: textoCurto(o.rodape),
+    secoes: lista(o.secoes, 12, 120), detalhes: lista(o.detalhes, 6, 160), temas: []
+  };
+  if (tipo === 'E-commerce') {
+    const ids = TEMAS_LOJA.map(t => t.id);
+    const escolhidos = [...new Set((Array.isArray(o.temas) ? o.temas : []).map(x => String(x || '').trim().toLowerCase()).filter(x => ids.includes(x)))];
+    baralhar(ids).forEach(id => { if (escolhidos.length < 3 && !escolhidos.includes(id)) escolhidos.push(id); });
+    a.temas = escolhidos.slice(0, 3);
+  }
+  return a;
+}
+function analiseReferenciaVazia(tipo) { return limparAnaliseReferencia({}, tipo); }
+const SISTEMA_REFERENCIA = 'És director de arte e estudas imagens de sites e lojas online para recriar o estilo delas noutra marca. '
+  + 'Respondes só com um objecto JSON válido, sem texto à volta.';
+async function analisarReferencia(dataUrl, tipo) {
+  if (!OPENAI_API_KEY) throw new Error('Sem OPENAI_API_KEY');
+  const ehLoja = tipo === 'E-commerce';
+  const pedido = [
+    'A pessoa quer ' + (ehLoja ? 'uma loja online' : 'um site') + ' PARECIDO com esta imagem: o mesmo estilo, mas com outro negócio, outro nome e outro conteúdo.',
+    'Descreve o que é preciso para recriar o ESTILO, não o conteúdo. Nunca copies nomes de marcas, slogans ou textos da imagem.',
+    'Escreve em português, frases curtas e concretas (ex: "cabeçalho em 3 blocos: quadrado escuro com o menu à esquerda, logótipo manuscrito ao centro, quadrado azul à direita").',
+    'Formato exacto: {"e_site":true,"resumo":"uma frase","ambiente":"claro|escuro|vibrante","cores":{"fundo":"#RRGGBB","superficie":"#RRGGBB","primaria":"#RRGGBB","destaque":"#RRGGBB","texto":"#RRGGBB"},'
+      + '"tipografia":"...","cantos":"...","cabecalho":"...","capa":"...","secoes":["de cima para baixo"],"produtos":"como aparecem os produtos ou cartões","categorias":"...","detalhes":["pormenores marcantes"],"rodape":"..."'
+      + (ehLoja ? ',"temas":["id","id","id"]' : '') + '}',
+    '"e_site": false se a imagem não for um site, uma loja ou um design de página (ex: uma fotografia) - nesse caso descreve só o ambiente e as cores, e deixa as outras chaves vazias.',
+    ehLoja ? 'Em "temas", escolhe os 3 temas de loja (ids diferentes) mais parecidos com a imagem, do mais parecido para o menos:\n' + TEMAS_LOJA.map(t => '- ' + t.id + ': ' + t.resumo).join('\n') : ''
+  ].filter(Boolean).join('\n');
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 90000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL,
+        reasoning_effort: 'low',
+        max_completion_tokens: 5000,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SISTEMA_REFERENCIA },
+          { role: 'user', content: [{ type: 'text', text: pedido }, { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } }] }
+        ]
+      })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error('OpenAI falhou: ' + ((json.error && json.error.message) || res.status));
+    const texto = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+    const m = texto.match(/\{[\s\S]*\}/);
+    const analise = limparAnaliseReferencia(JSON.parse(m ? m[0] : texto), tipo);
+    return { analise, tokens: (json.usage && json.usage.total_tokens) || 0 };
+  } finally {
+    clearTimeout(t);
+  }
+}
+// As 3 versões a partir da imagem (analise = null enquanto ainda não foi estudada).
+function direcoesDaReferencia(tipo, analise) {
+  const familia = (analise && analise.ambiente) || 'claro';
+  const estruturas = baralhar(ESTRUTURAS_LAYOUT);
+  const heros = baralhar(HEROS_LAYOUT);
+  const temas = (tipo === 'E-commerce' && analise && analise.temas && analise.temas.length === 3) ? analise.temas : null;
+  return NIVEIS_REFERENCIA.map((nv, i) => {
+    const base = { id: 'ref-' + nv.id, nome: nv.nome, resumo: nv.resumo, prompt: '', familia, estrutura: estruturas[i], hero: heros[i],
+      cartao: ESTILOS_CARTAO_LOJA[i], referencia: nv.id, analise: analise || null };
+    const t = temas && TEMAS_LOJA.find(x => x.id === temas[i]);
+    if (t) Object.assign(base, { tema: t.id, temaPrompt: t.prompt, nome: nv.nome + ' · ' + t.nome, cartao: t.cartao });
+    return base;
+  });
+}
+function textoAnaliseReferencia(a) {
+  if (!a || (!a.resumo && !Object.keys(a.cores || {}).length)) {
+    return '- Olha com atenção para a imagem e tira dela as cores, as letras, a disposição, os cantos, as sombras e o ambiente.';
+  }
+  const linhas = [];
+  if (!a.e_site) linhas.push('A imagem não é um site: usa-a só como referência de ambiente e de cores.');
+  if (a.resumo) linhas.push('Resumo: ' + a.resumo);
+  const c = a.cores || {};
+  const cs = ['fundo', 'superficie', 'primaria', 'destaque', 'texto'].filter(k => c[k]).map(k => k + ' ' + c[k]);
+  if (cs.length) linhas.push('Cores: ' + cs.join(', '));
+  [['tipografia', 'Letras'], ['cantos', 'Cantos'], ['cabecalho', 'Cabeçalho'], ['capa', 'Capa'], ['produtos', 'Produtos e cartões'], ['categorias', 'Categorias'], ['rodape', 'Rodapé']]
+    .forEach(([k, n]) => { if (a[k]) linhas.push(n + ': ' + a[k]); });
+  if (a.secoes && a.secoes.length) linhas.push('Secções, de cima para baixo: ' + a.secoes.join(' → '));
+  if (a.detalhes && a.detalhes.length) linhas.push('Pormenores marcantes: ' + a.detalhes.join('; '));
+  return linhas.map(l => '- ' + l).join('\n');
+}
+function instrucaoReferencia(direcao, tipo, unica) {
+  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  const nivel = NIVEL_REFERENCIA_TEXTO[direcao.referencia] ? direcao.referencia : 'fiel';
+  const cabeca = unica
+    ? 'A PESSOA QUER UM SITE PARECIDO COM A IMAGEM DE REFERÊNCIA (é a última imagem do pedido).'
+    : `VERSÃO ${direcao.n} DE 3 - A PESSOA QUER UM SITE PARECIDO COM A IMAGEM DE REFERÊNCIA (é a última imagem do pedido). As três versões partem dessa imagem, com graus diferentes de semelhança: fiel, parecida e inspirada.`;
+  let estrutura;
+  if (ehLoja) {
+    estrutura = direcao.temaPrompt
+      ? `ESTRUTURA DA LOJA: a montra automática desta versão é a do tema mais parecido com a imagem - ${direcao.temaPrompt} Mas o cabeçalho, as faixas e o rodapé seguem PRIMEIRO a imagem de referência, e as cores e as letras são as da imagem.`
+      : 'ESTRUTURA DA LOJA: as secções são as do guia acima; o cabeçalho, as faixas, as cores, as letras e o rodapé seguem a imagem de referência.';
+  } else {
+    estrutura = nivel === 'fiel' || !direcao.estrutura
+      ? 'ESTRUTURA: segue a ordem e a disposição das secções da imagem, adaptadas ao que este negócio precisa.'
+      : `ESTRUTURA: ${direcao.estrutura}, dentro do espírito da imagem. HERO: ${direcao.hero}.`;
+  }
+  return `\n${cabeca}
+NÍVEL DESTA VERSÃO - ${NIVEL_REFERENCIA_TEXTO[nivel]}
+O QUE A IMAGEM TEM (estudada antes):
+${textoAnaliseReferencia(direcao.analise)}
+REGRAS DA REFERÊNCIA: copia o ESTILO (cores, letras, disposição, proporções, cantos, sombras, ritmo e ambiente), nunca o CONTEÚDO. Não uses o nome, o logótipo, os textos, os slogans, as fotografias nem a marca da empresa que aparece na imagem - o nome, os textos e a oferta são os do negócio desta pessoa, escritos de raiz. Onde a imagem tem fotografias, usa composições tuas (formas, degradês, ilustrações em SVG) ou as imagens que a pessoa anexou.
+${estrutura}
+Se a descrição da pessoa pedir algo concreto (cores, secções, tom), isso MANDA sobre a imagem.`;
 }
 // Paleta e letras de uma versão, lidas das fichas --dia-* do próprio HTML.
 function resumoVisual(html) {
@@ -1844,7 +1992,7 @@ async function fetchGeracao(url, opcoes) {
   }
 }
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes, referencia }) {
   const lingua = normalizarIdioma(idioma);
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
@@ -1909,14 +2057,14 @@ Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo 
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional.
 IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
-${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : pontoDePartidaVisual()}
+${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : (referencia ? instrucaoReferencia({ referencia: 'fiel', analise: null }, tipo, true) : pontoDePartidaVisual())}
 IMPORTANTE: o site tem de parecer acabado e profissional - nunca com ar de esqueleto, com caixas vazias ou textos de enchimento. Acabado não quer dizer comprido: o tamanho e a quantidade de secções seguem a descrição. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, desenvolve o suficiente para aquele negócio, com textos com substância.
 ${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Idioma do site: ${IDIOMAS_SITE[lingua].nome}
-${instrucaoLogo}${instrucaoImagens}
+${instrucaoLogo}${instrucaoImagens}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
 Descrição pedida pela pessoa: ${prompt}`;
 
   // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
@@ -1924,9 +2072,13 @@ Descrição pedida pela pessoa: ${prompt}`;
   // para copiar um estilo ou para usar como conteúdo. Sem imagens, o
   // pedido continua a ser simplesmente texto, como sempre foi.
   let userContent = textoPedido;
-  if (imagensUrls && imagensUrls.length) {
+  if ((imagensUrls && imagensUrls.length) || (referencia && referencia.url)) {
     userContent = [{ type: 'text', text: textoPedido }];
-    imagensUrls.forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
+    (imagensUrls || []).forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
+    if (referencia && referencia.url) {
+      userContent.push({ type: 'text', text: 'IMAGEM DE REFERÊNCIA (estilo a seguir):' });
+      userContent.push({ type: 'image_url', image_url: { url: referencia.url, detail: 'high' } });
+    }
   }
 
   const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
@@ -5434,6 +5586,11 @@ app.post('/generate', async (req, res) => {
     if (!owner || !nome || !tipo || !prompt) {
       return res.json({ status: 'error', message: 'Faltam dados: nome, tipo e prompt são obrigatórios.' });
     }
+    // Imagem de referência (opcional): criar parecido com ela.
+    const referencia_data_url = req.body.referencia_data_url ? String(req.body.referencia_data_url) : '';
+    if (referencia_data_url && !referenciaValida(referencia_data_url)) {
+      return res.json({ status: 'error', message: 'A imagem de referência não é válida. Usa um JPG, PNG ou WEBP com menos de 6 MB.' });
+    }
 
     // ---- 1. Carregar utilizador e plano ----
     const user = await bubbleGet('user', owner);
@@ -5490,11 +5647,11 @@ app.post('/generate', async (req, res) => {
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
     if (variantes === 3) {
-      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma })
+      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma })
         .catch(erro => console.error('Erro em processarVariantes:', erro));
       return;
     }
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma })
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
@@ -5515,9 +5672,11 @@ function guardarVariantes(siteId, estado) {
   return proximo;
 }
 
-async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente }) {
+async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente }) {
   const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const direcoes = escolherDirecoes(tipo);
+  const comReferencia = !!referencia_data_url;
+  const direcoes = comReferencia ? direcoesDaReferencia(tipo, null) : escolherDirecoes(tipo);
+  let tokensReferencia = 0;
   const estado = {
     slug, logo: logoExistente || '', generation_id: generationId, escolhida: null, inicio: new Date().toISOString(),
     modo: manterSite ? 'mudar' : 'criar', cobrado: false,
@@ -5526,6 +5685,7 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
       direcao: { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia, tema: d.tema || '' }, paleta: [], fontes: [], segundos: 0
     }))
   };
+  if (comReferencia) estado.referencia = { estado: 'a analisar', resumo: '' };
   try {
     // Logótipo e imagens: carregados uma vez só, para as 3 versões.
     if (logo_data_url) {
@@ -5548,6 +5708,24 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
     }
     await guardarVariantes(siteId, estado);
 
+    // Imagem de referência: estudada uma vez só, antes das 3 versões.
+    if (comReferencia) {
+      let analise;
+      try {
+        const r = await analisarReferencia(referencia_data_url, tipo);
+        analise = r.analise; tokensReferencia = r.tokens || 0;
+      } catch (erro) {
+        console.error('Não foi possível estudar a imagem de referência:', erro.message || erro);
+        analise = analiseReferenciaVazia(tipo);
+      }
+      direcoesDaReferencia(tipo, analise).forEach((d, i) => {
+        direcoes[i] = d;
+        estado.variantes[i].direcao = { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia, tema: d.tema || '' };
+      });
+      estado.referencia = { estado: 'pronta', resumo: analise.resumo || '' };
+      await guardarVariantes(siteId, estado);
+    }
+
     const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
     const t0 = Date.now();
     await Promise.all(direcoes.map(async (d, i) => {
@@ -5556,8 +5734,10 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
         const outras = direcoes.filter((_, j) => j !== i).map(x => x.nome);
         let { html, tokens } = await gerarComOpenAI({
           nome, tipo, prompt, logoUrl: estado.logo, imagensUrls, siteId, mostrarMarcaDeAgua, idioma,
-          direcao: Object.assign({ n: i + 1 }, d), outrasDirecoes: outras
+          direcao: Object.assign({ n: i + 1 }, d), outrasDirecoes: outras,
+          referencia: comReferencia ? { url: referencia_data_url } : null
         });
+        tokens += tokensReferencia;
         if (ehLoja) html = marcarEstiloLoja(html, d.cartao, d.tema);
         const caminho = `sites/${owner}/${slug}/v${i + 1}.html`;
         const url = await uploadParaBunny(caminho, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
@@ -5723,6 +5903,7 @@ function variantesPublicas(site) {
   return {
     escolhida: e.escolhida || null,
     modo: e.modo || 'criar',
+    referencia: e.referencia ? (e.referencia.estado || 'pronta') : '',
     variantes: e.variantes.map(v => ({
       n: v.n, estado: v.estado, url: v.estado === 'pronto' ? v.url : '', direcao: v.direcao || {},
       paleta: v.paleta || [], fontes: v.fontes || [], segundos: v.segundos || 0
@@ -5766,7 +5947,7 @@ app.post('/escolher-variante', async (req, res) => {
   }
 });
 
-async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma }) {
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma }) {
   try {
     // ---- Logótipo (opcional) ----
     // Esta função já corre depois de termos respondido ao pedido (ver nota
@@ -5807,7 +5988,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     }
 
     // ---- Gerar o HTML com a OpenAI ----
-    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma });
+    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, referencia: referencia_data_url ? { url: referencia_data_url } : null });
 
     // ---- Guardar o HTML no Bunny Storage ----
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
