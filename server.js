@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.59.0'; // 16/10/2026 - cartão embutido na página, recargas de tokens, planos e pacotes geridos no painel
+const VERSION = '1.60.0'; // 19/10/2026 - sites com várias páginas, fotografias reais (Pexels + IA), editor visual, quiz antes do checkout
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -1091,6 +1091,10 @@ async function prepararPullZoneDominio(site, site_id, dominioLimpo) {
     'Dominio Hostname': hostnameCdn,
     'Dominio Estado': 'Pendente'
   });
+  if (siteMultiPagina(site)) {
+    await regrasDominioPaginas(Object.assign({}, site, { 'Dominio Pull Zone Id': String(pullZoneId) }))
+      .catch(erro => console.error('Regras do domínio (várias páginas):', erro.message || erro));
+  }
 
   return { pullZoneId, hostnameCdn };
 }
@@ -1745,21 +1749,47 @@ const TEMAS_LOJA = [
     prompt: 'VITRINE (como uma marca que mostra cada produto como uma peça única): cabeçalho em três blocos - à esquerda um quadrado na cor escura com o ícone do menu, ao centro o logótipo em letra elegante ou manuscrita sobre um fundo cinzento muito claro, à direita um quadrado na cor de destaque; muito branco, linhas finas e poucas cores (a montra automática mostra um produto enorme ao centro, o preço num cartão escuro ao lado, miniaturas para trocar de produto e uma faixa escura "Preços desde"); depois da div da loja, um rodapé claro e minimal com links em duas colunas e os ícones das redes à direita.' },
   { id: 'bento', nome: 'Bento', cartao: 'suave',
     resumo: 'Mosaico colorido em tons pastel, cantos muito redondos e muita alegria',
-    prompt: 'BENTO PASTEL (como uma loja criativa de design): fundo claro com formas orgânicas desfocadas em tons pastel (pêssego, menta, lilás, manteiga), cabeçalho com o logótipo e o menu em pílulas (botões redondos de fundo branco), uma cor de destaque alegre (laranja, coral ou turquesa) e cantos muito redondos em tudo (a montra automática traz um mosaico de cartões pastel de tamanhos diferentes, categorias em pílulas e produtos sobre fundos pastel); depois da div da loja, uma faixa curta de newsletter em forma de pílula e um rodapé leve.' }
+    prompt: 'BENTO PASTEL (como uma loja criativa de design): fundo claro com formas orgânicas desfocadas em tons pastel (pêssego, menta, lilás, manteiga), cabeçalho com o logótipo e o menu em pílulas (botões redondos de fundo branco), uma cor de destaque alegre (laranja, coral ou turquesa) e cantos muito redondos em tudo (a montra automática traz um mosaico de cartões pastel de tamanhos diferentes, categorias em pílulas e produtos sobre fundos pastel); depois da div da loja, uma faixa curta de newsletter em forma de pílula e um rodapé leve.' },
+  { id: 'fresco', nome: 'Fresco', cartao: 'suave', nicho: /mercearia|supermercad|minimercad|frut|legum|verdur|horta|org[aâ]nic|talho|carne|peixe|padaria|\bp[aã](o|es)\b|bebida|grocery|cesta|agro|hortifruti|cantina/i,
+    resumo: 'Mercearia e supermercado: capa com oferta, selo de desconto e botão Adicionar em cada produto',
+    prompt: 'FRESCO (como os supermercados e mercearias online modernos): por cima, uma barra fina na cor primária com uma frase de entrega (ex: entrega no mesmo dia em Maputo); por baixo, o cabeçalho branco com o logótipo, uma caixa de pesquisa larga com cantos redondos ao centro, e à direita o telefone/WhatsApp e o carrinho; uma cor primária fresca (verde-folha, laranja ou vermelho-tomate) sobre fundos muito claros, cantos médios, ícones de linha (a montra automática traz uma capa dividida com a oferta da semana e um selo de desconto, categorias em cartões com foto, uma fila "Melhores ofertas" e cartões de produto com o botão Adicionar a toda a largura); depois da div da loja, uma faixa em 4 colunas com vantagens (entrega rápida, produtos frescos, pagamento M-Pesa/e-Mola, apoio no WhatsApp) com ícones SVG, uma faixa colorida a convidar para o WhatsApp com as ofertas da semana e um rodapé claro em 4 colunas com horário de funcionamento.' },
+  { id: 'sabor', nome: 'Sabor', cartao: 'suave', nicho: /restaura|comida|refei[cç]|pizza|hamb[uú]rg|burger|lanch|takeaway|take-away|entrega de comida|caf[eé]|pastelaria|bolo|doce|churrasc|grelhad|frango|marisco|sushi|\bchef\b|snack|\bbar\b|\bpetiscos?\b/i,
+    resumo: 'Restaurante e comida: capa escura e quente, prato em destaque e os mais pedidos',
+    prompt: 'SABOR (como os restaurantes e marcas de comida com encomenda online): cabeçalho escuro e quente (castanho-café, quase preto) com o logótipo à esquerda, o menu ao centro em letras claras e, à direita, um botão em forma de pílula na cor de destaque "Encomendar" e o telefone; uma cor de destaque apetitosa (laranja, vermelho-tomate ou amarelo-mostarda), títulos com uma palavra em letra manuscrita/script na cor de destaque, fotografias de comida grandes e cantos redondos (a montra automática traz uma capa escura com o prato em destaque num círculo, um cartão com o preço, a nota das avaliações, categorias em cartões e a fila "Os mais pedidos"); depois da div da loja, uma faixa com o horário, a zona de entrega e o tempo médio de entrega em 3 colunas com ícones, uma faixa em fundo escuro com uma frase forte e o botão do WhatsApp para encomendar, e um rodapé escuro em 3 colunas com morada, horário e redes.' }
 ];
 function baralhar(lista) {
   const a = lista.slice();
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 }
+// Os 3 estilos de loja para um negócio: primeiro os que o plano sugeriu,
+// depois os de nicho cujo ramo aparece no pedido, e o resto ao acaso.
+function temasParaNegocio(texto, sugeridos) {
+  const ids = [];
+  const juntar = id => { if (id && ids.length < 3 && !ids.includes(id) && TEMAS_LOJA.some(t => t.id === id)) ids.push(id); };
+  (Array.isArray(sugeridos) ? sugeridos : []).forEach(juntar);
+  TEMAS_LOJA.filter(t => t.nicho && t.nicho.test(String(texto || ''))).forEach(t => juntar(t.id));
+  baralhar(TEMAS_LOJA.filter(t => !t.nicho)).forEach(t => juntar(t.id));
+  return ids;
+}
+function aplicarTemasSugeridos(direcoes, ids) {
+  direcoes.forEach((d, i) => {
+    const t = TEMAS_LOJA.find(x => x.id === ids[i]);
+    if (!t) return;
+    Object.assign(d, { tema: t.id, temaPrompt: t.prompt, nome: t.nome + ' · ' + (d.nomeBase || d.nome), resumo: t.resumo, cartao: t.cartao });
+  });
+  return direcoes;
+}
 function escolherDirecoes(tipo) {
   const familias = baralhar(['claro', 'escuro', 'vibrante']);
   const estruturas = baralhar(ESTRUTURAS_LAYOUT);
   const heros = baralhar(HEROS_LAYOUT);
-  const temas = tipo === 'E-commerce' ? baralhar(TEMAS_LOJA) : [];
+  // Os estilos de nicho (mercearia, restaurante) só entram quando o negócio
+  // é desse ramo - quem decide é temasParaNegocio, depois do plano.
+  const temas = tipo === 'E-commerce' ? baralhar(TEMAS_LOJA.filter(t => !t.nicho)) : [];
   return familias.map((f, i) => {
     const d = baralhar(DIRECOES_LAYOUT[f])[0];
-    const base = { id: d.id, nome: d.nome, resumo: d.resumo, prompt: d.prompt, familia: f, estrutura: estruturas[i], hero: heros[i], cartao: ESTILOS_CARTAO_LOJA[i] };
+    const base = { id: d.id, nome: d.nome, nomeBase: d.nome, resumo: d.resumo, prompt: d.prompt, familia: f, estrutura: estruturas[i], hero: heros[i], cartao: ESTILOS_CARTAO_LOJA[i] };
     const t = temas[i];
     if (t) Object.assign(base, { tema: t.id, temaPrompt: t.prompt, nome: t.nome + ' · ' + d.nome, resumo: t.resumo, cartao: t.cartao });
     return base;
@@ -1992,7 +2022,8 @@ async function fetchGeracao(url, opcoes) {
   }
 }
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes, referencia }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes, referencia, paginas, fotos, quiz }) {
+  const multiPagina = Array.isArray(paginas) && paginas.length > 1;
   const lingua = normalizarIdioma(idioma);
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
   const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
@@ -2050,7 +2081,7 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
   // formulário de contacto a sério - isso é sempre o mesmo módulo testado
   // por nós (CONTACTO_FORM_JS), injectado depois, que manda a mensagem
   // por email para o endereço que o dono do site escolher.
-  const instrucaoContacto = `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-contacto"></div> - é ali que o formulário de contacto a sério (nome, email, mensagem, já ligado para enviar a mensagem ao dono do site) vai aparecer sozinho, gerido por um sistema à parte. Não escrevas tu nenhum formulário, nem campos de nome/email/mensagem, nem botão de enviar - só essa div vazia. A secção de contacto tem de ser CURTA e discreta, perto do rodapé: no máximo um título pequeno numa linha e os contactos (telefone, WhatsApp, email, morada) ao lado, com a div em baixo. Nada de secções de contacto enormes, imagens grandes ou textos longos à volta. O formulário aparece sozinho, fechado e compacto (abre com um botão) - não lhe ponhas outro título grande por cima.`;
+  const instrucaoContacto = multiPagina ? INSTRUCAO_CONTACTO_MULTI : `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-contacto"></div> - é ali que o formulário de contacto a sério (nome, email, mensagem, já ligado para enviar a mensagem ao dono do site) vai aparecer sozinho, gerido por um sistema à parte. Não escrevas tu nenhum formulário, nem campos de nome/email/mensagem, nem botão de enviar - só essa div vazia. A secção de contacto tem de ser CURTA e discreta, perto do rodapé: no máximo um título pequeno numa linha e os contactos (telefone, WhatsApp, email, morada) ao lado, com a div em baixo. Nada de secções de contacto enormes, imagens grandes ou textos longos à volta. O formulário aparece sozinho, fechado e compacto (abre com um botão) - não lhe ponhas outro título grande por cima.`;
 
   const systemPrompt = `Você é o motor de geração de sites da Daniel IA, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
@@ -2059,12 +2090,12 @@ O site deve ser responsivo, moderno e profissional.
 IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
 ${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : (referencia ? instrucaoReferencia({ referencia: 'fiel', analise: null }, tipo, true) : pontoDePartidaVisual())}
 IMPORTANTE: o site tem de parecer acabado e profissional - nunca com ar de esqueleto, com caixas vazias ou textos de enchimento. Acabado não quer dizer comprido: o tamanho e a quantidade de secções seguem a descrição. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, desenvolve o suficiente para aquele negócio, com textos com substância.
-${guia}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
+${guia}${padroesDoTipo(tipo)}${instrucaoPaginas(paginas, tipo)}${quiz ? INSTRUCAO_QUIZ : ''}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Idioma do site: ${IDIOMAS_SITE[lingua].nome}
-${instrucaoLogo}${instrucaoImagens}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
+${instrucaoLogo}${instrucaoImagens}${instrucaoFotos(fotos)}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
 Descrição pedida pela pessoa: ${prompt}`;
 
   // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
@@ -2118,8 +2149,10 @@ Descrição pedida pela pessoa: ${prompt}`;
   }
 
   html = fixarIdiomaHtml(html, lingua);
+  if (multiPagina) html = prepararCasca(html, paginas);
   html = aplicarRedeResponsiva(html);
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
+  html = injectarQuizSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
@@ -2166,7 +2199,9 @@ function aplicarRedeResponsiva(html) {
 function injectarLojaSeNecessario(html, ehLoja, siteId) {
   if (!ehLoja) return html;
 
-  if (!/id=["']daniel-ia-produtos["']/.test(html)) {
+  // Sites com várias páginas: a div só existe nas páginas da loja, mas o
+  // script vai para todas (o carrinho funciona em todas as páginas).
+  if (!/id=["']daniel-ia-produtos["']/.test(html) && !paginasMulti(html)) {
     html = html.replace(
       /<\/body>/i,
       '<div id="daniel-ia-produtos" style="max-width:1100px;margin:40px auto;padding:0 20px;"></div>\n</body>'
@@ -2195,6 +2230,7 @@ function injectarLojaSeNecessario(html, ehLoja, siteId) {
 // "galeria-viewer.js".
 function injectarGaleriaSeNecessario(html, ehGaleria, siteId) {
   if (!ehGaleria) return html;
+  if (paginasMulti(html) && !/id=["']daniel-ia-galeria["']/.test(html)) return html;
 
   if (!/id=["']daniel-ia-galeria["']/.test(html)) {
     html = html.replace(
@@ -2220,6 +2256,7 @@ function injectarGaleriaSeNecessario(html, ehGaleria, siteId) {
 // que para "daniel-ia-portfolio" e "portfolio-viewer.js".
 function injectarPortfolioSeNecessario(html, ehPortfolio, siteId) {
   if (!ehPortfolio) return html;
+  if (paginasMulti(html) && !/id=["']daniel-ia-portfolio["']/.test(html)) return html;
 
   if (!/id=["']daniel-ia-portfolio["']/.test(html)) {
     html = html.replace(
@@ -2245,6 +2282,7 @@ function injectarPortfolioSeNecessario(html, ehPortfolio, siteId) {
 // para "daniel-ia-blog" e "blog-viewer.js".
 function injectarBlogSeNecessario(html, ehBlog, siteId) {
   if (!ehBlog) return html;
+  if (paginasMulti(html) && !/id=["']daniel-ia-blog["']/.test(html)) return html;
 
   if (!/id=["']daniel-ia-blog["']/.test(html)) {
     html = html.replace(
@@ -2271,6 +2309,7 @@ function injectarBlogSeNecessario(html, ehBlog, siteId) {
 // nenhuma condição de tipo e para "daniel-ia-contacto" e
 // "contacto-form.js".
 function injectarContactoSeNecessario(html, siteId) {
+  if (paginasMulti(html) && !/id=["']daniel-ia-contacto["']/.test(html)) return html;
   if (!/id=["']daniel-ia-contacto["']/.test(html)) {
     html = html.replace(
       /<\/body>/i,
@@ -2308,7 +2347,7 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
     ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) nova(s) a este pedido de alteração - estão incluídas a seguir. Olha bem para cada uma: se o pedido disser para ficar "como esta imagem" ou seguir o estilo dela, aplica esse estilo visual (cores, disposição, tipografia) ao site, sem copiar texto, logótipos ou marca de outra empresa que apareça nela. Se for conteúdo (uma foto para usar no site), usa-a onde fizer sentido.`
     : '';
 
-  const instrucaoLoja = ehLoja
+  const instrucaoLoja = ehLoja && (!paginasMulti(htmlAtual) || /id=["']daniel-ia-produtos["']/.test(htmlAtual))
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
@@ -2325,7 +2364,7 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
     : '';
 
   // Aplica-se a TODOS os sites, seja qual for o tipo.
-  const instrucaoContacto = `\nATENÇÃO: esta página tem de continuar a ter, exactamente como está, a div <div id="daniel-ia-contacto"></div> e os dois <script> antes de </body> que carregam o módulo de contacto (window.DANIEL_IA_SITE_ID e contacto-form.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu nenhum formulário de contacto a sério - isso continua a ser tratado à parte, automaticamente.`;
+  const instrucaoContacto = (paginasMulti(htmlAtual) && !/id=["']daniel-ia-contacto["']/.test(htmlAtual)) ? '' : `\nATENÇÃO: esta página tem de continuar a ter, exactamente como está, a div <div id="daniel-ia-contacto"></div> e os dois <script> antes de </body> que carregam o módulo de contacto (window.DANIEL_IA_SITE_ID e contacto-form.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu nenhum formulário de contacto a sério - isso continua a ser tratado à parte, automaticamente.`;
 
   const instrucaoMarca = `\nSe existir, perto de </body>, um elemento <a id="daniel-ia-marca-dagua">...</a> (um selo "Feito com Daniel IA"), não o apagues nem o modifiques - isso é gerido à parte, automaticamente.`;
 
@@ -2338,7 +2377,7 @@ A tua tarefa é devolver o ficheiro HTML completo (doctype, head, body), já com
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 IMPORTANTE: o site tem de continuar acabado e profissional depois da alteração - nunca partido, vazio ou com ar de esqueleto. Se a alteração implicar reescrever ou ampliar alguma secção, capricha nela. Se a pessoa pedir para simplificar ou tirar coisas, faz isso mesmo, sem voltar a encher.
 ${DIRECAO_DE_ARTE}
-NA EDIÇÃO: mantém a identidade visual que o site já tem, mas tudo o que mudares ou acrescentares tem de seguir este padrão de qualidade. Se o :root ainda não tiver as fichas --dia-*, acrescenta-as com os valores que o site já usa (sem mudar o visual). Se o pedido mudar cores ou tipos de letra, actualiza também as fichas.${instrucaoIdioma}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
+NA EDIÇÃO: mantém a identidade visual que o site já tem, mas tudo o que mudares ou acrescentares tem de seguir este padrão de qualidade. Se o :root ainda não tiver as fichas --dia-*, acrescenta-as com os valores que o site já usa (sem mudar o visual). Se o pedido mudar cores ou tipos de letra, actualiza também as fichas.${paginasMulti(htmlAtual) ? INSTRUCAO_EDICAO_MULTI : ''}${instrucaoIdioma}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}${instrucaoMarca}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -2437,7 +2476,7 @@ const LOJA_CART_JS = `/*
     return (l === 'en' || l === 'fr' || l === 'es') ? l : 'pt';
   })();
   var DIA_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[DIA_LANG];
-  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products", "Produto {n}": "Product {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Your real products appear here, with photos, prices and options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Preview: here the customer would add the product to the cart.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Preview with sample products - yours will appear here.", "Clássicos": "Classics", "Edição limitada": "Limited edition", "Recomendado para ti": "Recommended for you", "Categoria": "Category", "Promoção": "Sale", "Até {n}% de desconto": "Up to {n}% off", "Ver ofertas": "See deals", "Colecção": "Collection", "Explorar categorias": "Browse categories", "Compra por categoria": "Shop by category", "Ofertas da semana": "Weekly best deals", "Mais recentes": "Newest", "Preço mais baixo": "Lowest price", "Preço mais alto": "Highest price", "Ordenar": "Sort by", "Mostrar mais": "Show more", "A mostrar {a} de {b}": "Showing {a} of {b}", "Pagamento recebido. A confirmar...": "Payment received. Confirming...", "Pagamento seguro": "Secure payment", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Your bank opens the payment in a secure window. Pay and come back here - this page confirms it automatically.", "Abrir pagamento seguro": "Open secure payment", "Não aparece? Abrir numa janela nova": "Not showing? Open in a new window", "À espera da confirmação do pagamento...": "Waiting for payment confirmation...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Still waiting. If you've already paid, confirmation may take a moment.", "Adicionar": "Add", "Preços desde": "Prices from", "Ver tudo": "See all", "Destaque": "Featured", "Ver produto": "View product", "Filtros": "Filters", "Preço": "Price", "Mínimo": "Minimum", "Máximo": "Maximum", "Mostrar só": "Show only", "4 estrelas ou mais": "4 stars & up", "Em promoção": "On sale", "Limpar filtros": "Clear filters", "Ver resultados": "See results", "Vista em grelha": "Grid view", "Vista em lista": "List view"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits", "Produto {n}": "Produit {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Vos vrais produits apparaissent ici, avec photos, prix et options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Aperçu : ici, le client ajouterait le produit au panier.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Aperçu avec des produits d'exemple - les vôtres apparaîtront ici.", "Clássicos": "Classiques", "Edição limitada": "Édition limitée", "Recomendado para ti": "Recommandé pour vous", "Categoria": "Catégorie", "Promoção": "Promo", "Até {n}% de desconto": "Jusqu'à -{n} %", "Ver ofertas": "Voir les offres", "Colecção": "Collection", "Explorar categorias": "Explorer les catégories", "Compra por categoria": "Acheter par catégorie", "Ofertas da semana": "Offres de la semaine", "Mais recentes": "Plus récents", "Preço mais baixo": "Prix le plus bas", "Preço mais alto": "Prix le plus élevé", "Ordenar": "Trier", "Mostrar mais": "Voir plus", "A mostrar {a} de {b}": "Affichage de {a} sur {b}", "Pagamento recebido. A confirmar...": "Paiement reçu. Confirmation...", "Pagamento seguro": "Paiement sécurisé", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Votre banque ouvre le paiement dans une fenêtre sécurisée. Payez puis revenez ici - cette page le confirme automatiquement.", "Abrir pagamento seguro": "Ouvrir le paiement sécurisé", "Não aparece? Abrir numa janela nova": "Rien ne s'affiche ? Ouvrir dans une nouvelle fenêtre", "À espera da confirmação do pagamento...": "En attente de la confirmation du paiement...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Toujours en attente. Si vous avez déjà payé, la confirmation peut prendre un moment.", "Adicionar": "Ajouter", "Preços desde": "Prix à partir de", "Ver tudo": "Tout voir", "Destaque": "À la une", "Ver produto": "Voir le produit", "Filtros": "Filtres", "Preço": "Prix", "Mínimo": "Minimum", "Máximo": "Maximum", "Mostrar só": "Afficher seulement", "4 estrelas ou mais": "4 étoiles et plus", "Em promoção": "En promotion", "Limpar filtros": "Effacer les filtres", "Ver resultados": "Voir les résultats", "Vista em grelha": "Vue en grille", "Vista em lista": "Vue en liste"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos", "Produto {n}": "Producto {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Tus productos reales aparecen aquí, con fotos, precios y opciones.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Vista previa: aquí el cliente añadiría el producto al carrito.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Vista previa con productos de ejemplo - los tuyos aparecerán aquí.", "Clássicos": "Clásicos", "Edição limitada": "Edición limitada", "Recomendado para ti": "Recomendado para ti", "Categoria": "Categoría", "Promoção": "Oferta", "Até {n}% de desconto": "Hasta {n}% de descuento", "Ver ofertas": "Ver ofertas", "Colecção": "Colección", "Explorar categorias": "Explorar categorías", "Compra por categoria": "Compra por categoría", "Ofertas da semana": "Ofertas de la semana", "Mais recentes": "Más recientes", "Preço mais baixo": "Precio más bajo", "Preço mais alto": "Precio más alto", "Ordenar": "Ordenar", "Mostrar mais": "Mostrar más", "A mostrar {a} de {b}": "Mostrando {a} de {b}", "Pagamento recebido. A confirmar...": "Pago recibido. Confirmando...", "Pagamento seguro": "Pago seguro", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Tu banco abre el pago en una ventana segura. Paga y vuelve aquí: esta página lo confirma sola.", "Abrir pagamento seguro": "Abrir pago seguro", "Não aparece? Abrir numa janela nova": "¿No aparece? Abrir en una ventana nueva", "À espera da confirmação do pagamento...": "Esperando la confirmación del pago...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Seguimos esperando. Si ya pagaste, la confirmación puede tardar un poco.", "Adicionar": "Añadir", "Preços desde": "Precios desde", "Ver tudo": "Ver todo", "Destaque": "Destacado", "Ver produto": "Ver producto", "Filtros": "Filtros", "Preço": "Precio", "Mínimo": "Mínimo", "Máximo": "Máximo", "Mostrar só": "Mostrar solo", "4 estrelas ou mais": "4 estrellas o más", "Em promoção": "En oferta", "Limpar filtros": "Borrar filtros", "Ver resultados": "Ver resultados", "Vista em grelha": "Vista en cuadrícula", "Vista em lista": "Vista en lista"}};
+  var DIA_TXT = {"en": {"{nome} adicionado ao carrinho": "{nome} added to cart", "Pesquisar produtos": "Search products", "Abrir carrinho": "Open cart", "Carrinho": "Cart", "O teu carrinho": "Your cart", "Total": "Total", "Finalizar compra": "Checkout", "A nossa loja": "Our store", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} products waiting for you. Choose, order and receive.", "Descobre os nossos produtos.": "Discover our products.", "Ver produtos": "Shop now", "Imagem {n}": "Image {n}", "Outros": "Other", "Tudo": "All", "Em destaque": "Featured", "Adicionar {nome} ao carrinho": "Add {nome} to cart", "Ainda não há produtos à venda aqui.": "No products for sale here yet.", "Nenhum produto encontrado para \\"{t}\\".": "No products found for \\"{t}\\".", "Nenhum produto encontrado.": "No products found.", "Ver todos": "See all", "Resultados": "Results", "Produtos": "Products", "{n} produto": "{n} product", "{n} produtos": "{n} products", "Poupas {v}": "You save {v}", "Quantidade": "Quantity", "Menos": "Less", "Mais": "More", "Adicionar ao carrinho": "Add to cart", "Comprar agora": "Buy now", "O teu carrinho está vazio.": "Your cart is empty.", "Remover": "Remove", "Confirmar encomenda": "Confirm order", "Cartão": "Card", "Como queres pagar?": "How would you like to pay?", "Pagar {v}": "Pay {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "After confirming, pay the store directly to one of these numbers, using the reference we'll give you:", "Em nome de": "Account holder:", "A loja confirma o pagamento e prepara a tua encomenda.": "The store will confirm the payment and prepare your order.", "Encomendar pelo WhatsApp": "Order via WhatsApp", "Enviar encomenda": "Send order", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Fill in your details and we'll send the order to the store's WhatsApp.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "The store receives your order and will contact you to arrange payment and delivery.", "Só falta isto para receberes a tua encomenda.": "Just this and your order is on its way.", "{n} artigo": "{n} item", "{n} artigos": "{n} items", "O teu nome": "Your name", "Telefone": "Phone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(the same as your M-Pesa/e-Mola wallet)", "Email (opcional, para receberes a confirmação)": "Email (optional, to receive the confirmation)", "Morada de entrega / notas (opcional)": "Delivery address / notes (optional)", "Escreve o teu nome.": "Please enter your name.", "Escreve o teu número de telefone.": "Please enter your phone number.", "Esse email não parece válido - podes deixá-lo em branco.": "That email doesn't look valid - you can leave it blank.", "Escolhe como queres pagar.": "Choose how you want to pay.", "A processar...": "Processing...", "Não foi possível criar a encomenda.": "Could not create the order.", "Não foi possível iniciar o pagamento.": "Could not start the payment.", "Algo correu mal. Tenta novamente.": "Something went wrong. Please try again.", "Encomenda enviada!": "Order sent!", "Para concluir, paga {v} com a referência {r}:": "To complete, pay {v} using the reference {r}:", "Copiar": "Copy", "Enviar comprovativo no WhatsApp": "Send proof of payment on WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "We opened WhatsApp with your order already written - just tap send.", "Abrir o WhatsApp outra vez": "Open WhatsApp again", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "The store has received your order and will contact you soon to arrange payment and delivery.", "Continuar a comprar": "Continue shopping", "Copiado": "Copied", "Confirma no teu telemóvel": "Confirm on your phone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "We sent the payment request to your number. Enter your PIN to confirm.", "Pagamento confirmado!": "Payment confirmed!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Thank you for your purchase. The store has received your order.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "We haven't received the confirmation yet. If you've already paid, please wait - the store gets the order as soon as the payment arrives.", "Não foi possível carregar os produtos. Recarrega a página.": "Could not load the products. Please reload the page.", "Fechar": "Close", "Anterior": "Previous", "Seguinte": "Next", "{n} de 5 estrelas": "{n} out of 5 stars", "Esgotado": "Sold out", "Só restam {n} unidades.": "Only {n} left.", "Só restam {n} unidades": "Only {n} left", "Só resta 1 unidade": "Only 1 left", "Novidades": "New arrivals", "Promoções": "Deals", "Mais vendidos": "Best sellers", "Novo": "New", "desde": "from", "Categorias": "Categories", "Oferta relâmpago": "Flash deal", "Termina em": "Ends in", "dias": "days", "h": "h", "min": "min", "seg": "sec", "Todos os produtos": "All products", "Vistos recentemente": "Recently viewed", "Limpar": "Clear", "Opção": "Option", "Em stock": "In stock", "Escolhe uma opção.": "Choose an option.", "Também vais gostar": "You may also like", "Avaliações": "Reviews", "{n} avaliação": "{n} review", "{n} avaliações": "{n} reviews", "Escrever avaliação": "Write a review", "Ainda sem avaliações. Sê o primeiro a avaliar!": "No reviews yet. Be the first to review!", "A tua nota": "Your rating", "Comentário (opcional)": "Comment (optional)", "Enviar avaliação": "Submit review", "Escolhe de 1 a 5 estrelas.": "Choose 1 to 5 stars.", "Não foi possível enviar a avaliação.": "Could not submit the review.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Thank you! Your review will appear once the store approves it.", "Só restam {n} de \\"{nome}\\".": "Only {n} of \\"{nome}\\" left.", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" is sold out.", "Escolhe uma opção para \\"{nome}\\".": "Choose an option for \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Only 1 of \\"{nome}\\" left.", "Mais produtos": "More products", "Produto {n}": "Product {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Your real products appear here, with photos, prices and options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Preview: here the customer would add the product to the cart.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Preview with sample products - yours will appear here.", "Clássicos": "Classics", "Edição limitada": "Limited edition", "Recomendado para ti": "Recommended for you", "Categoria": "Category", "Promoção": "Sale", "Até {n}% de desconto": "Up to {n}% off", "Ver ofertas": "See deals", "Colecção": "Collection", "Explorar categorias": "Browse categories", "Compra por categoria": "Shop by category", "Ofertas da semana": "Weekly best deals", "Mais recentes": "Newest", "Preço mais baixo": "Lowest price", "Preço mais alto": "Highest price", "Ordenar": "Sort by", "Mostrar mais": "Show more", "A mostrar {a} de {b}": "Showing {a} of {b}", "Pagamento recebido. A confirmar...": "Payment received. Confirming...", "Pagamento seguro": "Secure payment", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Your bank opens the payment in a secure window. Pay and come back here - this page confirms it automatically.", "Abrir pagamento seguro": "Open secure payment", "Não aparece? Abrir numa janela nova": "Not showing? Open in a new window", "À espera da confirmação do pagamento...": "Waiting for payment confirmation...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Still waiting. If you've already paid, confirmation may take a moment.", "Adicionar": "Add", "Preços desde": "Prices from", "Ver tudo": "See all", "Destaque": "Featured", "Ver produto": "View product", "Filtros": "Filters", "Preço": "Price", "Mínimo": "Minimum", "Máximo": "Maximum", "Mostrar só": "Show only", "4 estrelas ou mais": "4 stars & up", "Em promoção": "On sale", "Limpar filtros": "Clear filters", "Ver resultados": "See results", "Vista em grelha": "Grid view", "Vista em lista": "List view", "Ver todos os produtos": "See all products", "{n} produtos, com filtros por categoria e preço": "{n} products, with filters by category and price", "Este produto já não está disponível.": "This product is no longer available.", "Início": "Home", "Loja": "Shop", "Melhores ofertas para ti": "Best deals for you", "Os mais pedidos": "Most ordered", "Entrega rápida": "Fast delivery", "Bons preços": "Great prices", "Qualidade garantida": "Guaranteed quality", "Até": "Up to", "Fresco": "Fresh", "Saboroso": "Tasty", "Rápido": "Fast", "Encomendar agora": "Order now", "Ingredientes frescos": "Fresh ingredients"}, "fr": {"{nome} adicionado ao carrinho": "{nome} ajouté au panier", "Pesquisar produtos": "Rechercher des produits", "Abrir carrinho": "Ouvrir le panier", "Carrinho": "Panier", "O teu carrinho": "Votre panier", "Total": "Total", "Finalizar compra": "Finaliser l'achat", "A nossa loja": "Notre boutique", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} produits vous attendent. Choisissez, commandez et recevez.", "Descobre os nossos produtos.": "Découvrez nos produits.", "Ver produtos": "Voir les produits", "Imagem {n}": "Image {n}", "Outros": "Autres", "Tudo": "Tout", "Em destaque": "En vedette", "Adicionar {nome} ao carrinho": "Ajouter {nome} au panier", "Ainda não há produtos à venda aqui.": "Aucun produit en vente pour le moment.", "Nenhum produto encontrado para \\"{t}\\".": "Aucun produit trouvé pour « {t} ».", "Nenhum produto encontrado.": "Aucun produit trouvé.", "Ver todos": "Tout voir", "Resultados": "Résultats", "Produtos": "Produits", "{n} produto": "{n} produit", "{n} produtos": "{n} produits", "Poupas {v}": "Vous économisez {v}", "Quantidade": "Quantité", "Menos": "Moins", "Mais": "Plus", "Adicionar ao carrinho": "Ajouter au panier", "Comprar agora": "Acheter maintenant", "O teu carrinho está vazio.": "Votre panier est vide.", "Remover": "Retirer", "Confirmar encomenda": "Confirmer la commande", "Cartão": "Carte", "Como queres pagar?": "Comment souhaitez-vous payer ?", "Pagar {v}": "Payer {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Après confirmation, payez directement la boutique sur l'un de ces numéros, avec la référence que nous vous donnerons :", "Em nome de": "Au nom de", "A loja confirma o pagamento e prepara a tua encomenda.": "La boutique confirmera le paiement et préparera votre commande.", "Encomendar pelo WhatsApp": "Commander via WhatsApp", "Enviar encomenda": "Envoyer la commande", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Remplissez vos coordonnées et nous enverrons la commande sur le WhatsApp de la boutique.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La boutique reçoit votre commande et vous contactera pour convenir du paiement et de la livraison.", "Só falta isto para receberes a tua encomenda.": "Plus que cette étape pour recevoir votre commande.", "{n} artigo": "{n} article", "{n} artigos": "{n} articles", "O teu nome": "Votre nom", "Telefone": "Téléphone", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(le même que votre portefeuille M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "E-mail (facultatif, pour recevoir la confirmation)", "Morada de entrega / notas (opcional)": "Adresse de livraison / remarques (facultatif)", "Escreve o teu nome.": "Veuillez saisir votre nom.", "Escreve o teu número de telefone.": "Veuillez saisir votre numéro de téléphone.", "Esse email não parece válido - podes deixá-lo em branco.": "Cet e-mail ne semble pas valide - vous pouvez le laisser vide.", "Escolhe como queres pagar.": "Choisissez votre moyen de paiement.", "A processar...": "Traitement en cours...", "Não foi possível criar a encomenda.": "Impossible de créer la commande.", "Não foi possível iniciar o pagamento.": "Impossible de lancer le paiement.", "Algo correu mal. Tenta novamente.": "Une erreur s'est produite. Veuillez réessayer.", "Encomenda enviada!": "Commande envoyée !", "Para concluir, paga {v} com a referência {r}:": "Pour finaliser, payez {v} avec la référence {r} :", "Copiar": "Copier", "Enviar comprovativo no WhatsApp": "Envoyer la preuve de paiement sur WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Nous avons ouvert WhatsApp avec votre commande déjà rédigée - il ne reste qu'à appuyer sur envoyer.", "Abrir o WhatsApp outra vez": "Rouvrir WhatsApp", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La boutique a bien reçu votre commande et vous contactera bientôt pour convenir du paiement et de la livraison.", "Continuar a comprar": "Continuer mes achats", "Copiado": "Copié", "Confirma no teu telemóvel": "Confirmez sur votre téléphone", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Nous avons envoyé la demande de paiement à votre numéro. Saisissez votre code PIN pour confirmer.", "Pagamento confirmado!": "Paiement confirmé !", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Merci pour votre achat. La boutique a bien reçu votre commande.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Nous n'avons pas encore reçu la confirmation. Si vous avez déjà payé, patientez - la boutique reçoit la commande dès l'arrivée du paiement.", "Não foi possível carregar os produtos. Recarrega a página.": "Impossible de charger les produits. Veuillez recharger la page.", "Fechar": "Fermer", "Anterior": "Précédent", "Seguinte": "Suivant", "{n} de 5 estrelas": "{n} sur 5 étoiles", "Esgotado": "Épuisé", "Só restam {n} unidades.": "Plus que {n} en stock.", "Só restam {n} unidades": "Plus que {n} en stock", "Só resta 1 unidade": "Plus que 1 en stock", "Novidades": "Nouveautés", "Promoções": "Promotions", "Mais vendidos": "Meilleures ventes", "Novo": "Nouveau", "desde": "à partir de", "Categorias": "Catégories", "Oferta relâmpago": "Vente flash", "Termina em": "Se termine dans", "dias": "jours", "h": "h", "min": "min", "seg": "s", "Todos os produtos": "Tous les produits", "Vistos recentemente": "Vus récemment", "Limpar": "Effacer", "Opção": "Option", "Em stock": "En stock", "Escolhe uma opção.": "Choisissez une option.", "Também vais gostar": "Vous aimerez aussi", "Avaliações": "Avis", "{n} avaliação": "{n} avis", "{n} avaliações": "{n} avis", "Escrever avaliação": "Écrire un avis", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Pas encore d'avis. Soyez le premier à donner votre avis !", "A tua nota": "Votre note", "Comentário (opcional)": "Commentaire (facultatif)", "Enviar avaliação": "Envoyer l'avis", "Escolhe de 1 a 5 estrelas.": "Choisissez de 1 à 5 étoiles.", "Não foi possível enviar a avaliação.": "Impossible d'envoyer l'avis.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "Merci ! Votre avis apparaîtra après validation par la boutique.", "Só restam {n} de \\"{nome}\\".": "Plus que {n} « {nome} » en stock.", "\\"{nome}\\" está esgotado.": "« {nome} » est épuisé.", "Escolhe uma opção para \\"{nome}\\".": "Choisissez une option pour « {nome} ».", "Só resta 1 de \\"{nome}\\".": "Plus qu'un « {nome} » en stock.", "Mais produtos": "Plus de produits", "Produto {n}": "Produit {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Vos vrais produits apparaissent ici, avec photos, prix et options.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Aperçu : ici, le client ajouterait le produit au panier.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Aperçu avec des produits d'exemple - les vôtres apparaîtront ici.", "Clássicos": "Classiques", "Edição limitada": "Édition limitée", "Recomendado para ti": "Recommandé pour vous", "Categoria": "Catégorie", "Promoção": "Promo", "Até {n}% de desconto": "Jusqu'à -{n} %", "Ver ofertas": "Voir les offres", "Colecção": "Collection", "Explorar categorias": "Explorer les catégories", "Compra por categoria": "Acheter par catégorie", "Ofertas da semana": "Offres de la semaine", "Mais recentes": "Plus récents", "Preço mais baixo": "Prix le plus bas", "Preço mais alto": "Prix le plus élevé", "Ordenar": "Trier", "Mostrar mais": "Voir plus", "A mostrar {a} de {b}": "Affichage de {a} sur {b}", "Pagamento recebido. A confirmar...": "Paiement reçu. Confirmation...", "Pagamento seguro": "Paiement sécurisé", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Votre banque ouvre le paiement dans une fenêtre sécurisée. Payez puis revenez ici - cette page le confirme automatiquement.", "Abrir pagamento seguro": "Ouvrir le paiement sécurisé", "Não aparece? Abrir numa janela nova": "Rien ne s'affiche ? Ouvrir dans une nouvelle fenêtre", "À espera da confirmação do pagamento...": "En attente de la confirmation du paiement...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Toujours en attente. Si vous avez déjà payé, la confirmation peut prendre un moment.", "Adicionar": "Ajouter", "Preços desde": "Prix à partir de", "Ver tudo": "Tout voir", "Destaque": "À la une", "Ver produto": "Voir le produit", "Filtros": "Filtres", "Preço": "Prix", "Mínimo": "Minimum", "Máximo": "Maximum", "Mostrar só": "Afficher seulement", "4 estrelas ou mais": "4 étoiles et plus", "Em promoção": "En promotion", "Limpar filtros": "Effacer les filtres", "Ver resultados": "Voir les résultats", "Vista em grelha": "Vue en grille", "Vista em lista": "Vue en liste", "Ver todos os produtos": "Voir tous les produits", "{n} produtos, com filtros por categoria e preço": "{n} produits, avec des filtres par catégorie et prix", "Este produto já não está disponível.": "Ce produit n'est plus disponible.", "Início": "Accueil", "Loja": "Boutique", "Melhores ofertas para ti": "Les meilleures offres pour vous", "Os mais pedidos": "Les plus commandés", "Entrega rápida": "Livraison rapide", "Bons preços": "Bons prix", "Qualidade garantida": "Qualité garantie", "Até": "Jusqu'à", "Fresco": "Frais", "Saboroso": "Savoureux", "Rápido": "Rapide", "Encomendar agora": "Commander", "Ingredientes frescos": "Ingrédients frais"}, "es": {"{nome} adicionado ao carrinho": "{nome} añadido al carrito", "Pesquisar produtos": "Buscar productos", "Abrir carrinho": "Abrir carrito", "Carrinho": "Carrito", "O teu carrinho": "Tu carrito", "Total": "Total", "Finalizar compra": "Finalizar compra", "A nossa loja": "Nuestra tienda", "{n} produtos à tua espera. Escolhe, encomenda e recebe.": "{n} productos te esperan. Elige, pide y recibe.", "Descobre os nossos produtos.": "Descubre nuestros productos.", "Ver produtos": "Ver productos", "Imagem {n}": "Imagen {n}", "Outros": "Otros", "Tudo": "Todo", "Em destaque": "Destacados", "Adicionar {nome} ao carrinho": "Añadir {nome} al carrito", "Ainda não há produtos à venda aqui.": "Todavía no hay productos a la venta.", "Nenhum produto encontrado para \\"{t}\\".": "No se encontraron productos para \\"{t}\\".", "Nenhum produto encontrado.": "No se encontraron productos.", "Ver todos": "Ver todos", "Resultados": "Resultados", "Produtos": "Productos", "{n} produto": "{n} producto", "{n} produtos": "{n} productos", "Poupas {v}": "Ahorras {v}", "Quantidade": "Cantidad", "Menos": "Menos", "Mais": "Más", "Adicionar ao carrinho": "Añadir al carrito", "Comprar agora": "Comprar ahora", "O teu carrinho está vazio.": "Tu carrito está vacío.", "Remover": "Quitar", "Confirmar encomenda": "Confirmar pedido", "Cartão": "Tarjeta", "Como queres pagar?": "¿Cómo quieres pagar?", "Pagar {v}": "Pagar {v}", "Depois de confirmares, paga directamente à loja para um destes números, com a referência que te vamos dar:": "Después de confirmar, paga directamente a la tienda a uno de estos números, con la referencia que te daremos:", "Em nome de": "A nombre de", "A loja confirma o pagamento e prepara a tua encomenda.": "La tienda confirmará el pago y preparará tu pedido.", "Encomendar pelo WhatsApp": "Pedir por WhatsApp", "Enviar encomenda": "Enviar pedido", "Preenche os teus dados e enviamos a encomenda para o WhatsApp da loja.": "Rellena tus datos y enviaremos el pedido al WhatsApp de la tienda.", "A loja recebe a tua encomenda e contacta-te para combinar o pagamento e a entrega.": "La tienda recibe tu pedido y te contactará para acordar el pago y la entrega.", "Só falta isto para receberes a tua encomenda.": "Solo falta esto para recibir tu pedido.", "{n} artigo": "{n} artículo", "{n} artigos": "{n} artículos", "O teu nome": "Tu nombre", "Telefone": "Teléfono", "(o mesmo da carteira, para M-Pesa/e-Mola)": "(el mismo de tu billetera M-Pesa/e-Mola)", "Email (opcional, para receberes a confirmação)": "Correo (opcional, para recibir la confirmación)", "Morada de entrega / notas (opcional)": "Dirección de entrega / notas (opcional)", "Escreve o teu nome.": "Escribe tu nombre.", "Escreve o teu número de telefone.": "Escribe tu número de teléfono.", "Esse email não parece válido - podes deixá-lo em branco.": "Ese correo no parece válido - puedes dejarlo en blanco.", "Escolhe como queres pagar.": "Elige cómo quieres pagar.", "A processar...": "Procesando...", "Não foi possível criar a encomenda.": "No se pudo crear el pedido.", "Não foi possível iniciar o pagamento.": "No se pudo iniciar el pago.", "Algo correu mal. Tenta novamente.": "Algo salió mal. Inténtalo de nuevo.", "Encomenda enviada!": "¡Pedido enviado!", "Para concluir, paga {v} com a referência {r}:": "Para terminar, paga {v} con la referencia {r}:", "Copiar": "Copiar", "Enviar comprovativo no WhatsApp": "Enviar comprobante por WhatsApp", "Abrimos o WhatsApp com a tua encomenda já escrita - só tens de carregar em enviar.": "Abrimos WhatsApp con tu pedido ya escrito - solo tienes que pulsar enviar.", "Abrir o WhatsApp outra vez": "Abrir WhatsApp otra vez", "A loja recebeu a tua encomenda e vai contactar-te em breve para combinar o pagamento e a entrega.": "La tienda ha recibido tu pedido y te contactará pronto para acordar el pago y la entrega.", "Continuar a comprar": "Seguir comprando", "Copiado": "Copiado", "Confirma no teu telemóvel": "Confirma en tu móvil", "Enviámos o pedido de pagamento para o teu número. Introduz o PIN para confirmar.": "Enviamos la solicitud de pago a tu número. Introduce tu PIN para confirmar.", "Pagamento confirmado!": "¡Pago confirmado!", "Obrigado pela tua compra. A loja já recebeu a tua encomenda.": "Gracias por tu compra. La tienda ya recibió tu pedido.", "Ainda não recebemos a confirmação. Se já pagaste, aguarda - a loja recebe a encomenda assim que o pagamento chegar.": "Todavía no hemos recibido la confirmación. Si ya pagaste, espera - la tienda recibe el pedido en cuanto llegue el pago.", "Não foi possível carregar os produtos. Recarrega a página.": "No se pudieron cargar los productos. Recarga la página.", "Fechar": "Cerrar", "Anterior": "Anterior", "Seguinte": "Siguiente", "{n} de 5 estrelas": "{n} de 5 estrellas", "Esgotado": "Agotado", "Só restam {n} unidades.": "Solo quedan {n} unidades.", "Só restam {n} unidades": "Solo quedan {n} unidades", "Só resta 1 unidade": "Solo queda 1 unidad", "Novidades": "Novedades", "Promoções": "Ofertas", "Mais vendidos": "Más vendidos", "Novo": "Nuevo", "desde": "desde", "Categorias": "Categorías", "Oferta relâmpago": "Oferta relámpago", "Termina em": "Termina en", "dias": "días", "h": "h", "min": "min", "seg": "seg", "Todos os produtos": "Todos los productos", "Vistos recentemente": "Vistos recientemente", "Limpar": "Borrar", "Opção": "Opción", "Em stock": "En stock", "Escolhe uma opção.": "Elige una opción.", "Também vais gostar": "También te gustará", "Avaliações": "Reseñas", "{n} avaliação": "{n} reseña", "{n} avaliações": "{n} reseñas", "Escrever avaliação": "Escribir una reseña", "Ainda sem avaliações. Sê o primeiro a avaliar!": "Aún no hay reseñas. ¡Sé el primero en opinar!", "A tua nota": "Tu valoración", "Comentário (opcional)": "Comentario (opcional)", "Enviar avaliação": "Enviar reseña", "Escolhe de 1 a 5 estrelas.": "Elige de 1 a 5 estrellas.", "Não foi possível enviar a avaliação.": "No se pudo enviar la reseña.", "Obrigado! A tua avaliação aparece depois de a loja a aprovar.": "¡Gracias! Tu reseña aparecerá cuando la tienda la apruebe.", "Só restam {n} de \\"{nome}\\".": "Solo quedan {n} de \\"{nome}\\".", "\\"{nome}\\" está esgotado.": "\\"{nome}\\" está agotado.", "Escolhe uma opção para \\"{nome}\\".": "Elige una opción para \\"{nome}\\".", "Só resta 1 de \\"{nome}\\".": "Solo queda 1 de \\"{nome}\\".", "Mais produtos": "Más productos", "Produto {n}": "Producto {n}", "Os teus produtos reais aparecem aqui, com fotos, preços e opções.": "Tus productos reales aparecen aquí, con fotos, precios y opciones.", "Pré-visualização: aqui o cliente juntaria o produto ao carrinho.": "Vista previa: aquí el cliente añadiría el producto al carrito.", "Pré-visualização com produtos de exemplo - os teus aparecem aqui.": "Vista previa con productos de ejemplo - los tuyos aparecerán aquí.", "Clássicos": "Clásicos", "Edição limitada": "Edición limitada", "Recomendado para ti": "Recomendado para ti", "Categoria": "Categoría", "Promoção": "Oferta", "Até {n}% de desconto": "Hasta {n}% de descuento", "Ver ofertas": "Ver ofertas", "Colecção": "Colección", "Explorar categorias": "Explorar categorías", "Compra por categoria": "Compra por categoría", "Ofertas da semana": "Ofertas de la semana", "Mais recentes": "Más recientes", "Preço mais baixo": "Precio más bajo", "Preço mais alto": "Precio más alto", "Ordenar": "Ordenar", "Mostrar mais": "Mostrar más", "A mostrar {a} de {b}": "Mostrando {a} de {b}", "Pagamento recebido. A confirmar...": "Pago recibido. Confirmando...", "Pagamento seguro": "Pago seguro", "O banco abre o pagamento numa janela segura. Paga e volta para aqui - esta página confirma sozinha.": "Tu banco abre el pago en una ventana segura. Paga y vuelve aquí: esta página lo confirma sola.", "Abrir pagamento seguro": "Abrir pago seguro", "Não aparece? Abrir numa janela nova": "¿No aparece? Abrir en una ventana nueva", "À espera da confirmação do pagamento...": "Esperando la confirmación del pago...", "Ainda à espera. Se já pagaste, a confirmação pode demorar um pouco.": "Seguimos esperando. Si ya pagaste, la confirmación puede tardar un poco.", "Adicionar": "Añadir", "Preços desde": "Precios desde", "Ver tudo": "Ver todo", "Destaque": "Destacado", "Ver produto": "Ver producto", "Filtros": "Filtros", "Preço": "Precio", "Mínimo": "Mínimo", "Máximo": "Máximo", "Mostrar só": "Mostrar solo", "4 estrelas ou mais": "4 estrellas o más", "Em promoção": "En oferta", "Limpar filtros": "Borrar filtros", "Ver resultados": "Ver resultados", "Vista em grelha": "Vista en cuadrícula", "Vista em lista": "Vista en lista", "Ver todos os produtos": "Ver todos los productos", "{n} produtos, com filtros por categoria e preço": "{n} productos, con filtros por categoría y precio", "Este produto já não está disponível.": "Este producto ya no está disponible.", "Início": "Inicio", "Loja": "Tienda", "Melhores ofertas para ti": "Las mejores ofertas para ti", "Os mais pedidos": "Los más pedidos", "Entrega rápida": "Entrega rápida", "Bons preços": "Buenos precios", "Qualidade garantida": "Calidad garantizada", "Até": "Hasta", "Fresco": "Fresco", "Saboroso": "Sabroso", "Rápido": "Rápido", "Encomendar agora": "Pedir ahora", "Ingredientes frescos": "Ingredientes frescos"}};
   function tx(s, v){
     var d = DIA_TXT[DIA_LANG];
     var r = (d && d[s]) || s;
@@ -2453,6 +2492,21 @@ const LOJA_CART_JS = `/*
 
   var CART_KEY = 'daniel_ia_carrinho_' + SITE_ID;
   var VISTOS_KEY = 'daniel_ia_vistos_' + SITE_ID;
+  // ---- Lojas com várias páginas (1.60.0) ----
+  // index.html (montra), loja.html (todos os produtos com filtros) e
+  // produto.html?id=... (cada produto na sua página). Nas versões do estúdio
+  // (pré-visualização) as páginas ainda não existem: fica tudo na mesma página.
+  function metaDe(n){ var m = document.querySelector('meta[name="' + n + '"]'); return m ? (m.getAttribute('content') || '') : ''; }
+  var MULTI = !!metaDe('daniel-ia-paginas');
+  var PAGINA = (metaDe('daniel-ia-pagina') || 'inicio').toLowerCase();
+  var NAVEGAR = MULTI && !/[?&]dia_previa=1/.test(window.location.search) && !/\\/v\\d+\\.html$/i.test(window.location.pathname);
+  var EM_PAGINA_PRODUTO = false;
+  function paramUrl(n){ try { return new URLSearchParams(window.location.search).get(n) || ''; } catch (e) { return ''; } }
+  function irParaPagina(ficheiro, params){
+    var q = [];
+    Object.keys(params || {}).forEach(function(k){ if (params[k]) q.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k])); });
+    window.location.href = ficheiro + (q.length ? '?' + q.join('&') : '');
+  }
   var produtos = [];
   var loja = { nome: '', capa: [], modo: 'pedido', metodos: [], manual: null, whatsapp: '', montra: null };
   var carrinho = lerCarrinho();
@@ -2963,6 +3017,8 @@ const LOJA_CART_JS = `/*
       '.dia-spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--_b);border-top-color:var(--_p);animation:dia-girar .8s linear infinite;margin:0 auto 14px;}',
       '@keyframes dia-girar{to{transform:rotate(360deg);}}',
       ".dia-add-txt{display:none;}.dia-modal.dia-modal-cartao{max-width:560px;}.dia-cartao-pag{display:flex;flex-direction:column;gap:12px;}.dia-cartao-topo{display:flex;align-items:center;gap:12px;padding-right:40px;}.dia-cartao-topo b{display:block;font-size:15px;}.dia-cartao-topo small{display:block;font-size:12px;color:var(--_ts);margin-top:2px;}.dia-cartao-topo strong{margin-left:auto;font-size:16px;white-space:nowrap;}.dia-cartao-ic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--_p) 14%,transparent);color:var(--_p);flex-shrink:0;}.dia-cartao-ic svg{width:19px;height:19px;}.dia-cartao-palco{position:relative;height:min(620px,62vh);border-radius:calc(var(--_r) - 2px);overflow:hidden;background:#fff;border:1px solid var(--_b);}.dia-cartao-palco iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;}.dia-cartao-carregar{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;z-index:1;transition:opacity .3s ease;}.dia-cartao-palco.dia-carregado .dia-cartao-carregar{opacity:0;pointer-events:none;}.dia-cartao-link{font-size:12.5px;color:var(--_ts);text-align:center;}.dia-cartao-fora{text-align:center;padding:20px 10px;border:1px dashed var(--_b);border-radius:calc(var(--_r) - 2px);}.dia-cartao-fora p{color:var(--_ts);font-size:14px;line-height:1.55;margin:0 0 14px;}.dia-cartao-estado{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:var(--_ts);margin:0;text-align:center;}.dia-cartao-estado i{width:8px;height:8px;border-radius:50%;background:#F59E0B;flex-shrink:0;animation:dia-brilhar 1.4s ease-in-out infinite;}@media (max-width:760px){.dia-cartao-palco{height:68vh;}}.dia-tema-mercado .dia-bloco{margin-bottom:34px;}.dia-mosaico{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(0,1fr);gap:14px;}.dia-mos-so{grid-template-columns:1fr;}.dia-mos-grande{position:relative;min-height:clamp(270px,34vw,430px);border-radius:calc(var(--_r) + 10px);overflow:hidden;background:linear-gradient(135deg,color-mix(in srgb,var(--_p) 12%,var(--_f)),color-mix(in srgb,var(--_p) 28%,var(--_f)));display:flex;align-items:center;isolation:isolate;color:var(--_t);}.dia-mos-foto{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;}.dia-mos-grande.dia-com-foto::after{content:\\"\\";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.08) 72%);}.dia-mos-grande.dia-com-foto{color:#fff;}.dia-mos-arte{position:absolute;right:4%;top:8%;bottom:8%;width:44%;z-index:-1;display:flex;align-items:center;justify-content:center;}.dia-mos-arte img{max-width:100%;max-height:100%;object-fit:contain;filter:drop-shadow(0 30px 40px rgba(0,0,0,.22));}.dia-mos-arte .dia-demo-arte{background:none;}.dia-mos-texto{position:relative;padding:clamp(22px,4vw,48px);max-width:58%;}.dia-mos-eti{display:inline-block;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;background:var(--_f);color:var(--_t);padding:6px 11px;border-radius:999px;margin-bottom:14px;}.dia-com-foto .dia-mos-eti{background:rgba(255,255,255,.94);color:#111;}.dia-mos-texto h2{font-family:var(--_ft);font-weight:800;font-size:clamp(26px,3.6vw,46px);line-height:1.05;letter-spacing:-.03em;margin:0 0 10px;}.dia-mos-texto p{font-size:clamp(13.5px,1.3vw,16px);line-height:1.5;margin:0 0 18px;opacity:.85;}.dia-mos-btn{display:inline-flex;align-items:center;gap:8px;background:var(--_p);color:var(--_pt);border:none;border-radius:999px;padding:12px 20px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;min-height:44px;}.dia-mos-btn svg,.dia-mos-link svg{width:15px;height:15px;}.dia-mos-lado{display:grid;grid-template-rows:1fr 1fr;gap:14px;}.dia-mos-telha{position:relative;display:flex;flex-direction:column;border:none;border-radius:calc(var(--_r) + 10px);padding:18px;cursor:pointer;text-align:left;font-family:inherit;color:var(--_t);overflow:hidden;min-height:150px;transition:transform .25s ease;isolation:isolate;}.dia-mos-telha:hover{transform:translateY(-3px);}.dia-mos-t0{background:color-mix(in srgb,#F59E0B 18%,var(--_f));}.dia-mos-t1{background:color-mix(in srgb,var(--_p) 13%,var(--_f));}.dia-mos-telha-txt{display:flex;flex-direction:column;gap:5px;max-width:60%;flex:1;}.dia-mos-telha-txt small{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.65;}.dia-mos-telha-txt b{font-family:var(--_ft);font-size:clamp(17px,1.8vw,22px);line-height:1.15;letter-spacing:-.02em;}.dia-mos-link{margin-top:auto;padding-top:10px;display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:800;color:var(--_p);}.dia-mos-telha-arte{position:absolute;right:-4%;bottom:-6%;width:50%;aspect-ratio:1;z-index:-1;display:flex;align-items:center;justify-content:center;}.dia-mos-telha-arte img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 18px 24px rgba(0,0,0,.2));}.dia-mos-telha-arte .dia-demo-arte{background:none;}.dia-tema-mercado .dia-seccao-titulo{position:relative;padding-bottom:9px;}.dia-tema-mercado .dia-seccao-titulo::after{content:\\"\\";position:absolute;left:0;bottom:0;width:40px;height:3px;border-radius:3px;background:var(--_p);}.dia-tema-mercado .dia-produto-card{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) - 2px);padding:8px;}.dia-tema-mercado .dia-produto-media{border-radius:calc(var(--_r) - 6px);background:color-mix(in srgb,var(--_t) 4%,transparent);}.dia-tema-mercado .dia-produto-corpo{padding:10px 4px 8px;gap:4px;}.dia-tema-mercado .dia-produto-nome{font-size:13.5px;font-weight:600;font-family:inherit;}.dia-tema-mercado .dia-produto-precos{padding-right:0;}.dia-tema-mercado .dia-btn-add{position:static;width:auto;height:40px;margin:2px 0 0;border-radius:calc(var(--_r) - 6px);gap:6px;font-weight:800;font-size:13px;font-family:inherit;box-shadow:none;}.dia-tema-mercado .dia-btn-add:hover{transform:none;filter:brightness(1.08);}.dia-tema-mercado .dia-btn-add svg{width:16px;height:16px;}.dia-tema-mercado .dia-add-txt{display:inline;}.dia-banda{border-radius:calc(var(--_r) + 12px);padding:clamp(18px,3vw,32px);background:radial-gradient(circle at 92% 0%,color-mix(in srgb,var(--_p) 55%,transparent),transparent 42%),color-mix(in srgb,var(--_p) 22%,#0c0c0f);color:#fff;}.dia-banda-topo{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px;}.dia-banda-titulo{display:flex;align-items:center;gap:10px;margin:0;font-family:var(--_ft);font-weight:800;font-size:clamp(20px,2.6vw,28px);letter-spacing:-.02em;}.dia-banda-titulo svg{width:24px;height:24px;color:#FCD34D;}.dia-banda-tabs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;max-width:100%;}.dia-banda-tabs::-webkit-scrollbar{display:none;}.dia-banda-tab{flex-shrink:0;border:1px solid rgba(255,255,255,.24);background:transparent;color:#fff;border-radius:999px;padding:9px 15px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;}.dia-banda-tab.dia-activo{background:#FCD34D;color:#111;border-color:transparent;}.dia-banda-grelha{--_t:#16161a;--_ts:#6b6b74;--_b:#e7e7ea;--_s:#ffffff;--_f:#ffffff;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;}.dia-banda-grelha .dia-produto-card{color:var(--_t);}@media (max-width:1100px){.dia-banda-grelha{grid-template-columns:repeat(4,minmax(0,1fr));}.dia-banda-grelha > :nth-child(n+9){display:none;}}@media (max-width:860px){.dia-mosaico{grid-template-columns:1fr;}.dia-mos-lado{grid-template-rows:none;grid-template-columns:1fr 1fr;}.dia-banda-grelha{grid-template-columns:repeat(3,minmax(0,1fr));}.dia-banda-grelha > :nth-child(n+7){display:none;}}@media (max-width:560px){.dia-mos-grande{align-items:flex-start;min-height:340px;}.dia-mos-texto{max-width:none;padding:24px 20px;}.dia-mos-grande:not(.dia-com-foto) .dia-mos-texto{padding-bottom:150px;}.dia-mos-arte{width:56%;top:auto;height:44%;right:4%;bottom:4%;}.dia-mos-lado{gap:10px;}.dia-mos-telha{min-height:176px;padding:14px;}.dia-mos-telha-txt{max-width:100%;}.dia-mos-telha-txt b{font-size:16px;}.dia-mos-telha-arte{width:56%;right:-8%;bottom:-10%;opacity:.95;}.dia-banda-grelha{grid-auto-flow:column;grid-template-columns:none;grid-auto-columns:46%;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding-bottom:4px;}.dia-banda-grelha::-webkit-scrollbar{display:none;}.dia-banda-grelha > *{scroll-snap-align:start;}.dia-banda-grelha > :nth-child(n+7){display:flex;}}.dia-tema-editorial .dia-bloco{margin-bottom:48px;}.dia-tema-editorial .dia-categorias{display:none !important;}.dia-ed-capa{text-align:center;padding:clamp(26px,6vw,74px) 0 clamp(14px,3vw,28px);}.dia-ed-eti{display:inline-block;font-size:12px;letter-spacing:.26em;text-transform:uppercase;color:var(--_ts);margin-bottom:18px;}.dia-ed-titulo{font-family:var(--_ft);font-weight:500;text-transform:uppercase;font-size:clamp(36px,8.4vw,120px);line-height:.95;letter-spacing:-.035em;margin:0 auto;max-width:16ch;overflow-wrap:anywhere;}.dia-ed-sub{max-width:520px;margin:20px auto 0;color:var(--_ts);font-size:clamp(14px,1.4vw,17px);line-height:1.6;}.dia-ed-foto{margin-top:clamp(24px,4vw,46px);border-radius:var(--_r);overflow:hidden;aspect-ratio:21/9;}.dia-ed-foto img{width:100%;height:100%;object-fit:cover;display:block;}.dia-ed-barra{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:14px 0;border-top:1px solid var(--_b);border-bottom:1px solid var(--_b);margin-bottom:28px;}.dia-ed-tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;max-width:100%;}.dia-ed-tabs::-webkit-scrollbar{display:none;}.dia-ed-tab{flex-shrink:0;background:none;border:none;border-radius:999px;padding:9px 15px;font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--_ts);cursor:pointer;font-family:inherit;white-space:nowrap;min-height:40px;}.dia-ed-tab:hover{color:var(--_t);}.dia-ed-tab.dia-activo{background:var(--_t);color:var(--_f);}.dia-ed-ordem{display:flex;align-items:center;gap:10px;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--_ts);}.dia-ed-ordem select{border:1px solid var(--_b);background:transparent;color:var(--_t);border-radius:999px;padding:10px 14px;font-size:13px;font-family:inherit;letter-spacing:0;text-transform:none;outline:none;min-height:40px;}.dia-ed-mais{display:flex;flex-direction:column;align-items:center;gap:10px;margin-top:38px;}.dia-ed-mais-btn{background:none;border:none;font-family:var(--_ft);font-size:clamp(20px,2.4vw,30px);font-weight:500;color:var(--_t);cursor:pointer;padding:6px 4px;border-bottom:1.5px solid currentColor;}.dia-ed-mais small{font-size:12px;color:var(--_ts);letter-spacing:.04em;}.dia-tema-editorial .dia-ed-grelha{row-gap:36px;}.dia-tema-editorial .dia-produto-card{background:none;border:none;border-radius:0;overflow:visible;}.dia-tema-editorial .dia-produto-card:hover{transform:none;box-shadow:none;}.dia-tema-editorial .dia-produto-media{aspect-ratio:4/5;border-radius:max(2px,calc(var(--_r) - 8px));}.dia-tema-editorial .dia-produto-img{object-fit:cover;}.dia-tema-editorial .dia-img-fundo{display:none;}.dia-tema-editorial .dia-produto-corpo{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:4px 14px;padding:14px 0 4px;}.dia-tema-editorial .dia-produto-cat,.dia-tema-editorial .dia-produto-aval{display:none;}.dia-tema-editorial .dia-produto-nome{font-family:inherit;font-weight:600;font-size:12.5px;letter-spacing:.07em;text-transform:uppercase;min-height:0;}.dia-tema-editorial .dia-produto-precos{margin:0;padding:0;justify-content:flex-end;}.dia-tema-editorial .dia-produto-preco{font-size:14px;font-weight:600;}.dia-tema-editorial .dia-btn-add{top:12px;right:12px;bottom:auto;width:38px;height:38px;background:var(--_f);color:var(--_t);box-shadow:0 6px 16px rgba(0,0,0,.14);opacity:0;transition:opacity .2s ease;}.dia-tema-editorial .dia-produto-card:hover .dia-btn-add,.dia-tema-editorial .dia-btn-add:focus{opacity:1;}@media (hover:none){.dia-tema-editorial .dia-btn-add{opacity:1;}}.dia-tema-editorial .dia-seccao-titulo{font-family:inherit;font-weight:600;font-size:13px;letter-spacing:.18em;text-transform:uppercase;}.dia-tema-editorial .dia-badge{border-radius:2px;box-shadow:none;}@media (max-width:560px){.dia-ed-barra{flex-direction:column;align-items:stretch;}.dia-ed-ordem{justify-content:space-between;}.dia-tema-editorial .dia-produto-corpo{grid-template-columns:1fr;}.dia-tema-editorial .dia-produto-precos{justify-content:flex-start;}.dia-tema-editorial .dia-ed-grelha{row-gap:24px;}.dia-ed-foto{aspect-ratio:4/3;}}.dia-tc-capa{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);align-items:center;gap:clamp(16px,3vw,40px);border-radius:calc(var(--_r) + 8px);padding:clamp(22px,4vw,52px);background:linear-gradient(120deg,color-mix(in srgb,var(--_p) 9%,var(--_f)),color-mix(in srgb,var(--_p) 22%,var(--_f)));overflow:hidden;position:relative;color:var(--_t);}.dia-tc-pill{display:inline-flex;align-items:center;gap:6px;background:var(--_f);color:var(--_p);font-size:12px;font-weight:800;padding:7px 12px;border-radius:999px;margin-bottom:16px;box-shadow:0 6px 16px -8px rgba(0,0,0,.3);}.dia-tc-pill svg{width:14px;height:14px;}.dia-tc-texto h2{font-family:var(--_ft);font-weight:800;font-size:clamp(28px,4vw,52px);line-height:1.04;letter-spacing:-.03em;margin:0 0 12px;overflow-wrap:anywhere;}.dia-tc-texto p{color:var(--_ts);font-size:clamp(14px,1.4vw,17px);line-height:1.55;margin:0 0 22px;max-width:460px;}.dia-tc-btn{display:inline-flex;align-items:center;gap:8px;background:var(--_p);color:var(--_pt);border:none;border-radius:calc(var(--_r) - 2px);padding:13px 22px;font-weight:800;font-size:14.5px;cursor:pointer;font-family:inherit;min-height:46px;}.dia-tc-btn svg{width:16px;height:16px;}.dia-tc-arte{position:relative;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;}.dia-tc-arte::before{content:\\"\\";position:absolute;width:80%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--_p) 34%,transparent),transparent 70%);}.dia-tc-prod{position:relative;width:100%;height:100%;border:none;background:none;padding:0;cursor:pointer;}.dia-tc-prod img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 30px 36px rgba(0,0,0,.22));transition:transform .5s ease;}.dia-tc-prod:hover img{transform:scale(1.04) rotate(-1deg);}.dia-tc-foto{position:relative;width:100%;height:100%;object-fit:cover;border-radius:var(--_r);}.dia-tc-arte .dia-demo-arte{width:80%;height:80%;left:10%;top:10%;background:none;}.dia-tc-desc{position:absolute;top:6%;right:6%;width:68px;height:68px;border-radius:50%;background:#E11D48;color:#fff;font-weight:800;font-size:17px;display:flex;align-items:center;justify-content:center;transform:rotate(12deg);box-shadow:0 10px 24px rgba(225,29,72,.35);}.dia-cat-icones{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(96px,128px);gap:12px;overflow-x:auto;scrollbar-width:none;padding:2px 2px 8px;}.dia-cat-icones::-webkit-scrollbar{display:none;}.dia-cat-icone{display:flex;flex-direction:column;align-items:center;gap:9px;background:none;border:none;cursor:pointer;color:var(--_t);font-family:inherit;padding:0;}.dia-cat-quad{width:100%;max-width:124px;aspect-ratio:1;border-radius:calc(var(--_r) + 2px);border:1px solid var(--_b);background:var(--_s);display:flex;align-items:center;justify-content:center;overflow:hidden;transition:border-color .2s ease,transform .2s ease;}.dia-cat-quad img{width:74%;height:74%;object-fit:contain;}.dia-cat-icone:hover .dia-cat-quad{border-color:var(--_p);transform:translateY(-3px);}.dia-cat-nome{font-size:12.5px;font-weight:700;text-align:center;line-height:1.3;}.dia-tema-tech .dia-seccao-titulo{padding-left:12px;border-left:4px solid var(--_p);font-size:clamp(18px,2.1vw,22px);}.dia-tema-tech .dia-produto-card{background:var(--_f);border:1px solid var(--_b);}.dia-tema-tech .dia-produto-media{background:var(--_s);margin:8px 8px 0;border-radius:calc(var(--_r) - 4px);}.dia-tema-tech .dia-produto-img{padding:8%;}.dia-tema-tech .dia-img-fundo{display:none;}.dia-tema-tech .dia-produto-cat{color:var(--_p);}.dia-tema-tech .dia-produto-preco{color:var(--_p);font-size:18px;}.dia-tema-tech .dia-btn-add{border-radius:calc(var(--_r) - 4px);width:40px;height:40px;}.dia-tema-tech .dia-badge.dia-novo{background:var(--_p);color:var(--_pt);}@media (max-width:560px){.dia-tema-tech .dia-produto-preco{font-size:15px;}.dia-tema-tech .dia-produto-precos{padding-right:40px;}}@media (max-width:760px){.dia-tc-capa{grid-template-columns:1fr;}.dia-tc-arte{aspect-ratio:16/10;max-height:260px;}.dia-cat-icones{grid-auto-columns:84px;}}.dia-md-capa{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);align-items:center;gap:clamp(22px,4vw,60px);padding:clamp(14px,3vw,32px) 0;}.dia-md-titulo{font-family:var(--_ft);font-weight:900;text-transform:uppercase;font-size:clamp(40px,7.4vw,104px);line-height:.94;letter-spacing:-.04em;margin:0 0 18px;overflow-wrap:anywhere;}.dia-md-titulo mark{background:linear-gradient(transparent 56%,color-mix(in srgb,var(--_p) 72%,transparent) 56%,color-mix(in srgb,var(--_p) 72%,transparent) 92%,transparent 92%);color:inherit;padding:0 .06em;}.dia-md-texto p{font-size:clamp(14px,1.4vw,17px);line-height:1.55;color:var(--_ts);margin:0 0 24px;max-width:420px;}.dia-md-btn{display:inline-flex;align-items:center;gap:10px;background:var(--_t);color:var(--_f);border:none;border-radius:999px;padding:15px 26px;font-weight:800;font-size:13.5px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;font-family:inherit;min-height:48px;}.dia-md-btn svg{width:16px;height:16px;}.dia-md-arte{position:relative;aspect-ratio:4/5;max-height:560px;justify-self:center;width:100%;max-width:440px;}.dia-md-arte > img{position:relative;width:100%;height:100%;object-fit:cover;border-radius:calc(var(--_r) + 14px);z-index:1;display:block;}.dia-md-arte .dia-demo-arte{border-radius:calc(var(--_r) + 14px);z-index:1;}.dia-md-forma{position:absolute;width:62%;aspect-ratio:1;border-radius:50%;background:var(--_p);top:-6%;right:-8%;z-index:0;}.dia-md-forma2{width:34%;border-radius:calc(var(--_r) + 6px);top:auto;right:auto;bottom:-5%;left:-7%;background:var(--_t);opacity:.9;transform:rotate(-10deg);}.dia-md-faixa{overflow:hidden;background:var(--_p);color:var(--_pt);border-radius:calc(var(--_r) + 6px);padding:16px 0;}.dia-md-pista{display:flex;width:max-content;align-items:center;animation:dia-desliza 30s linear infinite;}.dia-md-faixa:hover .dia-md-pista{animation-play-state:paused;}.dia-md-copia{display:flex;align-items:center;}.dia-md-item{background:none;border:none;color:inherit;font-family:var(--_ft);font-weight:900;font-size:clamp(20px,2.8vw,34px);text-transform:uppercase;letter-spacing:-.02em;cursor:pointer;padding:4px 22px;white-space:nowrap;}.dia-md-item:hover{text-decoration:underline;text-underline-offset:6px;}.dia-md-sep svg{width:18px;height:18px;display:block;opacity:.85;}@keyframes dia-desliza{to{transform:translateX(-50%);}}@media (prefers-reduced-motion:reduce){.dia-md-faixa{overflow-x:auto;}.dia-md-copia{display:none;}}.dia-tema-moda .dia-seccao-titulo{font-weight:900;text-transform:uppercase;font-size:clamp(22px,3vw,34px);letter-spacing:-.02em;background:linear-gradient(transparent 60%,color-mix(in srgb,var(--_p) 55%,transparent) 60%);display:inline-flex;padding:0 .1em;}.dia-tema-moda .dia-produto-card{background:none;border:none;overflow:visible;}.dia-tema-moda .dia-produto-card:hover{box-shadow:none;}.dia-tema-moda .dia-produto-media{aspect-ratio:3/4;border-radius:calc(var(--_r) + 12px);}.dia-tema-moda .dia-produto-img{object-fit:cover;}.dia-tema-moda .dia-img-fundo{display:none;}.dia-tema-moda .dia-produto-corpo{padding:14px 4px 4px;}.dia-tema-moda .dia-produto-nome{font-weight:800;text-transform:uppercase;letter-spacing:.01em;min-height:0;}.dia-tema-moda .dia-produto-precos{padding-right:0;}.dia-tema-moda .dia-btn-add{top:12px;right:12px;bottom:auto;background:var(--_f);color:var(--_t);box-shadow:0 8px 20px rgba(0,0,0,.18);}.dia-tema-moda .dia-fila{grid-auto-columns:minmax(220px,270px);}.dia-tema-moda .dia-badge{border-radius:6px;}@media (max-width:760px){.dia-md-capa{grid-template-columns:1fr;}.dia-md-arte{max-width:300px;width:84%;}.dia-md-forma{right:-4%;top:-4%;}.dia-md-forma2{left:-4%;}.dia-md-titulo{font-size:clamp(38px,11vw,66px);}}@media (max-width:560px){.dia-tema-moda .dia-fila{grid-auto-columns:minmax(160px,62%);}.dia-md-faixa{padding:12px 0;}}.dia-ct-capa{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.7fr);align-items:center;min-height:clamp(170px,20vw,230px);border-radius:calc(var(--_r) + 6px);overflow:hidden;background:linear-gradient(110deg,color-mix(in srgb,var(--_p) 10%,var(--_f)),color-mix(in srgb,var(--_p) 24%,var(--_f)));color:var(--_t);isolation:isolate;}.dia-ct-capa.dia-com-foto{color:#fff;grid-template-columns:1fr;}.dia-ct-foto{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;}.dia-ct-capa.dia-com-foto::after{content:\\"\\";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,0) 75%);}.dia-ct-texto{padding:clamp(18px,3.4vw,40px);}.dia-ct-eti{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--_p);margin-bottom:8px;}.dia-com-foto .dia-ct-eti{color:#fff;opacity:.92;}.dia-ct-texto h2{font-family:var(--_ft);font-weight:800;font-size:clamp(24px,3.2vw,40px);line-height:1.05;letter-spacing:-.02em;margin:0 0 6px;}.dia-ct-texto p{margin:0 0 16px;font-size:14px;opacity:.82;}.dia-ct-btn{display:inline-flex;align-items:center;gap:8px;background:var(--_p);color:var(--_pt);border:none;border-radius:calc(var(--_r) - 4px);padding:11px 18px;font-weight:800;font-size:13.5px;cursor:pointer;font-family:inherit;min-height:44px;}.dia-ct-btn svg{width:15px;height:15px;}.dia-ct-arte{position:relative;height:100%;min-height:170px;}.dia-ct-arte img{position:absolute;left:6%;top:8%;width:88%;height:84%;object-fit:contain;filter:drop-shadow(0 20px 26px rgba(0,0,0,.2));}.dia-ct-arte .dia-demo-arte{background:none;}.dia-tema-catalogo .dia-categorias{display:none !important;}.dia-ft{display:grid;grid-template-columns:250px minmax(0,1fr);gap:26px;align-items:start;}.dia-ft-lado{position:sticky;top:12px;display:flex;flex-direction:column;gap:14px;}.dia-ft-lado-topo{display:none;}.dia-ft-grupo{background:var(--_s);border:1px solid var(--_b);border-radius:calc(var(--_r) + 2px);padding:16px;}.dia-ft-grupo h4{margin:0 0 12px;font-family:var(--_ft);font-size:15px;font-weight:800;}.dia-ft-cats{display:flex;flex-direction:column;gap:2px;}.dia-ft-cat{display:flex;justify-content:space-between;align-items:center;gap:10px;background:none;border:none;color:var(--_t);font-family:inherit;font-size:14px;padding:9px 10px;border-radius:calc(var(--_r) - 4px);cursor:pointer;text-align:left;min-height:40px;}.dia-ft-cat small{font-size:12px;color:var(--_ts);background:color-mix(in srgb,var(--_t) 6%,transparent);border-radius:999px;padding:2px 8px;}.dia-ft-cat:hover{background:color-mix(in srgb,var(--_t) 5%,transparent);}.dia-ft-cat.dia-activo{background:color-mix(in srgb,var(--_p) 14%,transparent);font-weight:800;}.dia-ft-duplo{position:relative;height:28px;}.dia-ft-duplo::before{content:\\"\\";position:absolute;left:0;right:0;top:12px;height:4px;border-radius:4px;background:color-mix(in srgb,var(--_t) 12%,transparent);}.dia-ft-trilho{position:absolute;top:12px;height:4px;border-radius:4px;background:var(--_p);}.dia-ft-duplo input{position:absolute;left:0;top:4px;width:100%;margin:0;background:none;pointer-events:none;-webkit-appearance:none;appearance:none;height:20px;}.dia-ft-duplo input::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;width:20px;height:20px;border-radius:50%;background:var(--_f);border:3px solid var(--_p);cursor:pointer;position:relative;z-index:2;}.dia-ft-duplo input::-moz-range-thumb{pointer-events:auto;width:16px;height:16px;border-radius:50%;background:var(--_f);border:3px solid var(--_p);cursor:pointer;}.dia-ft-duplo input::-webkit-slider-runnable-track{background:none;}.dia-ft-duplo input::-moz-range-track{background:none;}.dia-ft-valores{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;color:var(--_ts);margin-top:6px;}.dia-ft-ver{display:flex;align-items:center;gap:10px;font-size:14px;padding:6px 0;cursor:pointer;min-height:36px;}.dia-ft-ver input{width:18px;height:18px;accent-color:var(--dia-primaria,currentColor);flex-shrink:0;}.dia-ft-limpar{background:none;border:1px dashed var(--_b);color:var(--_ts);border-radius:calc(var(--_r) - 4px);padding:11px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;}.dia-ft-ver-res{display:none;}.dia-ft-barra{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--_b);}.dia-ft-conta{font-size:13.5px;color:var(--_ts);font-weight:700;margin-right:auto;}.dia-ft-abrir{display:none;align-items:center;gap:8px;border:1px solid var(--_b);background:var(--_s);color:var(--_t);border-radius:999px;padding:10px 16px;font-weight:800;font-size:13.5px;cursor:pointer;font-family:inherit;min-height:42px;}.dia-ft-abrir svg{width:16px;height:16px;}.dia-ft-vista{display:flex;gap:4px;}.dia-ft-vista button{width:40px;height:40px;border-radius:10px;border:1px solid var(--_b);background:transparent;color:var(--_ts);cursor:pointer;display:flex;align-items:center;justify-content:center;}.dia-ft-vista button svg{width:17px;height:17px;}.dia-ft-vista button.dia-activo{background:var(--dia-primaria,currentColor);color:var(--dia-primaria-texto,var(--_f));border-color:transparent;}.dia-loja .dia-ft-grelha.dia-ft-em-lista{grid-template-columns:1fr;}.dia-ft-em-lista .dia-produto-card{flex-direction:row;align-items:stretch;}.dia-ft-em-lista .dia-produto-media{width:clamp(110px,22%,200px);flex-shrink:0;aspect-ratio:1/1;}.dia-ft-em-lista .dia-produto-corpo{justify-content:center;}.dia-tema-catalogo .dia-produto-card{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) + 6px);}.dia-tema-catalogo .dia-produto-media{margin:8px 8px 0;border-radius:calc(var(--_r) + 2px);background:color-mix(in srgb,var(--_t) 5%,transparent);}.dia-tema-catalogo .dia-ft-em-lista .dia-produto-media{margin:8px;}.dia-tema-catalogo .dia-produto-corpo{align-items:center;text-align:center;}.dia-tema-catalogo .dia-ft-em-lista .dia-produto-corpo{align-items:flex-start;text-align:left;}.dia-tema-catalogo .dia-produto-precos{padding-right:0;justify-content:center;}.dia-tema-catalogo .dia-ft-em-lista .dia-produto-precos{justify-content:flex-start;}.dia-tema-catalogo .dia-produto-preco{border:1.5px solid color-mix(in srgb,var(--_p) 60%,transparent);color:var(--_p);border-radius:999px;padding:4px 12px;font-size:15px;}.dia-tema-catalogo .dia-btn-add{top:16px;right:16px;bottom:auto;background:var(--_f);color:var(--_t);box-shadow:0 6px 16px rgba(0,0,0,.12);}.dia-ft-portal{display:none;}@media (max-width:1100px){.dia-ft{grid-template-columns:220px minmax(0,1fr);}}@media (max-width:860px){.dia-ft{grid-template-columns:1fr;}.dia-ft > .dia-ft-lado{display:none;}.dia-ft-abrir{display:inline-flex;}.dia-ft-barra .dia-ed-ordem > span{display:none;}.dia-ft-portal{display:block;position:fixed;inset:0;z-index:100001;}.dia-ft-fundo{position:absolute;inset:0;background:rgba(0,0,0,.45);opacity:0;transition:opacity .3s ease;}.dia-ft-portal .dia-ft-lado{position:absolute;left:0;right:0;bottom:0;top:auto;max-height:86vh;overflow-y:auto;background:var(--_f);color:var(--_t);padding:18px 16px 20px;border-radius:20px 20px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.3);transform:translateY(105%);transition:transform .35s cubic-bezier(.2,.8,.2,1);}.dia-ft-portal.dia-ft-aberto .dia-ft-lado{transform:none;}.dia-ft-portal.dia-ft-aberto .dia-ft-fundo{opacity:1;}.dia-ft-lado-topo{display:flex;justify-content:space-between;align-items:center;font-size:17px;}.dia-ft-fechar{width:38px;height:38px;border-radius:50%;border:none;background:color-mix(in srgb,var(--_t) 8%,transparent);color:var(--_t);display:flex;align-items:center;justify-content:center;cursor:pointer;}.dia-ft-fechar svg{width:16px;height:16px;}.dia-ft-ver-res{display:block;background:var(--dia-primaria,#111);color:var(--dia-primaria-texto,#fff);border:none;border-radius:calc(var(--_r) - 4px);padding:14px;font-weight:800;font-size:14.5px;cursor:pointer;font-family:inherit;}}.dia-vt{display:flex;flex-direction:column;gap:18px;}.dia-vt-palco{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.6fr) minmax(0,.8fr);align-items:center;gap:clamp(14px,3vw,40px);min-height:clamp(300px,36vw,460px);padding:clamp(10px,2vw,24px) 0;}.dia-vt-eti{font-family:var(--_ft);font-style:italic;font-size:clamp(22px,2.4vw,30px);color:var(--_t);display:block;margin-bottom:2px;}.dia-vt-texto h2{font-family:var(--_ft);font-weight:500;font-size:clamp(24px,2.8vw,38px);line-height:1.1;color:var(--_p);margin:0 0 12px;letter-spacing:-.01em;overflow-wrap:anywhere;}.dia-vt-texto p{font-size:14px;color:var(--_ts);line-height:1.55;margin:0 0 16px;}.dia-vt-ver{background:none;border:none;border-bottom:1.5px solid currentColor;color:var(--_t);font-weight:700;font-size:13px;padding:4px 0;cursor:pointer;font-family:inherit;letter-spacing:.04em;}.dia-vt-foto{background:none;border:none;padding:0;cursor:pointer;height:clamp(240px,30vw,400px);display:flex;align-items:center;justify-content:center;position:relative;width:100%;}.dia-vt-foto img{max-width:100%;max-height:100%;object-fit:contain;filter:drop-shadow(0 28px 30px rgba(0,0,0,.18));animation:dia-vt-entra .5s ease;}.dia-vt-foto .dia-demo-arte{background:none;}@keyframes dia-vt-entra{from{opacity:0;transform:translateX(18px);}to{opacity:1;transform:none;}}.dia-vt-preco{justify-self:end;display:flex;flex-direction:column;align-items:stretch;min-width:170px;}.dia-vt-nome{background:color-mix(in srgb,var(--_t) 90%,var(--_p));color:#fff;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;text-align:center;}.dia-vt-caixa{display:flex;align-items:stretch;background:var(--_s);border:1px solid var(--_b);}.dia-vt-caixa b{flex:1;padding:12px 14px;font-size:19px;font-weight:800;white-space:nowrap;}.dia-vt-add{width:48px;border:none;background:var(--dia-primaria,#111);color:var(--dia-primaria-texto,#fff);cursor:pointer;display:flex;align-items:center;justify-content:center;}.dia-vt-add svg{width:18px;height:18px;}.dia-vt-preco s{font-size:12.5px;color:var(--_ts);margin-top:6px;text-align:right;}.dia-vt-fila{display:flex;align-items:center;gap:10px;border-top:1px solid var(--_b);border-bottom:1px solid var(--_b);padding:16px 0;}.dia-vt-seta{width:40px;height:40px;flex-shrink:0;border:none;background:none;color:var(--_p);cursor:pointer;display:flex;align-items:center;justify-content:center;}.dia-vt-seta svg{width:22px;height:22px;}.dia-vt-minis{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;flex:1;scroll-snap-type:x mandatory;}.dia-vt-minis::-webkit-scrollbar{display:none;}.dia-vt-mini{flex:0 0 clamp(110px,15%,170px);display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:none;border-radius:var(--_r);padding:8px;cursor:pointer;color:var(--_ts);font-family:inherit;font-size:12.5px;scroll-snap-align:start;transition:background .2s ease;min-width:0;}.dia-vt-mini.dia-activo{background:color-mix(in srgb,var(--_p) 10%,transparent);color:var(--_t);font-weight:700;}.dia-vt-mini-img{position:relative;width:100%;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;}.dia-vt-mini-img img{max-width:100%;max-height:100%;object-fit:contain;}.dia-vt-mini > span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}.dia-vt-faixa{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);align-items:stretch;}.dia-vt-desde{background:color-mix(in srgb,var(--_t) 90%,var(--_p));color:#fff;padding:22px 24px;display:flex;flex-direction:column;gap:4px;}.dia-vt-desde span{font-weight:700;color:color-mix(in srgb,var(--_p) 45%,#fff);font-size:14px;}.dia-vt-desde b{font-size:clamp(26px,3vw,34px);font-weight:800;}.dia-vt-desde small{opacity:.7;font-size:12px;}.dia-vt-cats{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:18px 22px;background:var(--_s);border:1px solid var(--_b);border-left:none;}.dia-vt-cats > span{color:var(--_ts);font-size:14px;}.dia-vt-cat{border:1.5px solid var(--_b);background:var(--_f);color:var(--_t);border-radius:999px;padding:9px 15px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;}.dia-vt-cat:hover{border-color:var(--_p);}.dia-vt-tudo{margin-left:auto;background:none;border:none;color:var(--_p);font-weight:800;font-size:13.5px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;min-height:40px;}.dia-vt-tudo svg{width:15px;height:15px;}.dia-tema-vitrine .dia-produto-card{background:none;border:none;overflow:visible;}.dia-tema-vitrine .dia-produto-card:hover{box-shadow:none;}.dia-tema-vitrine .dia-produto-media{background:none;}.dia-tema-vitrine .dia-img-fundo{display:none;}.dia-tema-vitrine .dia-produto-corpo{align-items:center;text-align:center;}.dia-tema-vitrine .dia-produto-precos{padding-right:0;justify-content:center;}.dia-tema-vitrine .dia-produto-cat{display:none;}.dia-tema-vitrine .dia-btn-add{top:10px;right:10px;bottom:auto;border-radius:0;}.dia-tema-vitrine .dia-seccao-titulo{font-weight:500;font-size:clamp(20px,2.2vw,26px);}@media (max-width:860px){.dia-vt-palco{grid-template-columns:1fr 1fr;}.dia-vt-texto{grid-column:1/-1;}.dia-vt-preco{justify-self:stretch;align-self:center;min-width:0;}.dia-vt-faixa{grid-template-columns:1fr;}.dia-vt-cats{border-left:1px solid var(--_b);}}@media (max-width:560px){.dia-vt-palco{grid-template-columns:1fr;}.dia-vt-foto{height:240px;}.dia-vt-seta{display:none;}.dia-vt-mini{flex-basis:38%;}.dia-vt-tudo{margin-left:0;}}.dia-bento{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:minmax(170px,auto);gap:14px;}.dia-bt-grande{grid-column:span 2;grid-row:span 2;position:relative;border-radius:28px;overflow:hidden;background:linear-gradient(140deg,color-mix(in srgb,var(--_p) 22%,#fff),#FFE3D3);color:#1d1d1f;display:flex;align-items:flex-end;padding:clamp(20px,3vw,34px);isolation:isolate;min-height:clamp(320px,36vw,440px);}.dia-bt-poucos .dia-bt-grande{grid-row:span 1;}.dia-bt-foto{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;}.dia-bt-grande:has(.dia-bt-foto){color:#fff;}.dia-bt-grande:has(.dia-bt-foto)::after{content:\\"\\";position:absolute;inset:0;z-index:-1;background:linear-gradient(0deg,rgba(0,0,0,.6),rgba(0,0,0,0) 65%);}.dia-bt-bolha{position:absolute;width:62%;aspect-ratio:1;border-radius:50%;right:-14%;top:-18%;background:var(--_p);opacity:.85;z-index:-1;}.dia-bt-bolha.dia-b2{width:34%;right:auto;left:-8%;top:auto;bottom:24%;background:#7FD3C3;opacity:.7;}.dia-bt-eti{display:inline-block;background:#fff;color:#1d1d1f;border-radius:999px;padding:6px 12px;font-size:11.5px;font-weight:800;margin-bottom:12px;}.dia-bt-texto h2{font-family:var(--_ft);font-weight:800;font-size:clamp(28px,3.6vw,48px);line-height:1.02;letter-spacing:-.03em;margin:0 0 10px;overflow-wrap:anywhere;}.dia-bt-texto p{margin:0 0 18px;font-size:14.5px;opacity:.82;max-width:380px;}.dia-bt-btn{display:inline-flex;align-items:center;gap:8px;background:#1d1d1f;color:#fff;border:none;border-radius:999px;padding:13px 22px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;min-height:46px;}.dia-bt-btn svg{width:15px;height:15px;}.dia-bt-telha{position:relative;border:none;border-radius:28px;overflow:hidden;cursor:pointer;padding:16px;text-align:left;display:flex;flex-direction:column;justify-content:flex-end;font-family:inherit;color:#1d1d1f;min-height:170px;transition:transform .25s ease;}.dia-bt-telha:hover{transform:translateY(-3px);}.dia-bt-t1{grid-column:span 2;background:#DDF2EC;}.dia-bt-t2{background:#ECE6FF;}.dia-bt-t3{background:#FFF1C9;}.dia-bt-arte{position:absolute;left:10%;right:10%;top:10%;bottom:34%;display:flex;align-items:center;justify-content:center;}.dia-bt-t1 .dia-bt-arte{left:42%;right:8%;top:8%;bottom:8%;}.dia-bt-arte img{max-width:100%;max-height:100%;object-fit:contain;filter:drop-shadow(0 16px 20px rgba(0,0,0,.18));}.dia-bt-arte .dia-demo-arte{background:none;}.dia-bt-info{position:relative;display:flex;flex-direction:column;gap:2px;background:rgba(255,255,255,.78);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-radius:16px;padding:9px 12px;max-width:100%;}.dia-bt-t1 .dia-bt-info{max-width:52%;}.dia-bt-info b{font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.dia-bt-info small{font-size:13px;font-weight:800;color:#1d1d1f;opacity:.75;}.dia-cat-pilulas{display:flex;gap:10px;flex-wrap:wrap;}.dia-cat-pilula{display:inline-flex;align-items:center;gap:10px;background:var(--_s);border:1px solid var(--_b);border-radius:999px;padding:6px 16px 6px 6px;font-weight:800;font-size:14px;color:var(--_t);cursor:pointer;font-family:inherit;transition:transform .2s ease,border-color .2s ease;}.dia-cat-pilula:hover{transform:translateY(-2px);border-color:var(--_p);}.dia-cat-ava{width:38px;height:38px;border-radius:50%;overflow:hidden;background:color-mix(in srgb,var(--_p) 20%,#fff);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--_p);flex-shrink:0;}.dia-cat-ava img{width:100%;height:100%;object-fit:cover;}.dia-cat-pilula small{font-weight:700;color:var(--_ts);font-size:12px;}.dia-tema-bento .dia-produto-card{background:none;border:none;overflow:visible;}.dia-tema-bento .dia-produto-card:hover{box-shadow:none;}.dia-tema-bento .dia-produto-media{border-radius:26px;}.dia-tema-bento .dia-img-fundo{display:none;}.dia-tema-bento .dia-grelha > :nth-child(5n+1) .dia-produto-media,.dia-tema-bento .dia-fila > :nth-child(5n+1) .dia-produto-media{background:#FFE5D6;}.dia-tema-bento .dia-grelha > :nth-child(5n+2) .dia-produto-media,.dia-tema-bento .dia-fila > :nth-child(5n+2) .dia-produto-media{background:#DDF2EC;}.dia-tema-bento .dia-grelha > :nth-child(5n+3) .dia-produto-media,.dia-tema-bento .dia-fila > :nth-child(5n+3) .dia-produto-media{background:#ECE6FF;}.dia-tema-bento .dia-grelha > :nth-child(5n+4) .dia-produto-media,.dia-tema-bento .dia-fila > :nth-child(5n+4) .dia-produto-media{background:#FFF1C9;}.dia-tema-bento .dia-grelha > :nth-child(5n+5) .dia-produto-media,.dia-tema-bento .dia-fila > :nth-child(5n+5) .dia-produto-media{background:color-mix(in srgb,var(--_p) 16%,#fff);}.dia-tema-bento .dia-produto-img{padding:6%;}.dia-tema-bento .dia-produto-corpo{padding:12px 6px 4px;}.dia-tema-bento .dia-btn-add{border-radius:999px;}.dia-tema-bento .dia-seccao-titulo{font-size:clamp(22px,2.6vw,30px);}@media (max-width:860px){.dia-bento{grid-template-columns:1fr 1fr;}.dia-bt-grande{grid-column:1/-1;grid-row:auto;min-height:320px;}.dia-bt-t1{grid-column:1/-1;}}@media (max-width:560px){.dia-bt-telha{min-height:180px;border-radius:22px;}.dia-bt-grande{border-radius:22px;}.dia-bt-t1 .dia-bt-info{max-width:60%;}}",
+      ".dia-tema-fresco .dia-bloco{margin-bottom:34px;}.dia-tema-fresco .dia-seccao-titulo{font-size:clamp(20px,2.4vw,26px);}.dia-fr{position:relative;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:clamp(18px,4vw,48px);align-items:center;padding:clamp(22px,4vw,48px);border-radius:calc(var(--_r) + 14px);background:linear-gradient(135deg,color-mix(in srgb,var(--_p) 9%,var(--_f)) 0%,var(--_f) 70%);border:1px solid color-mix(in srgb,var(--_p) 14%,var(--_b));overflow:hidden;}.dia-fr::after{content:\\"\\";position:absolute;right:-12%;top:-30%;width:55%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--_p) 16%,transparent),transparent 65%);pointer-events:none;}.dia-fr-texto{position:relative;z-index:1;}.dia-fr-eti{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:color-mix(in srgb,var(--_p) 12%,transparent);color:var(--_p);font-size:12.5px;font-weight:800;letter-spacing:.02em;}.dia-fr-eti svg{width:14px;height:14px;}.dia-fr h2{font-family:var(--_ft);font-size:clamp(32px,5.2vw,62px);line-height:1.03;letter-spacing:-.03em;margin:16px 0 12px;color:var(--_t);}.dia-fr h2 em{font-style:normal;color:var(--_p);display:block;}.dia-fr p{color:var(--_ts);font-size:clamp(15px,1.5vw,17px);line-height:1.6;margin:0 0 22px;max-width:460px;}.dia-fr-btns{display:flex;flex-wrap:wrap;gap:10px;}.dia-fr-btn,.dia-fr-btn2{display:inline-flex;align-items:center;gap:9px;min-height:50px;padding:0 22px;border-radius:calc(var(--_r) - 2px);font:800 15px/1 inherit;font-family:inherit;cursor:pointer;border:none;}.dia-fr-btn{background:var(--_p);color:var(--_pt);box-shadow:0 14px 28px -14px color-mix(in srgb,var(--_p) 80%,transparent);}.dia-fr-btn2{background:var(--_f);color:var(--_t);box-shadow:inset 0 0 0 1px var(--_b);}.dia-fr-btn svg,.dia-fr-btn2 svg{width:16px;height:16px;}.dia-fr-vant{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:22px;}.dia-fr-vant span{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--_t);}.dia-fr-vant i{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--_p) 12%,var(--_f));color:var(--_p);}.dia-fr-vant svg{width:17px;height:17px;}.dia-fr-arte{position:relative;z-index:1;aspect-ratio:1/0.9;display:grid;place-items:center;}.dia-fr-circulo{position:absolute;width:86%;aspect-ratio:1;border-radius:50%;background:color-mix(in srgb,var(--_p) 15%,var(--_f));}.dia-fr-arte img{position:relative;max-width:82%;max-height:100%;object-fit:contain;filter:drop-shadow(0 24px 30px rgba(0,0,0,.18));}.dia-fr-foto .dia-fr-arte img{width:92%;height:92%;object-fit:cover;border-radius:calc(var(--_r) + 18px);max-width:none;}.dia-fr-arte .dia-demo-arte{position:relative;width:76%;aspect-ratio:1;border-radius:50%;}.dia-fr-selo{position:absolute;left:4%;top:8%;width:clamp(86px,12vw,112px);aspect-ratio:1;border-radius:50%;background:var(--_f);border:3px solid var(--_p);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;box-shadow:0 14px 30px -12px rgba(0,0,0,.25);color:var(--_t);transform:rotate(-8deg);}.dia-fr-selo b{font-family:var(--_ft);font-size:clamp(24px,3.2vw,32px);color:var(--_p);margin:3px 0;}.dia-fr-selo small{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;}.dia-tema-fresco .dia-produto-card{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) + 2px);padding:10px;}.dia-tema-fresco .dia-produto-media{border-radius:var(--_r);background:color-mix(in srgb,var(--_p) 6%,var(--_f));}.dia-tema-fresco .dia-produto-img{object-fit:contain;padding:8%;}.dia-tema-fresco .dia-produto-corpo{padding:10px 4px 8px;gap:4px;}.dia-tema-fresco .dia-produto-nome{font-size:14px;font-weight:700;font-family:inherit;}.dia-tema-fresco .dia-produto-preco{color:var(--_p);font-size:17px;}.dia-tema-fresco .dia-produto-precos{padding-right:0;}.dia-tema-fresco .dia-badge{background:var(--_p);color:var(--_pt);border-radius:8px;}.dia-tema-fresco .dia-btn-add{position:static;width:auto;height:42px;margin:2px 0 0;border-radius:calc(var(--_r) - 4px);gap:7px;font-weight:800;font-size:13.5px;font-family:inherit;box-shadow:none;}.dia-tema-fresco .dia-btn-add:hover{transform:none;filter:brightness(1.08);}.dia-tema-fresco .dia-btn-add svg{width:16px;height:16px;}.dia-tema-fresco .dia-add-txt{display:inline;}.dia-tema-fresco .dia-cat-cartao{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) + 2px);}.dia-tema-sabor .dia-bloco{margin-bottom:38px;}.dia-sb{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(18px,4vw,40px);align-items:center;padding:clamp(26px,5vw,60px);border-radius:calc(var(--_r) + 18px);background:radial-gradient(120% 120% at 85% 20%,color-mix(in srgb,var(--_p) 38%,#1a0f08) 0%,#140b06 55%,#0d0704 100%);color:#fff;overflow:hidden;}.dia-sb::before{content:\\"\\";position:absolute;inset:auto -10% -40% auto;width:60%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--_p) 40%,transparent),transparent 60%);opacity:.6;}.dia-sb-texto{position:relative;z-index:1;}.dia-sb-eti{display:inline-flex;align-items:center;gap:10px;font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.75);}.dia-sb-eti i{width:5px;height:5px;border-radius:50%;background:var(--_p);display:inline-block;}.dia-sb h2{font-family:var(--_ft);font-size:clamp(34px,5.6vw,66px);line-height:1;letter-spacing:-.02em;margin:16px 0 14px;color:#fff;}.dia-sb h2 em{font-family:\\"Brush Script MT\\",\\"Segoe Script\\",\\"Lucida Handwriting\\",cursive;font-weight:400;font-style:normal;color:var(--_p);font-size:1.12em;letter-spacing:0;}.dia-sb p{color:rgba(255,255,255,.78);font-size:clamp(15px,1.5vw,17px);line-height:1.6;margin:0 0 24px;max-width:440px;}.dia-sb-btn{display:inline-flex;align-items:center;gap:9px;min-height:52px;padding:0 26px;border-radius:999px;background:var(--_p);color:var(--_pt);border:none;font:800 15px/1 inherit;font-family:inherit;cursor:pointer;box-shadow:0 16px 30px -12px color-mix(in srgb,var(--_p) 90%,transparent);}.dia-sb-btn svg{width:16px;height:16px;}.dia-sb-garantias{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:26px;padding-top:20px;border-top:1px solid rgba(255,255,255,.14);}.dia-sb-garantias span{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:rgba(255,255,255,.88);}.dia-sb-garantias svg{width:18px;height:18px;color:var(--_p);}.dia-sb-arte{position:relative;z-index:1;aspect-ratio:1;display:grid;place-items:center;}.dia-sb-anel{position:absolute;width:92%;aspect-ratio:1;border-radius:50%;border:1.5px dashed color-mix(in srgb,var(--_p) 60%,transparent);animation:dia-sb-gira 40s linear infinite;}@keyframes dia-sb-gira{to{transform:rotate(360deg);}}.dia-sb-prato{position:relative;width:78%;aspect-ratio:1;border-radius:50%;overflow:hidden;box-shadow:0 30px 60px -20px rgba(0,0,0,.7);background:rgba(255,255,255,.06);}.dia-sb-prato img{width:100%;height:100%;object-fit:cover;}.dia-sb-prato .dia-demo-arte{width:100%;height:100%;}.dia-sb-preco{position:absolute;left:0;bottom:12%;display:flex;flex-direction:column;align-items:flex-start;gap:3px;max-width:62%;padding:12px 16px;border-radius:16px;background:#fff;color:#1a1a1a;border:none;cursor:pointer;text-align:left;font-family:inherit;box-shadow:0 18px 40px -14px rgba(0,0,0,.6);}.dia-sb-preco small{font-size:12px;font-weight:700;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}.dia-sb-preco b{font-family:var(--_ft);font-size:20px;color:var(--_p);}.dia-sb-nota{position:absolute;right:4%;top:10%;display:inline-flex;align-items:center;gap:6px;padding:9px 13px;border-radius:999px;background:rgba(255,255,255,.95);color:#1a1a1a;font-weight:800;font-size:14px;box-shadow:0 12px 30px -12px rgba(0,0,0,.5);}.dia-sb-nota svg{width:15px;height:15px;color:#F5A623;}.dia-tema-sabor .dia-produto-card{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) + 4px);overflow:hidden;box-shadow:0 18px 40px -30px rgba(0,0,0,.35);}.dia-tema-sabor .dia-produto-media{border-radius:0;}.dia-tema-sabor .dia-produto-corpo{padding:14px 14px 12px;gap:5px;}.dia-tema-sabor .dia-produto-nome{font-size:15.5px;font-weight:800;}.dia-tema-sabor .dia-produto-preco{font-size:17px;}.dia-tema-sabor .dia-btn-add{position:static;width:calc(100% - 28px);height:42px;margin:0 14px 14px;border-radius:999px;gap:7px;font-weight:800;font-size:13.5px;font-family:inherit;box-shadow:none;}.dia-tema-sabor .dia-btn-add:hover{transform:none;filter:brightness(1.08);}.dia-tema-sabor .dia-btn-add svg{width:16px;height:16px;}.dia-tema-sabor .dia-add-txt{display:inline;}.dia-tema-sabor .dia-cat-cartao{border-radius:calc(var(--_r) + 6px);background:color-mix(in srgb,var(--_p) 10%,var(--_f));border:none;}@media (max-width:760px){.dia-fr,.dia-sb{grid-template-columns:1fr;}.dia-fr-arte{order:-1;max-width:340px;width:100%;margin:0 auto;}.dia-sb-arte{max-width:320px;width:100%;margin:6px auto 0;}.dia-fr h2 em{display:inline;}.dia-fr-selo{left:0;top:2%;}.dia-sb-preco{left:-4px;}}@media (prefers-reduced-motion:reduce){.dia-sb-anel{animation:none;}}",
+      ".dia-ver-loja{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 24px;border:1px solid var(--_b);border-radius:calc(var(--_r) + 6px);background:color-mix(in srgb,var(--_t) 3%,var(--_f));color:var(--_t);text-decoration:none;transition:border-color .2s,transform .2s}.dia-ver-loja:hover{border-color:var(--_p);transform:translateY(-2px)}.dia-ver-loja b{display:block;font-family:var(--_ft);font-size:clamp(18px,2.4vw,24px);letter-spacing:-.01em}.dia-ver-loja small{display:block;color:var(--_ts);font-size:14px;margin-top:4px}.dia-ver-loja i{flex:0 0 52px;height:52px;border-radius:50%;display:grid;place-items:center;background:var(--_p);color:var(--_pt)}.dia-ver-loja i svg{width:20px;height:20px}.dia-migalhas{display:flex;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--_ts);margin:0 0 14px}.dia-migalhas a{color:inherit;text-decoration:none}.dia-migalhas a:hover{color:var(--_p)}.dia-pagina-produto{background:var(--_f);border:1px solid var(--_b);border-radius:calc(var(--_r) + 8px);overflow:hidden}@media (min-width:900px){.dia-pagina-produto .dia-galeria{position:sticky;top:84px;align-self:start}}.dia-loja.dia-loja-pagina-loja .dia-categorias{display:none!important}.dia-pagina-produto.dia-detalhe{max-width:none}.dia-btn-auto{display:inline-flex;width:auto;margin-top:14px;padding:0 22px;text-decoration:none;align-items:center}@media (min-width:900px){html.dia-carrinho-no-cabecalho .dia-carrinho-botao{display:none!important}}[data-dia-carrinho-contagem][data-vazio=\\"1\\"]{opacity:.6}",
       '@media (prefers-reduced-motion:reduce){.dia-loja *,.dia-modal,.dia-overlay,.dia-painel-carrinho,.dia-carrinho-botao,.dia-toast{animation:none !important;transition:none !important;}}'
     ];
     var style = document.createElement('style');
@@ -2976,16 +3032,18 @@ const LOJA_CART_JS = `/*
   // ======================================================
   function montarUI(){
     var alvo = $('daniel-ia-produtos');
-    if (!alvo) {
+    if (!alvo && !MULTI) {
       console.error('Daniel IA: falta uma div com id="daniel-ia-produtos" nesta página - os produtos não têm onde aparecer.');
       return false;
     }
-    var esqueletos = '';
-    for (var i = 0; i < 8; i++) esqueletos += '<div class="dia-esqueleto"></div>';
-    alvo.innerHTML = '<div class="dia-loja" id="dia-loja">'
-      + '<div id="dia-montra"><div class="dia-grelha">' + esqueletos + '</div></div>'
-      + '<div id="dia-resultados"></div>'
-      + '</div>';
+    if (alvo) {
+      var esqueletos = '';
+      for (var i = 0; i < 8; i++) esqueletos += '<div class="dia-esqueleto"></div>';
+      alvo.innerHTML = '<div class="dia-loja" id="dia-loja">'
+        + '<div id="dia-montra"><div class="dia-grelha">' + esqueletos + '</div></div>'
+        + '<div id="dia-resultados"></div>'
+        + '</div>';
+    }
 
     var botao = document.createElement('button');
     botao.id = 'dia-carrinho-botao';
@@ -3017,6 +3075,12 @@ const LOJA_CART_JS = `/*
     document.body.appendChild(t);
 
     botao.addEventListener('click', abrirPainel);
+    // Carrinho desenhado no cabeçalho do site (data-dia-carrinho).
+    var noCabecalho = document.querySelectorAll('[data-dia-carrinho]');
+    if (noCabecalho.length) {
+      document.documentElement.classList.add('dia-carrinho-no-cabecalho');
+      cada(noCabecalho, function(b){ b.addEventListener('click', function(e){ e.preventDefault(); abrirPainel(); }); });
+    }
     fundo.addEventListener('click', fecharPainel);
     $('dia-fechar-painel').addEventListener('click', fecharPainel);
     $('dia-btn-finalizar').addEventListener('click', function(){ fecharPainel(); abrirCheckout(); });
@@ -3051,6 +3115,21 @@ const LOJA_CART_JS = `/*
     return /^(suave|moldura|minimal)$/.test(v || '') ? v : '';
   }
   function montra(){
+    if (NAVEGAR && PAGINA === 'loja') {
+      var mm = loja.montra || {};
+      return { blocos: [{ id: 'ft', tipo: 'filtros' }, { id: 'vistos', tipo: 'vistos' }], estilo: { cartao: (mm.estilo && mm.estilo.cartao) || estiloSugerido() || 'suave', colunas: 4 }, tema: temaLoja(), padrao: true };
+    }
+    var base = montraBase();
+    if (NAVEGAR && produtos.length > LOJA_PEQUENA) {
+      var blocos = base.blocos.filter(function(b){ return b && ['catalogo', 'colecao', 'filtros'].indexOf(b.tipo) === -1; });
+      var iv = -1;
+      blocos.forEach(function(b, i){ if (b.tipo === 'vistos' && iv < 0) iv = i; });
+      blocos.splice(iv < 0 ? blocos.length : iv, 0, { id: 'verloja', tipo: 'ver_loja' });
+      base = { blocos: blocos, estilo: base.estilo, tema: base.tema, padrao: base.padrao };
+    }
+    return base;
+  }
+  function montraBase(){
     var m = (loja.montra && loja.montra.blocos && loja.montra.blocos.length) ? loja.montra : MONTRA_PADRAO;
     var padrao = (m === MONTRA_PADRAO || !!m.padrao);
     var tema = temaLoja();
@@ -3380,6 +3459,7 @@ const LOJA_CART_JS = `/*
   function ligarCapaTema(el){
     cada(el.querySelectorAll('[data-ir-catalogo]'), function(b){
       b.addEventListener('click', function(){
+        if (NAVEGAR && PAGINA !== 'loja') { irParaPagina('loja.html'); return; }
         var alvo = document.querySelector('.dia-bloco-colecao, .dia-bloco-fila, .dia-bloco-banda, .dia-bloco-catalogo') || $('dia-montra');
         alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
@@ -3462,7 +3542,7 @@ const LOJA_CART_JS = `/*
 
   // Categorias no formato de cada tema
   function categoriasTema(cats, el){
-    var formato = { mercado: 'circulos', tech: 'icones', moda: 'faixa', editorial: 'cartoes', bento: 'pilulas', vitrine: 'cartoes', catalogo: 'cartoes' }[temaActual] || 'circulos';
+    var formato = { mercado: 'circulos', tech: 'icones', moda: 'faixa', editorial: 'cartoes', bento: 'pilulas', vitrine: 'cartoes', catalogo: 'cartoes', fresco: 'cartoes', sabor: 'cartoes' }[temaActual] || 'circulos';
     var corpo;
     if (formato === 'pilulas') {
       corpo = '<div class="dia-seccao-topo"><h3 class="dia-seccao-titulo">' + esc(tx('Compra por categoria')) + '</h3></div><div class="dia-cat-pilulas">' + cats.map(function(c){
@@ -3708,6 +3788,80 @@ const LOJA_CART_JS = `/*
   };
 
   // Catálogo com filtros ao lado (categorias, preço, avaliação, promoções, stock)
+  // ======================================================
+  // Mais 2 estilos (1.60.0): fresco (mercearia, supermercado, orgânicos)
+  // e sabor (restaurante, comida e entregas)
+  // ======================================================
+  TEMAS.push('fresco', 'sabor');
+  MONTRAS_TEMA.fresco = { colunas: 5, blocos: [
+    { id: 'capa', tipo: 'capa' }, { id: 'cats', tipo: 'categorias' }, { id: 'promo', tipo: 'fila', fonte: 'promocoes', titulo: tx('Melhores ofertas para ti') },
+    { id: 'dest', tipo: 'fila', fonte: 'destaques' }, { id: 'cat', tipo: 'catalogo' }, { id: 'vistos', tipo: 'vistos' }
+  ] };
+  MONTRAS_TEMA.sabor = { colunas: 4, blocos: [
+    { id: 'capa', tipo: 'capa' }, { id: 'cats', tipo: 'categorias' }, { id: 'vend', tipo: 'fila', fonte: 'mais_vendidos', titulo: tx('Os mais pedidos') },
+    { id: 'cat', tipo: 'catalogo' }, { id: 'vistos', tipo: 'vistos' }
+  ] };
+  var IC3 = {
+    entrega: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',
+    etiqueta: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7" cy="7" r="1.5"/></svg>',
+    escudo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+    folha: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 4 13c0-6 7-10 16-10 0 9-4 16-10 16"/><path d="M4 20c4-4 7-7 12-11"/></svg>'
+  };
+  function tituloEmDestaque(t, ultimaSo){
+    var p = String(t || '').trim().split(/\\s+/);
+    if (p.length < 2) return esc(t);
+    var corte = ultimaSo ? p.length - 1 : Math.ceil(p.length / 2);
+    return esc(p.slice(0, corte).join(' ')) + ' <em>' + esc(p.slice(corte).join(' ')) + '</em>';
+  }
+  function irParaOfertas(){
+    var alvo = document.querySelector('.dia-bloco-fila') || document.querySelector('.dia-bloco-catalogo');
+    if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Fresco: capa dividida com destaque de cor, selo de desconto e 3 vantagens
+  CAPAS_TEMA.fresco = function(el){
+    var d = dadosCapa();
+    var promo = maiorDesconto();
+    var img = d.imagem || (d.produto && imagemDe(d.produto)) || '';
+    el.innerHTML = '<div class="dia-fr' + (d.imagem ? ' dia-fr-foto' : '') + '">'
+      + '<div class="dia-fr-texto"><span class="dia-fr-eti">' + IC3.folha + esc(loja.nome || tx('Novidades')) + '</span>'
+      + '<h2>' + tituloEmDestaque(d.titulo) + '</h2><p>' + esc(d.sub) + '</p>'
+      + '<div class="dia-fr-btns"><button class="dia-fr-btn" data-ir-catalogo>' + esc(d.botao) + ' ' + ICONES.seta + '</button>'
+      + (promo ? '<button class="dia-fr-btn2" data-ir-ofertas>' + ICONES.estrela + esc(tx('Ver ofertas')) + '</button>' : '') + '</div>'
+      + '<div class="dia-fr-vant">'
+      + [[IC3.entrega, tx('Entrega rápida')], [IC3.etiqueta, tx('Bons preços')], [IC3.escudo, tx('Qualidade garantida')]].map(function(v){ return '<span><i>' + v[0] + '</i>' + esc(v[1]) + '</span>'; }).join('')
+      + '</div></div>'
+      + '<div class="dia-fr-arte"><span class="dia-fr-circulo"></span>' + (img ? '<img src="' + esc(img) + '" alt="">' : arteDe('', 2))
+      + (promo ? '<span class="dia-fr-selo"><small>' + esc(tx('Até')) + '</small><b>' + promo + '%</b><small>OFF</small></span>' : '') + '</div>'
+      + '</div>';
+    ligarCapaTema(el);
+    var o = el.querySelector('[data-ir-ofertas]');
+    if (o) o.addEventListener('click', irParaOfertas);
+  };
+
+  // Sabor: capa escura e quente, palavra em letra de destaque, prato em grande com cartão de preço
+  CAPAS_TEMA.sabor = function(el){
+    var d = dadosCapa();
+    var p = d.produto;
+    var img = d.imagem || (p && imagemDe(p)) || '';
+    var s = (loja.capa || [])[0] || {};
+    var avaliados = produtos.filter(function(x){ return x.avaliacao && x.avaliacao.total; });
+    var media = avaliados.length ? avaliados.reduce(function(t, x){ return t + x.avaliacao.media; }, 0) / avaliados.length : 0;
+    el.innerHTML = '<div class="dia-sb">'
+      + '<div class="dia-sb-texto"><span class="dia-sb-eti">' + esc(tx('Fresco')) + ' <i></i> ' + esc(tx('Saboroso')) + ' <i></i> ' + esc(tx('Rápido')) + '</span>'
+      + '<h2>' + tituloEmDestaque(d.titulo, true) + '</h2><p>' + esc(d.sub) + '</p>'
+      + '<button class="dia-sb-btn" data-ir-catalogo>' + esc(s.botao || tx('Encomendar agora')) + ' ' + ICONES.seta + '</button>'
+      + '<div class="dia-sb-garantias">' + [[IC3.folha, tx('Ingredientes frescos')], [IC3.entrega, tx('Entrega rápida')], [IC3.escudo, tx('Pagamento seguro')]].map(function(v){ return '<span>' + v[0] + esc(v[1]) + '</span>'; }).join('') + '</div></div>'
+      + '<div class="dia-sb-arte"><span class="dia-sb-anel"></span><span class="dia-sb-prato">' + (img ? '<img src="' + esc(img) + '" alt="">' : arteDe('', 3)) + '</span>'
+      + (p ? '<button class="dia-sb-preco" data-accao="prod" data-valor="' + esc(p.id) + '"><small>' + esc(p.nome) + '</small><b>' + mzn(precoMinimo(p)) + '</b></button>' : '')
+      + (media ? '<span class="dia-sb-nota">' + ICONES.estrela + media.toLocaleString(DIA_LOCALE, { maximumFractionDigits: 1 }) + '</span>' : '')
+      + '</div></div>';
+    ligarCapaTema(el);
+  };
+  RENDER.ver_loja = function(b, el){
+    if (!produtos.length) return false;
+    el.innerHTML = '<a class="dia-ver-loja" href="loja.html"><span><b>' + esc(tx('Ver todos os produtos')) + '</b><small>' + esc(tx('{n} produtos, com filtros por categoria e preço', { n: produtos.length })) + '</small></span><i>' + ICONES.seta + '</i></a>';
+  };
   RENDER.filtros = function(b, el){
     if (!produtos.length) {
       el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>' + tx('Ainda não há produtos à venda aqui.') + '</div></div>';
@@ -3716,7 +3870,10 @@ const LOJA_CART_JS = `/*
     var cats = categorias();
     var precos = produtos.map(precoMinimo);
     var pMin = Math.floor(Math.min.apply(null, precos)), pMax = Math.ceil(Math.max.apply(null, precos));
-    var est = { cat: '', de: pMin, ate: pMax, estrelas: false, promo: false, stock: false, ordem: 'destaques', lista: false, limite: 12 };
+    var catUrl = (NAVEGAR && PAGINA === 'loja') ? paramUrl('cat').toLowerCase() : '';
+    var catInicial = '';
+    cats.forEach(function(c){ if (catUrl && String(c.nome).toLowerCase() === catUrl) catInicial = c.nome; });
+    var est = { cat: catInicial, de: pMin, ate: pMax, estrelas: false, promo: false, stock: false, ordem: 'destaques', lista: false, limite: 12 };
     var temAval = produtos.some(function(p){ return p.avaliacao && p.avaliacao.total; });
     var temPromo = produtos.some(function(p){ return desconto(p) > 0; });
     var ordens = [['destaques', tx('Em destaque')], ['recentes', tx('Mais recentes')], ['preco_asc', tx('Preço mais baixo')], ['preco_desc', tx('Preço mais alto')]];
@@ -3834,13 +3991,14 @@ const LOJA_CART_JS = `/*
     temporizadores = [];
     mostrados = {};
     marcarSelo();
+    if (NAVEGAR && PAGINA === 'produto') { renderPaginaProduto(); return; }
     var m = montra();
     var raiz = $('dia-loja');
     if (!raiz) return;
     temaActual = m.tema || '';
     montraEhPadrao = !!m.padrao;
     var estilo = m.estilo || {};
-    raiz.className = 'dia-loja dia-cartao-' + (estilo.cartao || 'suave') + ' dia-cols-' + (estilo.colunas || 4) + (temaActual ? ' dia-tema-' + temaActual : '') + (filtrando() ? ' dia-filtrando' : '');
+    raiz.className = 'dia-loja dia-cartao-' + (estilo.cartao || 'suave') + ' dia-cols-' + (estilo.colunas || 4) + (temaActual ? ' dia-tema-' + temaActual : '') + (filtrando() ? ' dia-filtrando' : '') + (NAVEGAR ? ' dia-loja-pagina-' + PAGINA : '');
     var el = $('dia-montra');
     el.innerHTML = '';
     if (PREVIA && produtos.length && produtos[0].demo) {
@@ -3904,6 +4062,7 @@ const LOJA_CART_JS = `/*
     });
   }
   function filtrarCategoria(c){
+    if (NAVEGAR && PAGINA !== 'loja' && c) { irParaPagina('loja.html', { cat: c }); return; }
     filtro.categoria = c || '';
     aplicarFiltro();
     var raiz = $('dia-loja');
@@ -4021,6 +4180,11 @@ const LOJA_CART_JS = `/*
   // Janelas (produto e checkout)
   // ======================================================
   function abrirJanela(html, classeExtra){
+    if (EM_PAGINA_PRODUTO) {
+      var aqui = $('dia-montra');
+      aqui.innerHTML = '<div class="dia-pagina-produto ' + (classeExtra || '') + '">' + html + '</div>';
+      return aqui.firstChild;
+    }
     fecharJanela();
     var overlay = document.createElement('div');
     overlay.className = 'dia-overlay';
@@ -4041,6 +4205,32 @@ const LOJA_CART_JS = `/*
 
   // ---- Página do produto ----
   function abrirProduto(id){
+    if (NAVEGAR && !EM_PAGINA_PRODUTO) { irParaPagina('produto.html', { id: id }); return; }
+    return abrirProdutoJanela(id);
+  }
+  function renderPaginaProduto(){
+    var raiz = $('dia-loja');
+    if (!raiz) return;
+    var tema = temaLoja();
+    raiz.className = 'dia-loja dia-loja-pagina-produto' + (tema ? ' dia-tema-' + tema : '');
+    var el = $('dia-montra');
+    var id = paramUrl('id');
+    var p = id ? produtoPorId(id) : null;
+    if (!p) {
+      el.innerHTML = '<div class="dia-vazio">' + ICONES.caixa + '<div>' + esc(tx('Este produto já não está disponível.')) + '</div><a class="dia-btn-principal dia-btn-auto" href="loja.html">' + esc(tx('Ver todos os produtos')) + '</a></div>';
+      return;
+    }
+    EM_PAGINA_PRODUTO = true;
+    try { abrirProdutoJanela(id); } finally { EM_PAGINA_PRODUTO = false; }
+    var mig = document.createElement('nav');
+    mig.className = 'dia-migalhas';
+    mig.setAttribute('aria-label', 'breadcrumb');
+    mig.innerHTML = '<a href="index.html">' + esc(tx('Início')) + '</a><span>/</span><a href="loja.html">' + esc(tx('Loja')) + '</a>'
+      + (p.categoria ? '<span>/</span><a href="loja.html?cat=' + encodeURIComponent(p.categoria) + '">' + esc(p.categoria) + '</a>' : '');
+    el.insertBefore(mig, el.firstChild);
+    try { document.title = p.nome + (loja.nome ? ' · ' + loja.nome : ''); } catch (e) {}
+  }
+  function abrirProdutoJanela(id){
     var p = produtoPorId(id);
     if (!p) return;
     marcarVisto(id);
@@ -4239,6 +4429,7 @@ const LOJA_CART_JS = `/*
     var contagem = itens.reduce(function(t, i){ return t + i.quantidade; }, 0);
     var elC = $('dia-carrinho-contagem');
     if (elC) elC.textContent = contagem;
+    cada(document.querySelectorAll('[data-dia-carrinho-contagem]'), function(x){ x.textContent = contagem; x.setAttribute('data-vazio', contagem ? '0' : '1'); });
     var cont = $('dia-itens-carrinho');
     if (!cont) return;
     var total = 0;
@@ -5388,6 +5579,7 @@ const CONTACTO_FORM_JS = `/*
       + '.dic-abrir{display:inline-flex;align-items:center;gap:8px;background:var(--dia-primaria,transparent);color:var(--dia-primaria-texto,currentColor);border:none;border-radius:999px;padding:11px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;min-height:44px;box-shadow:inset 0 0 0 1.5px var(--_p);transition:filter .15s ease;}'
       + '.dic-abrir:hover{filter:brightness(1.1);}'
       + '.dic-aberta .dic-abrir{background:transparent;color:var(--_t);box-shadow:inset 0 0 0 1px var(--_b);}'
+      + '.dic-pagina .dic-abrir{display:none;}.dic-pagina{padding:clamp(18px,3vw,28px);}.dic-pagina .dic-txt b{font-size:18px;}'
       + '#dic-form{display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--_b);}'
       + '.dic-aberta #dic-form{display:grid;}'
       + '.dic-input,.dic-textarea{width:100%;background:color-mix(in srgb,currentColor 4%,transparent);border:1px solid var(--_b);border-radius:calc(var(--_r) - 4px);padding:11px 13px;color:var(--_t);font-size:16px;font-family:inherit;outline:none;transition:border-color .15s,box-shadow .15s;}'
@@ -5437,6 +5629,12 @@ const CONTACTO_FORM_JS = `/*
       abrir.textContent = aberta ? tx('Fechar') : tx('Enviar mensagem');
       if (aberta) document.getElementById('dic-nome').focus();
     });
+    // Página de contacto (sites com várias páginas): o formulário já vem aberto.
+    var meta = document.querySelector('meta[name="daniel-ia-pagina"]');
+    if ((meta && meta.getAttribute('content') === 'contacto') || alvo.hasAttribute('data-aberto')) {
+      caixa.classList.add('dic-aberta', 'dic-pagina');
+      document.getElementById('dic-mensagem').setAttribute('rows', '6');
+    }
     return document.getElementById('dic-form');
   }
 
@@ -5588,6 +5786,9 @@ app.post('/generate', async (req, res) => {
     }
     // Imagem de referência (opcional): criar parecido com ela.
     const referencia_data_url = req.body.referencia_data_url ? String(req.body.referencia_data_url) : '';
+    // Quiz antes do checkout (só lojas e páginas de venda).
+    const quizPedido = (tipo === 'Checkout' || tipo === 'E-commerce') && req.body.quiz && req.body.quiz.ativo === true
+      ? { descricao: textoCurto(req.body.quiz.descricao, 800) } : null;
     if (referencia_data_url && !referenciaValida(referencia_data_url)) {
       return res.json({ status: 'error', message: 'A imagem de referência não é válida. Usa um JPG, PNG ou WEBP com menos de 6 MB.' });
     }
@@ -5647,11 +5848,11 @@ app.post('/generate', async (req, res) => {
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
     if (variantes === 3) {
-      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma })
+      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua })
         .catch(erro => console.error('Erro em processarVariantes:', erro));
       return;
     }
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma })
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
@@ -5666,17 +5867,33 @@ app.post('/generate', async (req, res) => {
 const filaVariantes = new Map();
 function guardarVariantes(siteId, estado) {
   const anterior = filaVariantes.get(siteId) || Promise.resolve();
-  const proximo = anterior.then(() => bubblePatch('site', siteId, { 'Variantes Json': JSON.stringify(estado) }))
+  const proximo = anterior.catch(() => {}).then(async () => {
+    // Junta o que outras partes já escreveram (versão escolhida, páginas).
+    const site = await bubbleGet('site', siteId).catch(() => null);
+    const actual = lerJsonSeguro(site && site['Variantes Json'], null);
+    const final = Object.assign({}, estado);
+    if (actual && actual.slug === estado.slug) {
+      if (actual.escolhida) final.escolhida = actual.escolhida;
+      if (actual.cobrado) final.cobrado = true;
+      if (actual.paginas) final.paginas = actual.paginas;
+    }
+    return bubblePatch('site', siteId, { 'Variantes Json': JSON.stringify(final) });
+  })
     .catch(erro => console.error('Não foi possível guardar as variantes:', erro.message || erro));
   filaVariantes.set(siteId, proximo);
   return proximo;
 }
 
-async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente }) {
+async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente, quiz, pago }) {
   const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const comReferencia = !!referencia_data_url;
   const direcoes = comReferencia ? direcoesDaReferencia(tipo, null) : escolherDirecoes(tipo);
   let tokensReferencia = 0;
+  // Mudar de layout: reaproveita as páginas, as fotos e o quiz do site.
+  const siteAntes = manterSite ? await bubbleGet('site', siteId).catch(() => null) : null;
+  const anterior = siteAntes ? (lerJsonSeguro(siteAntes['Variantes Json'], {}) || {}) : null;
+  const quizAntes = siteAntes ? quizDoSite(siteAntes) : null;
+  let quizAtivo = !!(quizAntes && quizAntes.ativo);
   const estado = {
     slug, logo: logoExistente || '', generation_id: generationId, escolhida: null, inicio: new Date().toISOString(),
     modo: manterSite ? 'mudar' : 'criar', cobrado: false,
@@ -5686,6 +5903,8 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
     }))
   };
   if (comReferencia) estado.referencia = { estado: 'a analisar', resumo: '' };
+  if (anterior && anterior.paginas) estado.paginas = anterior.paginas;
+  estado.preparacao = 'a preparar';
   try {
     // Logótipo e imagens: carregados uma vez só, para as 3 versões.
     if (logo_data_url) {
@@ -5708,23 +5927,48 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
     }
     await guardarVariantes(siteId, estado);
 
-    // Imagem de referência: estudada uma vez só, antes das 3 versões.
-    if (comReferencia) {
-      let analise;
-      try {
-        const r = await analisarReferencia(referencia_data_url, tipo);
-        analise = r.analise; tokensReferencia = r.tokens || 0;
-      } catch (erro) {
-        console.error('Não foi possível estudar a imagem de referência:', erro.message || erro);
-        analise = analiseReferenciaVazia(tipo);
+    // Preparação, em paralelo e uma vez só para as 3 versões: a imagem de
+    // referência, o plano das páginas, as fotografias e o quiz.
+    const tarefaReferencia = comReferencia
+      ? analisarReferencia(referencia_data_url, tipo).catch(erro => { console.error('Não foi possível estudar a imagem de referência:', erro.message || erro); return null; })
+      : Promise.resolve(null);
+    const tarefaPlano = (async () => {
+      if (anterior && Array.isArray(anterior.plano_paginas) && anterior.plano_paginas.length > 1) {
+        return { paginas: anterior.plano_paginas, fotos: anterior.fotos || [], temas: anterior.temas_sugeridos || [], tokens: 0 };
       }
+      const plan = await planearSite({ tipo, nome, prompt, idioma, pago: pago !== false, comFotos: true });
+      const fts = await prepararFotos({ owner, slug, pedidos: plan.fotos });
+      return { paginas: plan.paginas, fotos: fts.fotos, temas: plan.temas || [], tokens: (plan.tokens || 0) + (fts.tokens || 0) };
+    })().catch(erro => { console.error('Plano e fotos falharam:', erro.message || erro); return { paginas: [], fotos: [], tokens: 0 }; });
+    const tarefaQuiz = (quiz && !manterSite)
+      ? gerarQuizIA({ nome, tipo, prompt, descricao: quiz.descricao, idioma })
+        .then(r => guardarQuizNoSite(siteId, r.quiz).then(() => r))
+        .catch(erro => { console.error('O quiz não foi criado:', erro.message || erro); return null; })
+      : Promise.resolve(null);
+    const [refR, planoR, quizR] = await Promise.all([tarefaReferencia, tarefaPlano, tarefaQuiz]);
+    tokensReferencia = (refR ? refR.tokens || 0 : 0) + (planoR.tokens || 0) + (quizR ? quizR.tokens || 0 : 0);
+    if (quizR) quizAtivo = true;
+    if (comReferencia) {
+      const analise = (refR && refR.analise) || analiseReferenciaVazia(tipo);
       direcoesDaReferencia(tipo, analise).forEach((d, i) => {
         direcoes[i] = d;
         estado.variantes[i].direcao = { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia, tema: d.tema || '' };
       });
       estado.referencia = { estado: 'pronta', resumo: analise.resumo || '' };
-      await guardarVariantes(siteId, estado);
+    } else if (tipo === 'E-commerce') {
+      // Os 3 estilos de loja que servem ESTE negócio (sugeridos pelo plano;
+      // sem plano, pelas palavras do pedido). Ao mudar, baralha a ordem.
+      const ids = temasParaNegocio(nome + ' ' + prompt, planoR.temas);
+      estado.temas_sugeridos = ids;
+      aplicarTemasSugeridos(direcoes, manterSite ? baralhar(ids) : ids);
+      direcoes.forEach((d, i) => {
+        estado.variantes[i].direcao = { id: d.id, nome: d.nome, resumo: d.resumo, familia: d.familia, tema: d.tema || '' };
+      });
     }
+    if (planoR.paginas && planoR.paginas.length > 1) estado.plano_paginas = planoR.paginas;
+    estado.fotos = planoR.fotos || [];
+    estado.preparacao = 'pronta';
+    await guardarVariantes(siteId, estado);
 
     const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
     const t0 = Date.now();
@@ -5735,7 +5979,8 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
         let { html, tokens } = await gerarComOpenAI({
           nome, tipo, prompt, logoUrl: estado.logo, imagensUrls, siteId, mostrarMarcaDeAgua, idioma,
           direcao: Object.assign({ n: i + 1 }, d), outrasDirecoes: outras,
-          referencia: comReferencia ? { url: referencia_data_url } : null
+          referencia: comReferencia ? { url: referencia_data_url } : null,
+          paginas: estado.plano_paginas || null, fotos: estado.fotos || [], quiz: quizAtivo
         });
         tokens += tokensReferencia;
         if (ehLoja) html = marcarEstiloLoja(html, d.cartao, d.tema);
@@ -5857,7 +6102,7 @@ app.post('/novas-variantes', async (req, res) => {
     res.json({ status: 'success', response: { site_id } });
     processarVariantes({
       owner, nome: site['Nome'] || '', tipo: site['Tipo'] || 'Landing Page', prompt, logo_data_url: '', imagens_data_url: [],
-      siteId: site_id, generationId, mostrarMarcaDeAgua, idioma, manterSite: true, logoExistente: site['Logo URL'] || ''
+      siteId: site_id, generationId, mostrarMarcaDeAgua, idioma, manterSite: true, logoExistente: site['Logo URL'] || '', pago: true
     }).catch(erro => console.error('Erro em processarVariantes (mudar):', erro));
   } catch (erro) {
     console.error('Erro em /novas-variantes:', erro);
@@ -5889,6 +6134,8 @@ app.post('/trocar-variante', async (req, res) => {
     }
     e.escolhida = n;
     await bubblePatch('site', site_id, { 'Variantes Json': JSON.stringify(e) });
+    // As outras páginas são escritas outra vez com o visual novo.
+    if (Array.isArray(e.plano_paginas) && e.plano_paginas.length > 1) construirPaginas(site_id, { regenerar: true });
     return res.json({ status: 'success', response: { cdn_url: site['CDN URL'], escolhida: n } });
   } catch (erro) {
     console.error('Erro em /trocar-variante:', erro);
@@ -5903,6 +6150,7 @@ function variantesPublicas(site) {
   return {
     escolhida: e.escolhida || null,
     modo: e.modo || 'criar',
+    preparacao: e.preparacao || '',
     referencia: e.referencia ? (e.referencia.estado || 'pronta') : '',
     variantes: e.variantes.map(v => ({
       n: v.n, estado: v.estado, url: v.estado === 'pronto' ? v.url : '', direcao: v.direcao || {},
@@ -5939,6 +6187,8 @@ app.post('/escolher-variante', async (req, res) => {
     }
     await cobrarTokens(owner, v.tokens || 0);
     await bubblePatch('site', site_id, { 'Status': 'Pronto', 'Bunny Path': caminhoSite, 'CDN URL': cdnUrl, 'Logo URL': e.logo || '' });
+    // Sites com várias páginas: as outras páginas nascem agora, em fundo.
+    if (Array.isArray(e.plano_paginas) && e.plano_paginas.length > 1) construirPaginas(site_id, {});
     const outrasProntas = e.variantes.filter(x => x.n !== n && x.estado === 'pronto').length;
     return res.json({ status: 'success', response: { cdn_url: cdnUrl, tipo: site['Tipo'], plano_pago: await temPlanoPago(owner).catch(() => false), outras_prontas: outrasProntas } });
   } catch (erro) {
@@ -5947,7 +6197,7 @@ app.post('/escolher-variante', async (req, res) => {
   }
 });
 
-async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma }) {
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz, pago }) {
   try {
     // ---- Logótipo (opcional) ----
     // Esta função já corre depois de termos respondido ao pedido (ver nota
@@ -5987,11 +6237,26 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
       imagensUrls = resultadoImagens.urls;
     }
 
+    // ---- Plano das páginas, fotografias e quiz (1.60.0) ----
+    const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const [planoR, quizR] = await Promise.all([
+      (async () => {
+        const plan = await planearSite({ tipo, nome, prompt, idioma, pago: pago !== false, comFotos: true });
+        const fts = await prepararFotos({ owner, slug: siteSlug, pedidos: plan.fotos });
+        return { paginas: plan.paginas, fotos: fts.fotos, tokens: (plan.tokens || 0) + (fts.tokens || 0) };
+      })().catch(erro => { console.error('Plano e fotos falharam:', erro.message || erro); return { paginas: [], fotos: [], tokens: 0 }; }),
+      quiz ? gerarQuizIA({ nome, tipo, prompt, descricao: quiz.descricao, idioma })
+        .then(r => guardarQuizNoSite(siteId, r.quiz).then(() => r))
+        .catch(erro => { console.error('O quiz não foi criado:', erro.message || erro); return null; }) : Promise.resolve(null)
+    ]);
+    const planoPaginas = planoR.paginas && planoR.paginas.length > 1 ? planoR.paginas : [];
+
     // ---- Gerar o HTML com a OpenAI ----
-    const { html, tokens } = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, referencia: referencia_data_url ? { url: referencia_data_url } : null });
+    const gerado = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, referencia: referencia_data_url ? { url: referencia_data_url } : null, paginas: planoPaginas, fotos: planoR.fotos, quiz: !!quizR });
+    const html = gerado.html;
+    const tokens = gerado.tokens + (planoR.tokens || 0) + (quizR ? quizR.tokens || 0 : 0);
 
     // ---- Guardar o HTML no Bunny Storage ----
-    const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const caminhoSite = `sites/${owner}/${siteSlug}/index.html`;
     const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
 
@@ -6010,12 +6275,15 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     // ---- Só agora marcamos o Site como "Pronto" ----
     // Chegar aqui significa que a Generation e o User já foram actualizados
     // com sucesso, por isso esta é a última coisa que pode falhar.
-    await bubblePatch('site', siteId, {
+    const fimSite = {
       'Status': 'Pronto',
       'Bunny Path': caminhoSite,
       'CDN URL': cdnUrl,
       'Logo URL': logoUrl
-    });
+    };
+    if (planoPaginas.length) fimSite['Variantes Json'] = JSON.stringify({ plano_paginas: planoPaginas, fotos: planoR.fotos || [] });
+    await bubblePatch('site', siteId, fimSite);
+    if (planoPaginas.length) construirPaginas(siteId, {});
 
   } catch (erro) {
     console.error('Erro em processarGeracao:', erro);
@@ -6041,6 +6309,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
 app.post('/editar', async (req, res) => {
   try {
     const { owner, site_id, prompt, imagens_data_url } = req.body;
+    const pagina = typeof req.body.pagina === 'string' && /^[a-z]{2,20}$/.test(req.body.pagina) ? req.body.pagina : 'inicio';
     if (!owner || !site_id || !prompt) {
       return res.json({ status: 'error', message: 'Faltam dados: site_id e prompt são obrigatórios.' });
     }
@@ -6098,7 +6367,7 @@ app.post('/editar', async (req, res) => {
       response: { generation_id: generationId }
     });
 
-    processarEdicao({ owner, site_id, site, prompt, imagens_data_url, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree })
+    processarEdicao({ owner, site_id, site, prompt, imagens_data_url, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree, pagina })
       .catch(erro => console.error('Erro em processarEdicao:', erro));
 
   } catch (erro) {
@@ -6107,14 +6376,10 @@ app.post('/editar', async (req, res) => {
   }
 });
 
-async function processarEdicao({ owner, site_id, site, prompt, imagens_data_url, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree }) {
+async function processarEdicao({ owner, site_id, site, prompt, imagens_data_url, generationId, tokensUsados, tokensIncluidos, ehPrimeiraEdicao, ehPlanoFree, pagina }) {
   try {
-    // ---- Ler o HTML publicado agora mesmo ----
-    const respAtual = await fetch(site['CDN URL']);
-    if (!respAtual.ok) {
-      throw new Error('Não foi possível ler o ficheiro actual do site (HTTP ' + respAtual.status + ').');
-    }
-    const htmlAtual = await respAtual.text();
+    // ---- Ler a página agora mesmo (directamente do Bunny, sem cache) ----
+    const htmlAtual = (await lerPaginaDoSite(site, pagina || 'inicio')).html;
 
     // ---- Imagens anexadas a este pedido de edição (opcional) ----
     // Mesma regra do processarGeracao: pedidas explicitamente pela pessoa,
@@ -6139,10 +6404,10 @@ async function processarEdicao({ owner, site_id, site, prompt, imagens_data_url,
       mostrarMarcaDeAgua: ehPlanoFree
     });
 
-    // ---- Publicar no MESMO caminho (o link não muda) ----
-    const caminhoSite = site['Bunny Path'];
-    const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
-    await purgeCacheBunny(cdnUrl);
+    // ---- Publicar no MESMO caminho (o link não muda). Num site com várias
+    // páginas, o cabeçalho, o rodapé e o CSS passam para todas. ----
+    await guardarPaginaDoSite(site, pagina || 'inicio', html);
+    const cdnUrl = site['CDN URL'];
 
     await bubblePatch('generation', generationId, {
       'Status': 'Pronto',
@@ -6215,6 +6480,8 @@ app.post('/generate-status', async (req, res) => {
     }
     const variantes = variantesPublicas(site);
     if (variantes) response.variantes = variantes;
+    const paginasPub = estadoPublicoPaginas(lerJsonSeguro(site['Variantes Json'], null), site);
+    if (paginasPub) response.paginas = paginasPub;
     if (req.body.owner && site['Owner'] === req.body.owner) response.plano_pago = await temPlanoPago(req.body.owner).catch(() => false);
 
     if (generation_id) {
@@ -10128,7 +10395,7 @@ const MONTRA_PADRAO = [
 function limparEstilo(e) {
   e = e || {};
   const colunas = Math.min(6, Math.max(3, parseInt(e.colunas, 10) || 4));
-  const tema = ['mercado', 'editorial', 'tech', 'moda', 'catalogo', 'vitrine', 'bento', 'classico'].includes(e.tema) ? e.tema : '';
+  const tema = ['mercado', 'editorial', 'tech', 'moda', 'catalogo', 'vitrine', 'bento', 'fresco', 'sabor', 'classico'].includes(e.tema) ? e.tema : '';
   return { cartao: ['suave', 'moldura', 'minimal'].includes(e.cartao) ? e.cartao : 'suave', colunas, tema };
 }
 // Categorias configuradas pelo dono (1.59.0): ordem, imagem e se aparecem.
@@ -10485,7 +10752,9 @@ app.post('/loja-montra-guardar', async (req, res) => {
       const limpo = limparBloco(copia);
       if (limpo) blocos.push(limpo);
     }
-    const valor = { blocos, estilo: limparEstilo(montra.estilo), categorias: limparCategoriasCfg((lerJsonSeguro(site['Loja Blocos Json'], {}) || {}).categorias) };
+    const blocosAntes = lerJsonSeguro(site['Loja Blocos Json'], {}) || {};
+    const valor = { blocos, estilo: limparEstilo(montra.estilo), categorias: limparCategoriasCfg(blocosAntes.categorias) };
+    if (blocosAntes.quiz) valor.quiz = blocosAntes.quiz;
     await bubblePatch('site', site_id, { 'Loja Blocos Json': JSON.stringify(valor) });
     return res.json({ status: 'success', response: { montra: montraLoja({ 'Loja Blocos Json': JSON.stringify(valor) }) } });
   } catch (erro) {
@@ -10922,6 +11191,1283 @@ app.post('/loja-organizar-aplicar', async (req, res) => {
 });
 
 const PAGINA_ADMIN_KYC = "<!DOCTYPE html>\n<html lang=\"pt\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<meta name=\"robots\" content=\"noindex, nofollow\">\n<title>KYC · Daniel IA</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2216%22%20fill%3D%22%23430960%22%2F%3E%3Cg%20transform%3D%22translate%2811.52%2011.52%29%20scale%280.16384%29%20translate%28-111%20-492.5%29%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M148.0%20738.1C142.7%20737.4%20139.2%20736.1%20135.6%20733.7C128.3%20728.8%20123.9%20721.8%20122.6%20713.1C122.1%20709.4%20122.1%20707.5%20122.7%20704.0C123.8%20697.6%20126.3%20692.6%20130.6%20688.3C133.2%20685.6%20136.0%20683.8%20141.9%20680.7C150.6%20676.1%20156.0%20672.8%20160.9%20669.2C172.2%20660.9%20180.7%20651.9%20187.8%20640.6C188.3%20639.9%20188.8%20639.4%20189.0%20639.4C189.4%20639.4%20189.5%20702.5%20189.0%20705.6C187.7%20714.1%20184.5%20720.7%20178.6%20726.7C172.9%20732.7%20168.0%20735.6%20160.8%20737.5C158.3%20738.2%20157.3%20738.3%20154.1%20738.4C151.7%20738.4%20149.5%20738.4%20148.0%20738.1ZM183.5%20737.9C183.5%20737.7%20184.1%20737.1%20184.9%20736.6C189.2%20733.9%20194.3%20728.3%20197.4%20723.0C202.1%20715.1%20203.7%20708.5%20203.7%20698.0C203.7%20694.3%20203.8%20692.7%20204.1%20692.4C204.3%20692.1%20206.1%20692.0%20222.0%20691.9C238.3%20691.8%20239.9%20691.8%20243.0%20691.3C254.0%20689.6%20263.9%20685.6%20273.4%20679.0C281.6%20673.4%20288.9%20665.8%20294.0%20657.5C298.3%20650.5%20301.7%20642.5%20303.3%20635.4C306.8%20619.6%20305.5%20604.6%20299.3%20589.3C296.5%20582.2%20293.0%20576.6%20286.9%20569.6C282.9%20564.8%20279.8%20562.0%20274.4%20558.1C264.1%20550.6%20251.7%20545.8%20240.8%20545.0C238.8%20544.8%20228.4%20544.8%20215.6%20544.8L193.8%20544.9L192.7%20545.6C191.4%20546.5%20190.1%20548.2%20189.7%20549.4C189.5%20550.1%20189.4%20555.5%20189.4%20571.2C189.4%20582.6%20189.3%20592.1%20189.2%20592.2C188.9%20592.4%20188.0%20591.4%20188.0%20590.9C188.0%20590.0%20185.1%20584.4%20182.5%20580.6C179.3%20575.7%20171.4%20568.0%20165.1%20563.7C161.4%20561.2%20152.2%20556.2%20143.4%20551.9C134.1%20547.4%20130.6%20544.8%20127.0%20540.0C124.6%20536.8%20123.4%20533.6%20122.6%20529.1C122.2%20526.2%20122.2%20523.9%20122.6%20520.6C123.1%20517.2%20123.8%20514.9%20125.2%20512.1C128.5%20505.5%20134.2%20500.8%20141.6%20498.7C146.7%20497.2%20146.0%20497.2%20196.5%20497.3C246.4%20497.4%20244.5%20497.4%20253.4%20498.8C268.8%20501.2%20287.7%20509.1%20301.3%20518.9C312.8%20527.0%20323.6%20538.1%20330.9%20549.1C335.2%20555.5%20337.8%20560.2%20340.5%20566.0C344.7%20575.1%20347.2%20582.3%20349.5%20592.4C351.4%20600.7%20352.0%20605.8%20352.2%20615.9C352.4%20628.3%20351.3%20638.6%20348.6%20648.9C345.6%20660.5%20339.4%20674.8%20333.6%20684.0C323.4%20700.1%20309.0%20713.7%20292.2%20723.3C282.4%20728.9%20271.5%20733.1%20261.5%20735.3C248.6%20738.2%20247.4%20738.2%20211.8%20738.2C186.7%20738.2%20183.5%20738.2%20183.5%20737.9Z%22%2F%3E%3Ccircle%20fill%3D%22%2389C804%22%20cx%3D%22149.1%22%20cy%3D%22612.7%22%20r%3D%2229.7%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E\">\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n<link href=\"https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700;800&family=JetBrains+Mono:wght@500&display=swap\" rel=\"stylesheet\">\n<style>\n  :root{\n    --bg:#07030C;--card:#110A1B;--card-alt:#170E25;--border:#2A1B3D;--text:#F6F2FB;--text-dim:#A89BBA;\n    --lime:#89C804;--lime-bright:#B4F02B;--purple:#430960;--purple-bright:#A35BE0;--on-accent:#140620;\n    --error:#FF5C7A;--warning:#F5A623;\n    --grad-accent:linear-gradient(135deg,#C8F84A 0%,#89C804 100%);\n  }\n  *{box-sizing:border-box;}\n  body{margin:0;min-height:100vh;color:var(--text);font-family:\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;\n    background:radial-gradient(1100px 600px at 10% -14%, rgba(67,9,96,.9), rgba(67,9,96,0) 62%),\n      radial-gradient(800px 500px at 108% 6%, rgba(137,200,4,.10), rgba(137,200,4,0) 60%),#07030C;background-attachment:fixed;}\n  button,input,textarea{font-family:inherit;}\n  h1,h2,h3{font-family:\"Sora\",\"Manrope\",sans-serif;letter-spacing:-.025em;margin:0;}\n  .topo{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.08);\n    background:rgba(17,10,27,.6);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);position:sticky;top:0;z-index:10;}\n  .brand-logo{height:28px;width:auto;display:block;}\n  .brand-logo .bl-ink{fill:#FFFFFF;}\n  .brand-logo .bl-lime{fill:var(--lime);}\n  .etiqueta{font-family:\"JetBrains Mono\",monospace;font-size:12px;color:var(--lime);letter-spacing:.14em;}\n  .main{max-width:1100px;margin:0 auto;padding:32px 24px 80px;}\n  .caixa-chave{max-width:420px;margin:12vh auto 0;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:30px;}\n  .caixa-chave p{color:var(--text-dim);font-size:14px;line-height:1.6;margin:8px 0 20px;}\n  input[type=password],textarea{width:100%;background:var(--card-alt);border:1px solid var(--border);color:var(--text);border-radius:11px;padding:12px 14px;font-size:14px;outline:none;}\n  input:focus,textarea:focus{border-color:var(--lime);}\n  .btn{border:none;border-radius:11px;padding:11px 18px;font-size:13.5px;font-weight:700;cursor:pointer;transition:transform .15s,opacity .15s;}\n  .btn:disabled{opacity:.5;cursor:default;}\n  .btn-principal{background:var(--grad-accent);color:var(--on-accent);box-shadow:0 8px 24px rgba(137,200,4,.25);}\n  .btn-principal:hover:not(:disabled){transform:translateY(-1px);}\n  .btn-sec{background:transparent;color:var(--text);border:1px solid var(--border);}\n  .btn-sec:hover{border-color:var(--lime);}\n  .btn-perigo{background:rgba(255,92,122,.12);color:var(--error);border:1px solid rgba(255,92,122,.35);}\n  .erro{color:var(--error);font-size:13px;margin-top:12px;min-height:18px;}\n  .cabecalho{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:24px;}\n  .cabecalho p{color:var(--text-dim);margin:6px 0 0;font-size:14px;}\n  .tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:4px;}\n  .tab{background:transparent;border:none;color:var(--text-dim);padding:8px 14px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;}\n  .tab.activa{background:var(--card-alt);color:var(--text);box-shadow:inset 0 0 0 1px rgba(137,200,4,.35);}\n  .vazio{color:var(--text-dim);text-align:center;padding:60px 0;font-size:14px;}\n  .pedido{background:rgba(17,10,27,.7);border:1px solid var(--border);border-radius:18px;padding:22px;margin-bottom:16px;}\n  .pedido-topo{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;}\n  .pedido h3{font-size:18px;}\n  .dados{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:8px;font-size:13px;color:var(--text-dim);}\n  .dados b{color:var(--text);font-weight:600;font-family:\"JetBrains Mono\",monospace;font-size:12.5px;}\n  .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid var(--border);}\n  .pill.Pendente{color:var(--warning);border-color:rgba(245,166,35,.35);background:rgba(245,166,35,.1);}\n  .pill.Aprovado{color:var(--lime);border-color:rgba(137,200,4,.35);background:rgba(137,200,4,.1);}\n  .pill.Rejeitado{color:var(--error);border-color:rgba(255,92,122,.35);background:rgba(255,92,122,.1);}\n  .fotos{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;}\n  .foto{background:var(--card-alt);border:1px solid var(--border);border-radius:12px;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;\n    overflow:hidden;position:relative;color:var(--text-dim);font-size:12.5px;}\n  .foto img{width:100%;height:100%;object-fit:contain;cursor:zoom-in;background:#000;}\n  .foto .rotulo{position:absolute;left:8px;top:8px;font-family:\"JetBrains Mono\",monospace;font-size:10.5px;letter-spacing:.08em;\n    background:rgba(7,3,12,.75);color:var(--lime);padding:3px 7px;border-radius:6px;}\n  .accoes{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;align-items:center;}\n  .rejeitar-caixa{display:none;margin-top:14px;}\n  .rejeitar-caixa.aberta{display:block;}\n  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}\n  .chip{background:var(--card-alt);border:1px solid var(--border);color:var(--text-dim);border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer;}\n  .chip:hover{color:var(--text);border-color:var(--purple-bright);}\n  .motivo{color:var(--error);font-size:13px;margin-top:10px;}\n  .zoom{position:fixed;inset:0;background:rgba(7,3,12,.92);display:none;align-items:center;justify-content:center;z-index:100;cursor:zoom-out;padding:24px;}\n  .zoom.aberto{display:flex;}\n  .zoom img{max-width:100%;max-height:100%;border-radius:10px;}\n  @media (max-width:700px){.fotos{grid-template-columns:1fr;}.topo{padding:12px 16px;}}\n</style>\n</head>\n<body>\n<div class=\"topo\">\n  <svg class=\"brand-logo\" viewBox=\"112 489 1060 257\" role=\"img\" aria-label=\"Daniel IA\" xmlns=\"http://www.w3.org/2000/svg\"><path class=\"bl-ink\" d=\"M148.0 738.1C142.7 737.4 139.2 736.1 135.6 733.7C128.3 728.8 123.9 721.8 122.6 713.1C122.1 709.4 122.1 707.5 122.7 704.0C123.8 697.6 126.3 692.6 130.6 688.3C133.2 685.6 136.0 683.8 141.9 680.7C150.6 676.1 156.0 672.8 160.9 669.2C172.2 660.9 180.7 651.9 187.8 640.6C188.3 639.9 188.8 639.4 189.0 639.4C189.4 639.4 189.5 702.5 189.0 705.6C187.7 714.1 184.5 720.7 178.6 726.7C172.9 732.7 168.0 735.6 160.8 737.5C158.3 738.2 157.3 738.3 154.1 738.4C151.7 738.4 149.5 738.4 148.0 738.1ZM183.5 737.9C183.5 737.7 184.1 737.1 184.9 736.6C189.2 733.9 194.3 728.3 197.4 723.0C202.1 715.1 203.7 708.5 203.7 698.0C203.7 694.3 203.8 692.7 204.1 692.4C204.3 692.1 206.1 692.0 222.0 691.9C238.3 691.8 239.9 691.8 243.0 691.3C254.0 689.6 263.9 685.6 273.4 679.0C281.6 673.4 288.9 665.8 294.0 657.5C298.3 650.5 301.7 642.5 303.3 635.4C306.8 619.6 305.5 604.6 299.3 589.3C296.5 582.2 293.0 576.6 286.9 569.6C282.9 564.8 279.8 562.0 274.4 558.1C264.1 550.6 251.7 545.8 240.8 545.0C238.8 544.8 228.4 544.8 215.6 544.8L193.8 544.9L192.7 545.6C191.4 546.5 190.1 548.2 189.7 549.4C189.5 550.1 189.4 555.5 189.4 571.2C189.4 582.6 189.3 592.1 189.2 592.2C188.9 592.4 188.0 591.4 188.0 590.9C188.0 590.0 185.1 584.4 182.5 580.6C179.3 575.7 171.4 568.0 165.1 563.7C161.4 561.2 152.2 556.2 143.4 551.9C134.1 547.4 130.6 544.8 127.0 540.0C124.6 536.8 123.4 533.6 122.6 529.1C122.2 526.2 122.2 523.9 122.6 520.6C123.1 517.2 123.8 514.9 125.2 512.1C128.5 505.5 134.2 500.8 141.6 498.7C146.7 497.2 146.0 497.2 196.5 497.3C246.4 497.4 244.5 497.4 253.4 498.8C268.8 501.2 287.7 509.1 301.3 518.9C312.8 527.0 323.6 538.1 330.9 549.1C335.2 555.5 337.8 560.2 340.5 566.0C344.7 575.1 347.2 582.3 349.5 592.4C351.4 600.7 352.0 605.8 352.2 615.9C352.4 628.3 351.3 638.6 348.6 648.9C345.6 660.5 339.4 674.8 333.6 684.0C323.4 700.1 309.0 713.7 292.2 723.3C282.4 728.9 271.5 733.1 261.5 735.3C248.6 738.2 247.4 738.2 211.8 738.2C186.7 738.2 183.5 738.2 183.5 737.9Z\"/><circle class=\"bl-lime\" cx=\"149.1\" cy=\"612.7\" r=\"29.7\"/><path class=\"bl-ink\" d=\"M583.7 695.1C577.0 694.2 572.3 692.2 567.6 688.5C561.0 683.2 557.4 673.0 558.6 663.1C559.4 656.8 561.1 652.6 564.5 648.3C567.6 644.6 571.5 642.0 577.4 639.7C580.8 638.4 581.6 638.1 585.4 637.3C591.0 636.0 596.6 635.5 608.5 635.3C614.7 635.2 619.0 635.1 619.2 634.9C619.4 634.8 619.5 633.9 619.5 632.5C619.5 625.7 617.7 621.5 613.8 618.7C610.5 616.5 606.0 615.2 601.4 615.2C598.3 615.2 596.0 615.8 593.1 617.1C589.4 618.9 587.1 621.5 585.5 625.7C584.8 627.6 584.5 627.8 583.1 627.7C581.5 627.5 576.4 626.8 574.1 626.5C572.5 626.2 566.0 625.3 564.0 625.1C562.2 624.9 562.0 624.8 562.0 624.1C562.0 623.1 563.0 619.4 563.8 617.0C565.5 612.6 568.3 608.5 571.9 605.4C573.6 603.9 576.3 602.0 576.7 602.0C576.8 602.0 577.0 601.8 577.2 601.7C578.0 600.9 581.6 599.2 584.1 598.4C590.2 596.3 595.4 595.5 602.5 595.5C616.5 595.5 627.3 599.3 635.0 607.0C639.5 611.5 641.5 615.3 643.3 622.5L643.9 624.9L643.9 659.2L643.9 693.6L632.7 693.7C622.5 693.7 621.5 693.7 621.0 693.3C620.5 692.9 620.5 692.6 620.5 687.1C620.4 684.0 620.4 681.2 620.3 681.1C620.1 680.4 619.5 680.8 617.7 683.1C615.1 686.3 614.3 687.2 612.5 688.6C609.1 691.3 605.3 693.1 600.4 694.5C596.9 695.4 588.4 695.8 583.7 695.1ZM853.4 695.1C849.2 694.6 845.0 693.5 840.4 691.6C832.6 688.3 826.5 683.4 822.1 676.7C820.0 673.5 817.6 669.2 816.8 667.1C815.3 663.1 814.4 659.3 813.7 654.6C813.3 651.3 813.2 650.1 813.3 644.1C813.4 637.0 813.6 635.6 814.9 630.6C815.5 628.4 816.9 624.2 817.5 622.9C820.4 616.5 823.3 612.2 827.7 608.0C833.0 602.8 839.6 599.2 847.5 597.1C859.0 594.2 871.8 595.1 881.2 599.7C889.1 603.5 895.4 609.2 899.6 616.4C902.9 622.0 905.4 630.2 906.0 637.2C906.1 638.8 906.2 642.6 906.2 645.5C906.2 650.1 906.2 651.0 905.9 651.3C905.6 651.5 899.0 651.6 872.4 651.5C840.3 651.5 839.3 651.5 838.9 652.0C838.5 652.4 838.5 652.7 838.8 654.9C839.2 658.9 840.9 663.5 842.9 666.3C846.2 670.7 852.0 674.2 858.0 675.3C860.2 675.7 864.7 675.6 867.0 675.2C871.8 674.1 876.0 671.7 878.7 668.4C879.7 667.1 881.3 664.3 881.6 663.3C881.8 662.2 882.1 662.2 889.6 664.2C900.7 667.0 903.5 667.8 903.8 668.3C904.2 668.9 902.1 673.8 899.8 677.4C897.5 681.0 892.8 685.8 889.1 688.2C885.3 690.7 879.8 693.0 874.4 694.2C869.4 695.4 859.5 695.8 853.4 695.1ZM430.3 693.3C429.9 692.5 429.9 561.5 430.3 561.1C430.7 560.7 482.3 560.6 487.3 561.0C492.7 561.4 498.2 562.6 505.7 565.2C508.2 566.0 513.4 568.4 514.9 569.4C515.3 569.7 516.6 570.5 517.8 571.3C526.0 576.6 531.8 583.4 536.7 593.1C540.0 599.7 541.8 605.0 543.2 612.9C545.1 623.1 544.8 638.6 542.4 647.9C539.5 659.3 533.8 669.5 526.3 676.8C522.2 680.7 521.1 681.7 517.5 683.8C510.6 687.9 504.6 690.3 496.7 692.0C488.9 693.6 489.4 693.6 458.6 693.7C430.8 693.8 430.5 693.8 430.3 693.3ZM663.9 693.4C663.4 693.1 663.4 692.2 663.4 645.6C663.4 598.5 663.4 598.2 663.9 597.8C664.3 597.5 666.0 597.5 675.9 597.5C683.0 597.6 687.5 597.7 687.7 597.9C687.9 598.1 688.0 599.4 688.1 604.2C688.2 611.5 688.2 611.5 690.3 608.6C695.1 601.8 703.7 596.8 712.4 595.8C715.6 595.4 720.8 595.4 723.9 595.9C732.9 597.2 741.5 602.4 746.0 609.2C748.5 613.0 749.9 616.2 751.1 621.0C752.6 626.6 752.5 625.9 752.6 660.7C752.7 692.0 752.7 692.8 752.3 693.2C751.8 693.7 751.2 693.7 740.0 693.7C729.3 693.8 728.1 693.7 727.7 693.3C727.3 692.9 727.2 691.9 727.2 664.8C727.2 646.1 727.2 635.7 727.0 633.8C726.4 627.8 724.1 623.2 720.6 620.7C717.2 618.4 713.5 617.2 709.0 617.2C703.2 617.2 698.2 619.4 694.2 623.7C691.3 626.8 689.4 631.5 688.8 637.3C688.6 638.9 688.5 648.8 688.5 666.5C688.5 681.6 688.4 693.3 688.3 693.4C688.2 693.4 682.7 693.6 676.2 693.6C666.2 693.8 664.3 693.7 663.9 693.4ZM772.1 693.3C771.8 693.0 771.8 687.9 771.8 645.5C771.8 603.7 771.8 598.0 772.1 597.8C772.4 597.5 775.2 597.5 784.5 597.5C795.8 597.6 796.6 597.7 796.9 598.1C797.2 598.5 797.2 606.7 797.2 645.8C797.3 688.7 797.2 693.0 796.9 693.4C796.5 693.7 795.1 693.8 784.5 693.7C774.1 693.7 772.5 693.7 772.1 693.3ZM922.8 693.4C922.4 693.0 922.2 561.6 922.6 561.1C922.8 560.8 924.9 560.8 935.1 560.7C943.9 560.7 947.4 560.8 947.6 561.0C948.2 561.4 948.1 692.4 947.6 693.2L947.2 693.8L935.1 693.8C925.6 693.8 923.0 693.7 922.8 693.4ZM604.4 675.8C608.3 674.7 611.3 672.9 614.3 669.8C617.0 667.0 618.6 663.7 619.2 660.0C619.6 657.4 619.7 652.3 619.3 652.0C618.4 651.5 604.6 651.6 600.2 652.1C597.6 652.5 593.5 653.3 592.1 653.8C587.7 655.3 584.6 657.9 583.5 661.2C582.7 663.4 582.9 668.0 583.7 669.9C584.9 672.5 587.0 674.4 590.1 675.5C592.5 676.3 593.8 676.5 598.2 676.4C601.5 676.3 602.8 676.2 604.4 675.8ZM486.9 670.3C495.8 668.6 501.6 665.8 506.8 660.4C510.0 657.1 513.1 652.2 514.4 648.1C515.5 645.1 516.7 639.3 517.1 635.6C517.6 631.5 517.5 622.1 517.0 618.5C514.5 601.5 506.4 590.5 492.7 586.0C487.4 584.3 485.4 584.0 474.9 583.7C462.7 583.4 456.6 583.5 456.2 584.0C456.1 584.2 456.0 600.8 456.0 627.4C456.0 661.5 456.1 670.5 456.3 670.7C456.6 671.0 459.5 671.0 470.4 670.9C482.9 670.8 484.4 670.8 486.9 670.3ZM882.0 634.8C882.3 634.3 882.1 633.0 881.4 630.3C880.3 626.3 877.5 622.1 874.0 619.4C868.1 614.8 858.4 613.9 851.3 617.2C847.5 619.0 844.6 621.6 842.4 625.0C841.1 627.0 840.5 628.3 839.6 631.1C838.9 633.4 838.8 634.9 839.3 635.1C839.5 635.2 849.1 635.2 860.7 635.2C881.2 635.2 881.7 635.2 882.0 634.8ZM782.2 583.2C778.2 582.6 774.0 579.9 771.9 576.5C769.8 573.2 769.3 567.7 770.6 563.1C773.2 554.3 784.5 550.4 792.5 555.5C795.7 557.6 798.2 561.2 799.0 564.8C799.5 566.9 799.2 571.7 798.5 573.6C797.3 576.9 794.3 580.4 791.2 581.8C788.5 583.1 785.0 583.7 782.2 583.2Z\"/><path class=\"bl-lime\" d=\"M999.8 693.4C999.4 692.9 999.4 561.8 999.8 561.2C1000.1 560.8 1001.4 560.8 1012.7 560.7C1019.6 560.7 1025.3 560.8 1025.5 560.9C1025.7 561.0 1025.8 580.3 1025.8 626.8C1025.8 683.3 1025.7 692.7 1025.4 693.1C1025.1 693.6 1024.6 693.6 1012.6 693.7C1002.0 693.8 1000.0 693.7 999.8 693.4ZM1039.6 693.6C1039.4 693.5 1039.2 693.2 1039.2 693.0C1039.2 692.5 1041.1 686.8 1041.5 685.9C1041.6 685.6 1041.9 684.9 1042.1 684.2C1042.3 683.6 1043.0 681.7 1043.6 679.9C1045.8 673.7 1046.5 671.6 1047.5 668.8C1048.0 667.2 1048.9 664.6 1049.5 663.0C1050.1 661.4 1050.7 659.5 1051.0 658.8C1051.3 658.0 1051.9 656.1 1052.5 654.5C1053.5 651.9 1054.1 650.2 1056.5 643.2C1056.9 642.1 1058.0 638.9 1059.0 636.1C1061.4 629.1 1063.3 623.7 1065.6 617.1C1066.3 615.3 1067.1 612.9 1067.5 611.6C1067.9 610.4 1068.7 608.4 1069.1 607.2C1069.6 606.1 1070.3 603.9 1070.8 602.5C1071.3 601.1 1072.4 597.9 1073.2 595.5C1074.1 593.1 1075.2 590.0 1075.6 588.6C1076.1 587.2 1076.8 585.3 1077.2 584.4C1077.6 583.4 1078.2 581.6 1078.6 580.4C1079.5 577.4 1080.3 575.0 1081.1 572.9C1082.3 569.7 1082.8 568.4 1083.6 565.9C1084.6 562.9 1085.4 561.1 1085.7 560.9C1085.9 560.8 1093.2 560.7 1102.0 560.7C1116.7 560.7 1118.1 560.8 1118.5 561.2C1118.8 561.4 1119.0 561.7 1119.0 561.9C1119.0 562.1 1119.7 564.2 1120.5 566.7C1121.3 569.1 1122.1 571.5 1122.2 572.0C1122.4 572.8 1123.6 576.1 1125.3 580.8C1125.6 581.5 1126.2 583.4 1126.7 585.0C1127.3 586.6 1128.4 589.8 1129.2 592.1C1130.0 594.5 1131.2 597.8 1131.7 599.5C1132.3 601.2 1133.1 603.5 1133.5 604.5C1135.0 608.5 1138.0 617.1 1140.0 622.9C1141.1 626.2 1142.6 630.7 1143.4 632.9C1144.1 635.1 1145.8 639.9 1147.1 643.6C1148.4 647.3 1150.1 652.2 1150.9 654.4C1152.3 658.3 1154.8 665.7 1160.6 682.6C1162.2 687.3 1163.7 691.5 1163.9 692.1C1164.2 692.7 1164.2 693.1 1164.1 693.3C1163.9 693.6 1160.9 693.6 1150.4 693.7C1137.8 693.8 1137.1 693.8 1136.6 693.3C1136.2 693.0 1135.3 690.7 1133.4 684.9C1132.0 680.5 1130.2 675.2 1129.6 673.2C1128.9 671.3 1128.0 668.6 1127.6 667.4C1127.3 666.1 1126.8 664.7 1126.5 664.2L1126.1 663.4L1123.6 663.2C1122.2 663.1 1111.2 663.0 1099.1 663.0C1077.3 663.0 1077.0 663.0 1076.5 663.5C1076.2 663.8 1076.0 664.2 1076.0 664.4C1076.0 664.7 1073.0 673.9 1071.3 678.9C1070.4 681.4 1069.4 684.3 1068.9 685.8C1068.6 686.6 1068.0 688.4 1067.6 689.6C1066.7 692.7 1066.5 693.2 1066.2 693.4C1065.8 693.6 1040.1 693.8 1039.6 693.6ZM1119.4 641.6C1119.6 641.2 1118.2 636.6 1116.2 631.1C1115.4 628.6 1114.6 626.1 1112.0 618.1C1109.8 611.4 1108.3 606.4 1107.1 602.6C1106.5 600.4 1105.4 596.9 1104.7 594.9C1104.0 592.8 1103.2 590.2 1102.9 589.1C1102.5 587.6 1102.3 587.1 1101.9 587.0C1101.3 586.9 1101.0 587.4 1101.0 588.4C1101.0 588.8 1100.2 591.4 1099.2 594.3C1097.2 600.3 1092.6 613.9 1091.6 617.1C1090.7 620.0 1089.0 625.3 1086.9 631.5C1084.4 638.7 1083.6 641.5 1084.0 641.8C1084.2 641.9 1092.2 642.0 1101.8 642.0C1117.3 642.0 1119.3 642.0 1119.4 641.6Z\"/></svg>\n  <span class=\"etiqueta\">// PAINEL KYC</span>\n</div>\n\n<div class=\"main\">\n  <div class=\"caixa-chave\" id=\"vista-chave\">\n    <h2>Acesso restrito</h2>\n    <p>Escreve a chave de administração (a mesma ADMIN_SECRET das variáveis do container). Fica guardada só nesta aba.</p>\n    <input type=\"password\" id=\"chave\" placeholder=\"Chave de administração\" autocomplete=\"off\">\n    <div style=\"margin-top:14px;\"><button class=\"btn btn-principal\" id=\"btn-entrar\" style=\"width:100%;\">Entrar</button></div>\n    <div class=\"erro\" id=\"erro-chave\"></div>\n  </div>\n\n  <div id=\"vista-painel\" style=\"display:none;\">\n    <div class=\"cabecalho\">\n      <div>\n        <h1>Verificações de identidade</h1>\n        <p id=\"resumo\">A carregar...</p>\n      </div>\n      <div class=\"tabs\">\n        <button class=\"tab activa\" data-estado=\"Pendente\">Pendentes</button>\n        <button class=\"tab\" data-estado=\"Aprovado\">Aprovados</button>\n        <button class=\"tab\" data-estado=\"Rejeitado\">Rejeitados</button>\n      </div>\n    </div>\n    <div id=\"lista\"></div>\n    <div style=\"text-align:center;margin-top:24px;\"><button class=\"btn btn-sec\" id=\"btn-sair\">Sair do painel</button></div>\n  </div>\n</div>\n\n<div class=\"zoom\" id=\"zoom\"><img id=\"zoom-img\" alt=\"\"></div>\n\n<script>\n(function(){\n  'use strict';\n  var chave = '';\n  var estadoActual = 'Pendente';\n  try { chave = sessionStorage.getItem('dia_admin_kyc') || ''; } catch (e) {}\n\n  function post(caminho, dados){\n    dados.key = chave;\n    return fetch(caminho, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify(dados)\n    }).then(function(r){ return r.json(); });\n  }\n\n  function esc(t){\n    return String(t == null ? '' : t).replace(/[&<>\"']/g, function(c){\n      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c];\n    });\n  }\n\n  function data(iso){\n    if (!iso) return '—';\n    var d = new Date(iso);\n    if (isNaN(d.getTime())) return '—';\n    return d.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });\n  }\n\n  var elChave = document.getElementById('chave');\n  var elErroChave = document.getElementById('erro-chave');\n  var elLista = document.getElementById('lista');\n  var elResumo = document.getElementById('resumo');\n\n  function entrar(){\n    chave = elChave.value.trim();\n    if (!chave) { elErroChave.textContent = 'Escreve a chave.'; return; }\n    carregar(true);\n  }\n  document.getElementById('btn-entrar').addEventListener('click', entrar);\n  elChave.addEventListener('keydown', function(e){ if (e.key === 'Enter') entrar(); });\n\n  document.getElementById('btn-sair').addEventListener('click', function(){\n    try { sessionStorage.removeItem('dia_admin_kyc'); } catch (e) {}\n    chave = '';\n    elChave.value = '';\n    document.getElementById('vista-painel').style.display = 'none';\n    document.getElementById('vista-chave').style.display = 'block';\n  });\n\n  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(tab){\n    tab.addEventListener('click', function(){\n      Array.prototype.forEach.call(document.querySelectorAll('.tab'), function(t){ t.classList.remove('activa'); });\n      tab.classList.add('activa');\n      estadoActual = tab.getAttribute('data-estado');\n      carregar(false);\n    });\n  });\n\n  function carregar(daChave){\n    elResumo.textContent = 'A carregar...';\n    elLista.innerHTML = '';\n    post('/admin-kyc-lista', { estado: estadoActual }).then(function(r){\n      if (r.status !== 'success') {\n        if (daChave || r.message === 'Chave inválida.') {\n          elErroChave.textContent = r.message || 'Não foi possível entrar.';\n          document.getElementById('vista-painel').style.display = 'none';\n          document.getElementById('vista-chave').style.display = 'block';\n          try { sessionStorage.removeItem('dia_admin_kyc'); } catch (e) {}\n        } else {\n          elResumo.textContent = r.message || 'Erro ao carregar.';\n        }\n        return;\n      }\n      try { sessionStorage.setItem('dia_admin_kyc', chave); } catch (e) {}\n      elErroChave.textContent = '';\n      document.getElementById('vista-chave').style.display = 'none';\n      document.getElementById('vista-painel').style.display = 'block';\n      var pedidos = r.response.pedidos || [];\n      var nomes = { Pendente: 'pendente', Aprovado: 'aprovado', Rejeitado: 'rejeitado' };\n      elResumo.textContent = pedidos.length + ' pedido' + (pedidos.length === 1 ? '' : 's') + ' ' + nomes[estadoActual] + (pedidos.length === 1 ? '' : 's') + '.';\n      if (!pedidos.length) {\n        elLista.innerHTML = '<div class=\"vazio\">Nada por aqui.</div>';\n        return;\n      }\n      pedidos.forEach(function(p){ elLista.appendChild(cartao(p)); });\n    }).catch(function(){\n      elErroChave.textContent = 'Não foi possível ligar ao servidor.';\n    });\n  }\n\n  var MOTIVOS = [\n    'A selfie está desfocada ou escura.',\n    'O B.I. está ilegível.',\n    'A selfie não corresponde à foto do B.I.',\n    'O B.I. está fora do prazo de validade.',\n    'Os dados escritos não batem certo com o B.I.'\n  ];\n\n  function cartao(p){\n    var el = document.createElement('div');\n    el.className = 'pedido';\n    var html = ''\n      + '<div class=\"pedido-topo\"><div>'\n      + '<h3>' + esc(p.nome) + '</h3>'\n      + '<div class=\"dados\">'\n      + '<span>B.I. <b>' + esc(p.numero_bi) + '</b></span>'\n      + '<span>Tel. <b>' + esc(p.telefone) + '</b></span>'\n      + '<span>Email <b>' + esc(p.email || '—') + '</b></span>'\n      + '<span>Enviado <b>' + esc(data(p.enviado)) + '</b></span>'\n      + (p.revisto ? '<span>Revisto <b>' + esc(data(p.revisto)) + '</b></span>' : '')\n      + '</div></div>'\n      + '<div><span class=\"pill ' + esc(p.estado) + '\">' + esc(p.estado) + '</span></div></div>'\n      + (p.motivo ? '<div class=\"motivo\">Motivo: ' + esc(p.motivo) + '</div>' : '')\n      + '<div class=\"fotos\">'\n      + '<div class=\"foto\" data-tipo=\"selfie\"><span class=\"rotulo\">SELFIE</span>A carregar...</div>'\n      + '<div class=\"foto\" data-tipo=\"frente\"><span class=\"rotulo\">B.I. FRENTE</span>A carregar...</div>'\n      + '<div class=\"foto\" data-tipo=\"verso\"><span class=\"rotulo\">B.I. VERSO</span>A carregar...</div>'\n      + '</div>';\n    if (p.estado === 'Pendente') {\n      html += '<div class=\"accoes\">'\n        + '<button class=\"btn btn-principal\" data-acao=\"aprovar\">Aprovar</button>'\n        + '<button class=\"btn btn-perigo\" data-acao=\"rejeitar\">Rejeitar</button>'\n        + '<span class=\"erro\" data-erro></span></div>'\n        + '<div class=\"rejeitar-caixa\"><div class=\"chips\">'\n        + MOTIVOS.map(function(m){ return '<button class=\"chip\" type=\"button\">' + esc(m) + '</button>'; }).join('')\n        + '</div><textarea rows=\"3\" placeholder=\"Motivo da rejeição (vai por email ao cliente)\"></textarea>'\n        + '<div class=\"accoes\"><button class=\"btn btn-perigo\" data-acao=\"confirmar-rejeicao\">Confirmar rejeição</button>'\n        + '<button class=\"btn btn-sec\" data-acao=\"cancelar\">Cancelar</button></div></div>';\n    }\n    el.innerHTML = html;\n\n    Array.prototype.forEach.call(el.querySelectorAll('.foto'), function(caixa){\n      var tipo = caixa.getAttribute('data-tipo');\n      post('/admin-kyc-imagem', { id: p.id, tipo: tipo }).then(function(r){\n        var rotulo = caixa.querySelector('.rotulo').outerHTML;\n        if (r.status !== 'success') { caixa.innerHTML = rotulo + esc(r.message || 'Erro'); return; }\n        caixa.innerHTML = rotulo + '<img alt=\"' + tipo + '\">';\n        var img = caixa.querySelector('img');\n        img.src = r.response.data;\n        img.addEventListener('click', function(){\n          document.getElementById('zoom-img').src = img.src;\n          document.getElementById('zoom').classList.add('aberto');\n        });\n      }).catch(function(){ caixa.lastChild.textContent = 'Erro de ligação'; });\n    });\n\n    if (p.estado === 'Pendente') {\n      var caixaRej = el.querySelector('.rejeitar-caixa');\n      var txt = caixaRej.querySelector('textarea');\n      var elErro = el.querySelector('[data-erro]');\n      Array.prototype.forEach.call(caixaRej.querySelectorAll('.chip'), function(chip){\n        chip.addEventListener('click', function(){ txt.value = chip.textContent; txt.focus(); });\n      });\n      el.querySelector('[data-acao=\"rejeitar\"]').addEventListener('click', function(){ caixaRej.classList.add('aberta'); txt.focus(); });\n      el.querySelector('[data-acao=\"cancelar\"]').addEventListener('click', function(){ caixaRej.classList.remove('aberta'); });\n\n      function decidir(decisao, motivo, botao){\n        botao.disabled = true;\n        elErro.textContent = '';\n        post('/admin-kyc-decidir', { id: p.id, decisao: decisao, motivo: motivo }).then(function(r){\n          if (r.status !== 'success') { botao.disabled = false; elErro.textContent = r.message || 'Erro.'; return; }\n          el.style.transition = 'opacity .3s';\n          el.style.opacity = '0';\n          setTimeout(function(){ carregar(false); }, 320);\n        }).catch(function(){ botao.disabled = false; elErro.textContent = 'Erro de ligação.'; });\n      }\n      el.querySelector('[data-acao=\"aprovar\"]').addEventListener('click', function(){\n        if (!window.confirm('Aprovar a verificação de ' + p.nome + '?')) return;\n        decidir('Aprovado', '', this);\n      });\n      el.querySelector('[data-acao=\"confirmar-rejeicao\"]').addEventListener('click', function(){\n        decidir('Rejeitado', txt.value.trim(), this);\n      });\n    }\n    return el;\n  }\n\n  document.getElementById('zoom').addEventListener('click', function(){ this.classList.remove('aberto'); });\n\n  if (chave) { elChave.value = chave; carregar(true); }\n})();\n</script>\n</body>\n</html>\n";
+
+
+// ======================================================
+// Biblioteca de padrões profissionais (1.60.0)
+// ------------------------------------------------------
+// Tirada de dezenas de referências de nível alto (agências, portefólios,
+// galerias, lojas de mercearia, moda, tecnologia, restaurantes e entregas).
+// Não são moldes: são peças que a IA combina conforme a direcção de arte.
+// ======================================================
+const PADROES_GERAIS = `
+BIBLIOTECA DE PADRÕES PROFISSIONAIS (combina as peças que servem a esta direcção de arte - nunca todas, nunca sempre as mesmas):
+- Hero com promessa clara: título de 2 a 3 linhas com UMA palavra ou expressão em destaque (cor de destaque, degradê no texto, sublinhado desenhado, itálico serifado ou letra manuscrita), frase de apoio curta, 2 botões (principal sólido com seta + secundário em contorno), e prova social logo por baixo (avatares sobrepostos em círculo + estrelas + "500+ clientes") ou 3 micro-benefícios com ícone (entrega, qualidade, apoio).
+- Composição visual do hero com profundidade: foto grande recortada (arco, círculo, cantos assimétricos) sobre uma forma de cor; 2 ou 3 cartões flutuantes por cima com sombra suave (uma métrica "+320%", uma avaliação "4,9 ★", uma etiqueta "Disponível", um preço "desde 900 MZN"); pequenos elementos decorativos (estrelas de 4 pontas, anéis, pontos, rabiscos em SVG).
+- Faixa de confiança: logótipos ou nomes de clientes/parceiros em cinzento discreto, ou uma faixa escura com 4 números grandes (projectos, clientes, anos, satisfação) com ícones.
+- Faixa em movimento: palavras-chave do negócio a deslizar continuamente, separadas por um símbolo (✦, ●, estrela), em fundo escuro ou na cor de destaque.
+- Serviços: cartões com ícone em pastilha colorida, título, texto curto e "Saber mais →"; OU lista numerada (01., 02., 03.) em acordeão, com o item aberto em fundo escuro, etiquetas em pílula e uma imagem.
+- Resultados/casos: cartões com imagem, etiqueta do sector e uma métrica enorme (+180%, 3x).
+- Testemunhos: cartões com aspas grandes na cor de destaque, texto, foto redonda, nome, função e estrelas; em grelha de 3 ou carrossel com pontos.
+- Preços: 3 colunas com o plano do meio destacado (fundo na cor principal, etiqueta "Popular", ligeiramente maior), lista de vantagens com visto, preço grande em MZN, botão em cada coluna.
+- Perguntas frequentes: acordeão em 2 colunas, com + / − e transição suave.
+- Chamada final: bloco largo com cantos muito arredondados na cor forte, título grande, frase e botão; pode ter uma foto a sair do bloco.
+- Rodapé completo: logótipo e frase, 3 a 4 colunas de links, contactos, redes em ícones redondos, newsletter numa pílula (campo + botão com seta) e linha final com direitos e links legais; métodos de pagamento (M-Pesa, e-Mola, Visa) quando é uma loja.
+- Detalhes que dão acabamento: etiquetas pequenas em pílula por cima dos títulos de secção ("— Os nossos serviços"), títulos de secção com um traço ou estrela decorativa, botões com ícone de seta dentro de um círculo, cartões que sobem 2-4px no hover, sombras longas e suaves, uma segunda cor usada com parcimónia.`;
+
+const PADROES_TIPO = {
+  'Portefólio': `
+PADRÕES DE PORTEFÓLIO DE TOPO: hero centrado com "Olá, eu sou" + nome enorme (o apelido na cor de destaque, em itálico ou com rabisco), a profissão e a cidade; a foto da pessoa recortada sobre uma forma orgânica ou um círculo de cor (se houver foto), com selos flutuantes à volta ("150+ avaliações 4,9", "10 anos de experiência", "Disponível para projectos" com ponto verde a pulsar), pílulas com as competências, um botão circular com texto a rodar ("contrata-me • contrata-me •") e os ícones das redes; faixa preta com as competências em movimento; serviços em lista numerada em acordeão; números em cartões (anos, projectos, clientes, prémios) ou barras/anéis de percentagem; processo em passos numerados; ferramentas em grelha de ícones; testemunhos; chamada final "Vamos criar algo juntos".`,
+  'Galeria': `
+PADRÕES DE GALERIA DE TOPO: branco e silencioso, as fotos são as protagonistas; etiqueta em pílula ("As nossas histórias"), título gigante e frase curta alinhada à direita; mosaico "bento" de fotos com cantos arredondados, alturas diferentes e espaços finos e iguais (uma foto grande em 2 colunas, verticais ao lado); legendas discretas; secção de serviços ou pacotes com preços; testemunhos de clientes; chamada para marcar sessão. Cores tiradas das próprias fotos.`,
+  'Landing Page': `
+PADRÕES DE SITE DE NEGÓCIO DE TOPO: agência/serviços (hero com promessa + prova social + composição com cartões flutuantes, logótipos de clientes, serviços em cartões, faixa escura de números, resultados, testemunhos, preços com plano destacado, FAQ, chamada final); restaurante/comida (hero escuro com foto grande do prato, uma palavra em letra manuscrita na cor quente, botão "Encomendar agora", ícones de garantias - ingredientes frescos, entrega rápida, higiene - , menu popular em cartões com foto, preço e botão "Adicionar", faixa curva "Com fome? Nós entregamos"); app/produto digital (mockups de telemóvel desenhados em HTML/CSS com ecrãs do produto, funcionalidades em cartões, passos "como funciona").`,
+  'E-commerce': `
+PADRÕES DE LOJA DE TOPO (só no que tu desenhas - cabeçalho, faixas e rodapé): barra fina de anúncio no topo ("Entrega em todo o país", "Pagamento por M-Pesa e e-Mola"); cabeçalho com logótipo, menu, pesquisa ou ícone de pesquisa, conta e carrinho com contagem numa bolinha; depois da montra, faixa de 4 vantagens com ícones em pastilhas (entrega, devoluções, pagamento seguro, apoio por WhatsApp) e uma frase cada; faixa de comunidade/recompensas em fundo escuro ou na cor de destaque com botão; newsletter em pílula; rodapé de 4 colunas com métodos de pagamento.`,
+  'Checkout': `
+PADRÕES DE PÁGINA DE VENDA DE TOPO: cabeçalho mínimo; promessa forte; prova social (estrelas, número de clientes); a oferta; garantias com ícones (pagamento seguro, entrega, apoio); perguntas frequentes curtas; urgência honesta (stock ou prazo reais, nunca falsos).`,
+  'Blog': `
+PADRÕES DE BLOG DE TOPO: capa de revista com o artigo em destaque grande, categorias em pílulas, autor com foto redonda e uma frase, subscrição da newsletter numa caixa elegante, tipografia de leitura confortável (16-19px, linhas de 60-75 caracteres).`
+};
+function padroesDoTipo(tipo) {
+  return PADROES_GERAIS + (PADROES_TIPO[tipo] || '');
+}
+
+function paginasMulti(html) { return /<meta\s+name=["']daniel-ia-paginas["']/i.test(String(html || '')); }
+const INSTRUCAO_EDICAO_MULTI = `\nSITE COM VÁRIAS PÁGINAS: esta é uma das páginas do site. Mantém a estrutura <header data-dia="cabecalho">, <main data-dia="conteudo"> e <footer data-dia="rodape"> como filhos directos do <body>, os links do menu para as outras páginas (.html) e as <meta name="daniel-ia-..."> do <head>. O cabeçalho, o rodapé e o CSS do <head> são partilhados por todas as páginas: se o pedido for sobre o conteúdo desta página, muda só o <main>; se for sobre o cabeçalho, o rodapé, as cores ou as letras, a mudança passa sozinha para as outras páginas.`;
+const QUIZ_JS = "/*\n  Daniel IA - quiz antes do checkout (1.60.0)\n  -------------------------------------------\n  Perguntas com pontos, uma de cada vez. No fim mostra a pontuação e o\n  resultado, e só então revela o checkout (se o dono assim quiser).\n  Servido em /quiz.js. Lê a configuração em /quiz-ler.\n  Usa as fichas --dia-* do próprio site; textos no idioma do <html lang>.\n*/\n(function(){\n  'use strict';\n  var CONTAINER_URL = '__SELF_URL__';\n  var SITE_ID = window.DANIEL_IA_SITE_ID || '';\n  if (!SITE_ID || window.__danielQuiz) return;\n  window.__danielQuiz = true;\n  var meta = document.querySelector('meta[name=\"daniel-ia-pagina\"]');\n  var pagina = meta ? (meta.getAttribute('content') || 'inicio') : 'inicio';\n  if (pagina !== 'inicio') return;\n  var LANG = (document.documentElement.lang || 'pt').slice(0, 2).toLowerCase();\n  var T = {\n    pt: { comecar: 'Começar', perguntas: '{n} perguntas', resultadoHora: 'resultado na hora', pergunta: 'Pergunta {a} de {b}', pts: 'pts', voltar: 'Voltar', quaseLa: 'Quase lá!', ondeMandar: 'Deixa o teu contacto para receberes o resultado e a oferta.', nome: 'O teu nome', contacto: 'WhatsApp ou email', verResultado: 'Ver o meu resultado', semContacto: 'Ver sem deixar contacto', faltaNome: 'Escreve o teu nome e um contacto.', calcular: 'A calcular o teu resultado...', pontuacao: 'A tua pontuação', verOferta: 'Ver a oferta', refazer: 'Refazer o quiz', bloqueado: 'A oferta aparece no fim do quiz.', jaFeito: 'Já fizeste o quiz', verResultadoDe: 'O teu resultado: {r}' },\n    en: { comecar: 'Start', perguntas: '{n} questions', resultadoHora: 'instant result', pergunta: 'Question {a} of {b}', pts: 'pts', voltar: 'Back', quaseLa: 'Almost there!', ondeMandar: 'Leave your contact to receive your result and the offer.', nome: 'Your name', contacto: 'WhatsApp or email', verResultado: 'See my result', semContacto: 'See it without leaving a contact', faltaNome: 'Write your name and a contact.', calcular: 'Calculating your result...', pontuacao: 'Your score', verOferta: 'See the offer', refazer: 'Take the quiz again', bloqueado: 'The offer appears at the end of the quiz.', jaFeito: 'You already took the quiz', verResultadoDe: 'Your result: {r}' },\n    fr: { comecar: 'Commencer', perguntas: '{n} questions', resultadoHora: 'résultat immédiat', pergunta: 'Question {a} sur {b}', pts: 'pts', voltar: 'Retour', quaseLa: 'Presque fini !', ondeMandar: 'Laissez votre contact pour recevoir votre résultat et l’offre.', nome: 'Votre nom', contacto: 'WhatsApp ou e-mail', verResultado: 'Voir mon résultat', semContacto: 'Voir sans laisser de contact', faltaNome: 'Écrivez votre nom et un contact.', calcular: 'Calcul de votre résultat...', pontuacao: 'Votre score', verOferta: 'Voir l’offre', refazer: 'Refaire le quiz', bloqueado: 'L’offre apparaît à la fin du quiz.', jaFeito: 'Vous avez déjà fait le quiz', verResultadoDe: 'Votre résultat : {r}' },\n    es: { comecar: 'Empezar', perguntas: '{n} preguntas', resultadoHora: 'resultado al instante', pergunta: 'Pregunta {a} de {b}', pts: 'pts', voltar: 'Volver', quaseLa: '¡Casi listo!', ondeMandar: 'Deja tu contacto para recibir tu resultado y la oferta.', nome: 'Tu nombre', contacto: 'WhatsApp o email', verResultado: 'Ver mi resultado', semContacto: 'Ver sin dejar contacto', faltaNome: 'Escribe tu nombre y un contacto.', calcular: 'Calculando tu resultado...', pontuacao: 'Tu puntuación', verOferta: 'Ver la oferta', refazer: 'Repetir el quiz', bloqueado: 'La oferta aparece al final del quiz.', jaFeito: 'Ya hiciste el quiz', verResultadoDe: 'Tu resultado: {r}' }\n  };\n  var L = T[LANG] || T.pt;\n  function tx(k, v){ var s = L[k] || T.pt[k] || k; if (v) Object.keys(v).forEach(function(n){ s = s.replace('{' + n + '}', v[n]); }); return s; }\n  function esc(t){ return String(t == null ? '' : t).replace(/[&<>\"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }\n  var CHAVE = 'daniel_ia_quiz_' + SITE_ID;\n  function lerFeito(){ try { var d = JSON.parse(localStorage.getItem(CHAVE) || 'null'); return d && Date.now() - d.t < 14 * 86400000 ? d : null; } catch (e) { return null; } }\n  function guardarFeito(d){ try { localStorage.setItem(CHAVE, JSON.stringify(d)); } catch (e) {} }\n\n  var CSS = ''\n    + 'html.dia-quiz-bloqueado #daniel-ia-produtos,html.dia-quiz-bloqueado [data-dia-depois-quiz]{display:none!important}'\n    + '.dq{--q-p:var(--dia-primaria,#111);--q-pt:var(--dia-primaria-texto,#fff);--q-f:var(--dia-fundo,#fff);--q-s:var(--dia-superficie,#f6f6f6);--q-t:var(--dia-texto,#111);--q-ts:var(--dia-texto-suave,#666);--q-b:var(--dia-borda,rgba(0,0,0,.1));--q-r:var(--dia-raio,16px);'\n    + 'max-width:720px;margin:clamp(20px,4vw,48px) auto;padding:0 16px;box-sizing:border-box;text-align:left;font-family:var(--dia-fonte-texto,inherit);color:var(--q-t)}'\n    + '.dq *{box-sizing:border-box}'\n    + '.dq-cartao{position:relative;background:var(--q-f);border:1px solid var(--q-b);border-radius:calc(var(--q-r) + 8px);padding:clamp(22px,4vw,40px);box-shadow:0 24px 60px -30px rgba(0,0,0,.35);overflow:hidden}'\n    + '.dq-cartao::before{content:\"\";position:absolute;inset:0 0 auto 0;height:5px;background:linear-gradient(90deg,var(--q-p),color-mix(in srgb,var(--q-p) 45%,#fff))}'\n    + '.dq-etiqueta{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;letter-spacing:.04em;padding:6px 12px;border-radius:999px;background:color-mix(in srgb,var(--q-p) 12%,transparent);color:var(--q-p)}'\n    + '.dq-etiqueta svg{width:14px;height:14px}'\n    + '.dq h2{font-family:var(--dia-fonte-titulos,inherit);font-size:clamp(26px,4.4vw,40px);line-height:1.08;letter-spacing:-.02em;margin:16px 0 10px}'\n    + '.dq h3{font-family:var(--dia-fonte-titulos,inherit);font-size:clamp(20px,3.2vw,28px);line-height:1.18;margin:18px 0 6px}'\n    + '.dq p{margin:0;color:var(--q-ts);font-size:16px;line-height:1.6}'\n    + '.dq-meta{display:flex;flex-wrap:wrap;gap:14px;margin:18px 0 26px;color:var(--q-ts);font-size:14px}.dq-meta span{display:inline-flex;align-items:center;gap:6px}.dq-meta svg{width:16px;height:16px;color:var(--q-p)}'\n    + '.dq-btn{appearance:none;border:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 26px;border-radius:999px;background:var(--q-p);color:var(--q-pt);font:700 16px/1 var(--dia-fonte-texto,inherit);transition:transform .15s,box-shadow .2s;box-shadow:0 12px 26px -12px color-mix(in srgb,var(--q-p) 70%,transparent)}'\n    + '.dq-btn:hover{transform:translateY(-1px)}.dq-btn:disabled{opacity:.55;cursor:default;transform:none}.dq-btn svg{width:18px;height:18px}'\n    + '.dq-ligacao{appearance:none;background:none;border:0;color:var(--q-ts);font:600 14px/1 var(--dia-fonte-texto,inherit);cursor:pointer;padding:10px 4px;display:inline-flex;align-items:center;gap:6px}.dq-ligacao:hover{color:var(--q-t)}.dq-ligacao svg{width:15px;height:15px}'\n    + '.dq-topo{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13.5px;font-weight:700;color:var(--q-ts)}'\n    + '.dq-pts{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--q-s);color:var(--q-t);font-variant-numeric:tabular-nums}.dq-pts svg{width:14px;height:14px;color:var(--q-p)}'\n    + '.dq-barra{display:flex;gap:5px;margin-top:12px}.dq-barra i{flex:1;height:6px;border-radius:99px;background:var(--q-s);overflow:hidden;position:relative}.dq-barra i.feita::after,.dq-barra i.actual::after{content:\"\";position:absolute;inset:0;background:var(--q-p);border-radius:inherit}.dq-barra i.actual::after{opacity:.45}'\n    + '.dq-img{margin:16px 0 4px;border-radius:var(--q-r);overflow:hidden;aspect-ratio:16/8;background:var(--q-s)}.dq-img img{width:100%;height:100%;object-fit:cover;display:block}'\n    + '.dq-opcoes{display:grid;gap:10px;margin-top:20px}'\n    + '.dq-op{appearance:none;width:100%;text-align:left;display:flex;align-items:center;gap:14px;padding:14px 16px;min-height:58px;border-radius:var(--q-r);border:1.5px solid var(--q-b);background:var(--q-f);color:var(--q-t);font:600 16px/1.35 var(--dia-fonte-texto,inherit);cursor:pointer;transition:border-color .15s,background .15s,transform .12s}'\n    + '.dq-op:hover{border-color:color-mix(in srgb,var(--q-p) 60%,var(--q-b));transform:translateX(2px)}'\n    + '.dq-op b{flex:0 0 32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--q-s);font-size:13px;color:var(--q-ts)}'\n    + '.dq-op.escolhida{border-color:var(--q-p);background:color-mix(in srgb,var(--q-p) 9%,var(--q-f))}.dq-op.escolhida b{background:var(--q-p);color:var(--q-pt)}'\n    + '.dq-mais{position:absolute;pointer-events:none;font:800 18px/1 var(--dia-fonte-titulos,inherit);color:var(--q-p);animation:dqSobe .9s ease-out forwards}'\n    + '@keyframes dqSobe{from{opacity:0;transform:translateY(6px)}20%{opacity:1}to{opacity:0;transform:translateY(-34px)}}'\n    + '.dq-ecra{animation:dqEntra .35s ease-out}@keyframes dqEntra{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}'\n    + '.dq-campos{display:grid;gap:10px;margin:20px 0 18px}.dq-campos input{width:100%;min-height:52px;padding:0 16px;border-radius:var(--q-r);border:1.5px solid var(--q-b);background:var(--q-f);color:var(--q-t);font:500 16px var(--dia-fonte-texto,inherit);outline:none}.dq-campos input:focus{border-color:var(--q-p)}'\n    + '.dq-erro{color:#C0392B;font-size:14px;font-weight:600;min-height:20px;margin-bottom:6px}'\n    + '.dq-calc{display:grid;place-items:center;text-align:center;padding:40px 0}.dq-calc i{width:46px;height:46px;border-radius:50%;border:4px solid var(--q-s);border-top-color:var(--q-p);animation:dqGira .8s linear infinite;margin-bottom:16px}@keyframes dqGira{to{transform:rotate(360deg)}}'\n    + '.dq-res{display:grid;grid-template-columns:auto 1fr;gap:clamp(18px,4vw,34px);align-items:center}'\n    + '.dq-anel{position:relative;width:clamp(130px,26vw,170px);aspect-ratio:1}.dq-anel svg{width:100%;height:100%;transform:rotate(-90deg)}.dq-anel circle{fill:none;stroke-width:10}.dq-anel .fundo{stroke:var(--q-s)}.dq-anel .valor{stroke:var(--q-p);stroke-linecap:round;transition:stroke-dashoffset 1.4s cubic-bezier(.2,.8,.2,1)}'\n    + '.dq-anel div{position:absolute;inset:0;display:grid;place-content:center;text-align:center}.dq-anel strong{font:800 clamp(30px,6vw,42px)/1 var(--dia-fonte-titulos,inherit);font-variant-numeric:tabular-nums}.dq-anel small{font-size:10px;color:var(--q-ts);margin:4px auto 0;text-transform:uppercase;letter-spacing:.05em;max-width:78%;line-height:1.25}'\n    + '.dq-res h3{margin-top:6px}.dq-accoes{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:20px}'\n    + '.dq-cadeado{display:flex;align-items:center;gap:10px;margin-top:22px;padding:12px 14px;border-radius:var(--q-r);background:var(--q-s);font-size:14px;color:var(--q-ts)}.dq-cadeado svg{width:18px;height:18px;flex:0 0 18px;color:var(--q-p)}'\n    + '.dq-feito{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 18px;border:1px solid var(--q-b);border-radius:calc(var(--q-r) + 4px);background:var(--q-f)}.dq-feito b{font-family:var(--dia-fonte-titulos,inherit)}'\n    + '@media (max-width:560px){.dq-res{grid-template-columns:1fr;justify-items:center;text-align:center}.dq-accoes{justify-content:center}.dq-btn{width:100%}}'\n    + '@media (prefers-reduced-motion:reduce){.dq-ecra,.dq-mais{animation:none}.dq-anel .valor{transition:none}}';\n  var IC = {\n    relogio: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>',\n    lista: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M9 6h11M9 12h11M9 18h11\"/><path d=\"M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2\"/></svg>',\n    seta: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>',\n    voltar: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M19 12H5M11 18l-6-6 6-6\"/></svg>',\n    estrela: '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z\"/></svg>',\n    cadeado: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><rect x=\"4\" y=\"11\" width=\"16\" height=\"10\" rx=\"2\"/><path d=\"M8 11V7a4 4 0 0 1 8 0v4\"/></svg>',\n    brilho: '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z\"/></svg>'\n  };\n\n  var Q = null, raiz = null, cartao = null;\n  var idx = 0, respostas = [], pontos = 0, nome = '', contacto = '';\n  function maxPontos(){ return Q.perguntas.reduce(function(s, p){ return s + Math.max.apply(null, p.opcoes.map(function(o){ return o.pontos; }).concat([0])); }, 0); }\n  function resultadoDe(pts){\n    var r = null;\n    (Q.resultados || []).forEach(function(x){ if (pts >= x.min) r = x; });\n    return r || (Q.resultados || [])[0] || { titulo: '', texto: '', botao: '' };\n  }\n  function ecra(html){ cartao.innerHTML = '<div class=\"dq-ecra\">' + html + '</div>'; }\n\n  function intro(){\n    ecra('<span class=\"dq-etiqueta\">' + IC.brilho + esc(Q.etiqueta || 'Quiz') + '</span>'\n      + '<h2>' + esc(Q.titulo) + '</h2>' + (Q.subtitulo ? '<p>' + esc(Q.subtitulo) + '</p>' : '')\n      + '<div class=\"dq-meta\"><span>' + IC.lista + esc(tx('perguntas', { n: Q.perguntas.length })) + '</span><span>' + IC.relogio + esc(tx('resultadoHora')) + '</span></div>'\n      + '<button class=\"dq-btn\" data-q=\"iniciar\">' + esc(Q.botao_iniciar || tx('comecar')) + IC.seta + '</button>'\n      + (Q.bloquear ? '<div class=\"dq-cadeado\">' + IC.cadeado + '<span>' + esc(tx('bloqueado')) + '</span></div>' : ''));\n    cartao.querySelector('[data-q=\"iniciar\"]').addEventListener('click', function(){ idx = 0; respostas = []; pontos = 0; pergunta(); });\n  }\n  function pergunta(){\n    var p = Q.perguntas[idx], letras = 'ABCDEF';\n    var barra = Q.perguntas.map(function(_, i){ return '<i class=\"' + (i < idx ? 'feita' : (i === idx ? 'actual' : '')) + '\"></i>'; }).join('');\n    ecra('<div class=\"dq-topo\"><span>' + esc(tx('pergunta', { a: idx + 1, b: Q.perguntas.length })) + '</span>'\n      + (Q.mostrar_pontos ? '<span class=\"dq-pts\">' + IC.estrela + '<span data-q=\"pts\">' + pontos + '</span> ' + esc(tx('pts')) + '</span>' : '') + '</div>'\n      + '<div class=\"dq-barra\">' + barra + '</div>'\n      + (p.imagem ? '<div class=\"dq-img\"><img src=\"' + esc(p.imagem) + '\" alt=\"\"></div>' : '')\n      + '<h3>' + esc(p.texto) + '</h3>' + (p.ajuda ? '<p>' + esc(p.ajuda) + '</p>' : '')\n      + '<div class=\"dq-opcoes\">' + p.opcoes.map(function(o, i){ return '<button class=\"dq-op\" data-op=\"' + i + '\"><b>' + letras[i] + '</b><span>' + esc(o.texto) + '</span></button>'; }).join('') + '</div>'\n      + (idx > 0 ? '<div style=\"margin-top:14px\"><button class=\"dq-ligacao\" data-q=\"voltar\">' + IC.voltar + esc(tx('voltar')) + '</button></div>' : ''));\n    var ocupado = false;\n    Array.prototype.forEach.call(cartao.querySelectorAll('.dq-op'), function(b){\n      b.addEventListener('click', function(){\n        if (ocupado) return; ocupado = true;\n        var o = p.opcoes[Number(b.getAttribute('data-op'))];\n        b.classList.add('escolhida');\n        respostas[idx] = Number(b.getAttribute('data-op'));\n        pontos += o.pontos;\n        if (Q.mostrar_pontos && o.pontos > 0) {\n          var m = document.createElement('span'); m.className = 'dq-mais'; m.textContent = '+' + o.pontos;\n          var rc = b.getBoundingClientRect(), rr = cartao.getBoundingClientRect();\n          m.style.left = (rc.right - rr.left - 56) + 'px'; m.style.top = (rc.top - rr.top + 10) + 'px';\n          cartao.appendChild(m);\n          var el = cartao.querySelector('[data-q=\"pts\"]'); if (el) el.textContent = pontos;\n        }\n        setTimeout(function(){\n          idx++;\n          if (idx < Q.perguntas.length) pergunta();\n          else if (Q.captar !== 'nao') captura();\n          else calcular();\n        }, 520);\n      });\n    });\n    var v = cartao.querySelector('[data-q=\"voltar\"]');\n    if (v) v.addEventListener('click', function(){\n      idx--;\n      var ant = Q.perguntas[idx].opcoes[respostas[idx]];\n      if (ant) pontos -= ant.pontos;\n      respostas.length = idx;\n      pergunta();\n    });\n  }\n  function captura(){\n    ecra('<span class=\"dq-etiqueta\">' + IC.brilho + esc(tx('quaseLa')) + '</span><h3>' + esc(tx('ondeMandar')) + '</h3>'\n      + '<div class=\"dq-campos\"><input type=\"text\" maxlength=\"80\" autocomplete=\"name\" placeholder=\"' + esc(tx('nome')) + '\" data-q=\"nome\">'\n      + '<input type=\"text\" maxlength=\"120\" autocomplete=\"tel\" placeholder=\"' + esc(tx('contacto')) + '\" data-q=\"contacto\"></div>'\n      + '<div class=\"dq-erro\" data-q=\"erro\"></div>'\n      + '<div class=\"dq-accoes\" style=\"margin-top:0\"><button class=\"dq-btn\" data-q=\"ver\">' + esc(tx('verResultado')) + IC.seta + '</button>'\n      + (Q.captar === 'opcional' ? '<button class=\"dq-ligacao\" data-q=\"saltar\">' + esc(tx('semContacto')) + '</button>' : '') + '</div>');\n    var iN = cartao.querySelector('[data-q=\"nome\"]'), iC = cartao.querySelector('[data-q=\"contacto\"]');\n    iN.focus();\n    cartao.querySelector('[data-q=\"ver\"]').addEventListener('click', function(){\n      nome = iN.value.trim(); contacto = iC.value.trim();\n      if (nome.length < 2 || contacto.length < 6) { cartao.querySelector('[data-q=\"erro\"]').textContent = tx('faltaNome'); return; }\n      calcular();\n    });\n    var s = cartao.querySelector('[data-q=\"saltar\"]');\n    if (s) s.addEventListener('click', function(){ nome = ''; contacto = ''; calcular(); });\n  }\n  function enviar(){\n    try {\n      fetch(CONTAINER_URL + '/quiz-responder', { method: 'POST', headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ site_id: SITE_ID, respostas: respostas, nome: nome, contacto: contacto }) }).catch(function(){});\n    } catch (e) {}\n  }\n  function calcular(){\n    enviar();\n    ecra('<div class=\"dq-calc\"><i></i><p>' + esc(tx('calcular')) + '</p></div>');\n    setTimeout(resultado, 1300);\n  }\n  function resultado(){\n    var max = Math.max(1, maxPontos());\n    var r = resultadoDe(pontos);\n    guardarFeito({ t: Date.now(), pontos: pontos, titulo: r.titulo });\n    var C = 2 * Math.PI * 54, pct = Math.max(0, Math.min(1, pontos / max));\n    ecra('<div class=\"dq-res\"><div class=\"dq-anel\"><svg viewBox=\"0 0 120 120\"><circle class=\"fundo\" cx=\"60\" cy=\"60\" r=\"54\"/><circle class=\"valor\" cx=\"60\" cy=\"60\" r=\"54\" stroke-dasharray=\"' + C.toFixed(1) + '\" stroke-dashoffset=\"' + C.toFixed(1) + '\"/></svg>'\n      + '<div><strong data-q=\"num\">0</strong><small>' + esc(tx('pontuacao')) + '</small></div></div>'\n      + '<div><span class=\"dq-etiqueta\">' + IC.brilho + esc(Q.etiqueta || 'Quiz') + '</span><h3>' + esc(r.titulo) + '</h3>' + (r.texto ? '<p>' + esc(r.texto) + '</p>' : '')\n      + '<div class=\"dq-accoes\"><button class=\"dq-btn\" data-q=\"oferta\">' + esc(r.botao || Q.cta || tx('verOferta')) + IC.seta + '</button><button class=\"dq-ligacao\" data-q=\"refazer\">' + esc(tx('refazer')) + '</button></div></div></div>');\n    var anel = cartao.querySelector('.valor');\n    requestAnimationFrame(function(){ requestAnimationFrame(function(){ anel.style.strokeDashoffset = (C * (1 - pct)).toFixed(1); }); });\n    var num = cartao.querySelector('[data-q=\"num\"]'), t0 = null;\n    function contar(t){ if (!t0) t0 = t; var k = Math.min(1, (t - t0) / 1200); num.textContent = Math.round(pontos * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(contar); }\n    requestAnimationFrame(contar);\n    desbloquear(false);\n    cartao.querySelector('[data-q=\"oferta\"]').addEventListener('click', function(){ desbloquear(true); });\n    cartao.querySelector('[data-q=\"refazer\"]').addEventListener('click', function(){ idx = 0; respostas = []; pontos = 0; pergunta(); });\n  }\n  function desbloquear(rolar){\n    document.documentElement.classList.remove('dia-quiz-bloqueado');\n    if (!rolar) return;\n    var alvo = document.getElementById('daniel-ia-produtos') || document.querySelector('[data-dia-depois-quiz]');\n    if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });\n  }\n  function jaFeito(d){\n    ecra('<div class=\"dq-feito\"><div><small style=\"color:var(--q-ts)\">' + esc(tx('jaFeito')) + '</small><br><b>' + esc(tx('verResultadoDe', { r: d.titulo || (d.pontos + ' ' + tx('pts')) })) + '</b></div>'\n      + '<div class=\"dq-accoes\" style=\"margin-top:0\"><button class=\"dq-btn\" data-q=\"oferta\">' + esc(Q.cta || tx('verOferta')) + IC.seta + '</button><button class=\"dq-ligacao\" data-q=\"refazer\">' + esc(tx('refazer')) + '</button></div></div>');\n    cartao.classList.add('dq-cartao-feito');\n    cartao.querySelector('[data-q=\"oferta\"]').addEventListener('click', function(){ desbloquear(true); });\n    cartao.querySelector('[data-q=\"refazer\"]').addEventListener('click', function(){ cartao.classList.remove('dq-cartao-feito'); intro(); });\n  }\n\n  function arrancar(){\n    raiz = document.getElementById('daniel-ia-quiz');\n    if (!raiz) {\n      var loja = document.getElementById('daniel-ia-produtos');\n      if (!loja) return;\n      raiz = document.createElement('div');\n      raiz.id = 'daniel-ia-quiz';\n      loja.parentNode.insertBefore(raiz, loja);\n    }\n    var previa = /[?&]dia_previa=1/.test(location.search) || /\\/v\\d+\\.html$/.test(location.pathname);\n    fetch(CONTAINER_URL + '/quiz-ler', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site_id: SITE_ID, previa: previa }) })\n      .then(function(r){ return r.json(); })\n      .then(function(r){\n        Q = r && r.status === 'success' && r.response && r.response.quiz;\n        if (!Q || !Q.ativo || !Q.perguntas || !Q.perguntas.length) { raiz.style.display = 'none'; return; }\n        var st = document.createElement('style'); st.setAttribute('data-daniel-ia', 'quiz'); st.textContent = CSS; document.head.appendChild(st);\n        raiz.innerHTML = '<section class=\"dq\"><div class=\"dq-cartao\"></div></section>';\n        cartao = raiz.querySelector('.dq-cartao');\n        var feito = lerFeito();\n        if (Q.bloquear && !feito) document.documentElement.classList.add('dia-quiz-bloqueado');\n        if (feito) jaFeito(feito); else intro();\n      })\n      .catch(function(){ raiz.style.display = 'none'; });\n  }\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();\n})();\n".replace('__SELF_URL__', SELF_URL);
+
+// ======================================================
+// 1.60.0 - Sites com várias páginas, fotografias reais e editor visual
+// ------------------------------------------------------
+// Antes, cada site era uma página única. Agora:
+//   - antes de desenhar, a IA planeia as páginas do site (Início, Sobre,
+//     Serviços, Contacto, Loja, Produto...) e escolhe as fotografias;
+//   - as fotos vêm do Pexels (grátis) e, quando falta alguma, são geradas
+//     pela IA de imagens da OpenAI;
+//   - as 3 versões do estúdio desenham só a página inicial, já com o menu
+//     a apontar para as outras páginas;
+//   - quando a pessoa escolhe uma versão, as outras páginas são criadas em
+//     fundo a partir da inicial: o cabeçalho, o rodapé e o CSS são sempre
+//     os da inicial ("casca"); cada página só tem o seu <main> próprio;
+//   - o conteúdo de cada página fica guardado em _paginas.json, na pasta
+//     do site, para as páginas poderem ser montadas outra vez sempre que
+//     a inicial muda (edição com IA, editor visual, outro layout).
+// ======================================================
+const PEXELS_API_KEY = clean(process.env.PEXELS_API_KEY);
+const FOTOS_IA = (clean(process.env.FOTOS_IA) || 'sim').toLowerCase() !== 'nao';
+const OPENAI_IMAGE_MODEL = clean(process.env.OPENAI_IMAGE_MODEL) || 'gpt-image-1';
+const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 3);
+const TOKENS_POR_FOTO_IA = Math.max(0, parseInt(clean(process.env.TOKENS_POR_FOTO_IA), 10) || 3000);
+const PAGINAS_IA_MAX_FREE = 2;
+const PAGINAS_IA_MAX = 4;
+
+const PAGINAS_CATALOGO = {
+  inicio: {}, loja: { modulo: 'loja' }, produto: { modulo: 'produto', menu: false },
+  trabalhos: { modulo: 'portfolio' }, albuns: { modulo: 'galeria' }, artigos: { modulo: 'blog' },
+  sobre: {}, servicos: {}, precos: {}, menu: {}, reservas: {}, galeria: {}, equipa: {}, perguntas: {},
+  contacto: { modulo: 'contacto' }
+};
+const NOMES_PAGINAS = {
+  inicio: { pt: ['Início', 'Início'], en: ['Home', 'Home'], fr: ['Accueil', 'Accueil'], es: ['Inicio', 'Inicio'] },
+  loja: { pt: ['Loja', 'Loja'], en: ['Shop', 'Shop'], fr: ['Boutique', 'Boutique'], es: ['Tienda', 'Tienda'] },
+  produto: { pt: ['Produto', 'Produto'], en: ['Product', 'Product'], fr: ['Produit', 'Produit'], es: ['Producto', 'Producto'] },
+  trabalhos: { pt: ['Trabalhos', 'Trabalhos'], en: ['Work', 'Work'], fr: ['Réalisations', 'Réalisations'], es: ['Trabajos', 'Trabajos'] },
+  albuns: { pt: ['Álbuns', 'Álbuns'], en: ['Albums', 'Albums'], fr: ['Albums', 'Albums'], es: ['Álbumes', 'Álbumes'] },
+  artigos: { pt: ['Artigos', 'Artigos'], en: ['Articles', 'Articles'], fr: ['Articles', 'Articles'], es: ['Artículos', 'Artículos'] },
+  sobre: { pt: ['Sobre', 'Sobre nós'], en: ['About', 'About us'], fr: ['À propos', 'À propos'], es: ['Nosotros', 'Sobre nosotros'] },
+  servicos: { pt: ['Serviços', 'Serviços'], en: ['Services', 'Services'], fr: ['Services', 'Services'], es: ['Servicios', 'Servicios'] },
+  precos: { pt: ['Preços', 'Preços'], en: ['Pricing', 'Pricing'], fr: ['Tarifs', 'Tarifs'], es: ['Precios', 'Precios'] },
+  menu: { pt: ['Menu', 'Menu'], en: ['Menu', 'Menu'], fr: ['Carte', 'La carte'], es: ['Menú', 'Menú'] },
+  reservas: { pt: ['Reservas', 'Reservas'], en: ['Bookings', 'Bookings'], fr: ['Réservations', 'Réservations'], es: ['Reservas', 'Reservas'] },
+  galeria: { pt: ['Galeria', 'Galeria'], en: ['Gallery', 'Gallery'], fr: ['Galerie', 'Galerie'], es: ['Galería', 'Galería'] },
+  equipa: { pt: ['Equipa', 'A nossa equipa'], en: ['Team', 'Our team'], fr: ['Équipe', 'Notre équipe'], es: ['Equipo', 'Nuestro equipo'] },
+  perguntas: { pt: ['Perguntas', 'Perguntas frequentes'], en: ['FAQ', 'Frequently asked questions'], fr: ['FAQ', 'Questions fréquentes'], es: ['Preguntas', 'Preguntas frecuentes'] },
+  contacto: { pt: ['Contacto', 'Contacto'], en: ['Contact', 'Contact'], fr: ['Contact', 'Contact'], es: ['Contacto', 'Contacto'] }
+};
+const RESUMOS_PAGINAS = {
+  inicio: 'a montra do site: o que o negócio faz, os destaques de cada página e as chamadas para acção',
+  loja: 'todos os produtos, com filtros por categoria, preço e avaliação',
+  produto: 'a página de cada produto',
+  trabalhos: 'todos os trabalhos e projectos',
+  albuns: 'todos os álbuns de fotos e vídeos',
+  artigos: 'todos os artigos do blog',
+  sobre: 'a história, a missão, os valores, os números e o que torna o negócio diferente',
+  servicos: 'cada serviço em detalhe, com benefícios, para quem é e como funciona',
+  precos: 'os planos ou pacotes com preços em MZN, o que inclui cada um e perguntas sobre pagamento',
+  menu: 'o menu completo por categorias, com pratos, descrições curtas e preços em MZN',
+  reservas: 'como reservar, horários, condições e chamada para reservar por WhatsApp ou contacto',
+  galeria: 'uma galeria de imagens do espaço, dos trabalhos ou dos produtos',
+  equipa: 'as pessoas da equipa, com funções e uma frase de cada',
+  perguntas: 'as perguntas frequentes em acordeão, agrupadas por tema',
+  contacto: 'os contactos (telefone, WhatsApp, email, morada, horário), um mapa desenhado e o formulário'
+};
+const PAGINAS_TIPO = {
+  'E-commerce': { fixas: ['inicio', 'loja', 'produto', 'sobre', 'contacto'], opcionais: ['perguntas'] },
+  'Checkout': { fixas: ['inicio'], opcionais: [] },
+  'Landing Page': { fixas: ['inicio', 'sobre', 'contacto'], opcionais: ['servicos', 'precos', 'menu', 'reservas', 'galeria', 'equipa', 'perguntas'] },
+  'Portefólio': { fixas: ['inicio', 'trabalhos', 'sobre', 'contacto'], opcionais: ['servicos'] },
+  'Galeria': { fixas: ['inicio', 'albuns', 'sobre', 'contacto'], opcionais: ['servicos', 'precos'] },
+  'Blog': { fixas: ['inicio', 'artigos', 'sobre', 'contacto'], opcionais: [] }
+};
+function ficheiroDaPagina(slug) { return slug === 'inicio' ? 'index.html' : slug + '.html'; }
+function paginaBase(slug, idioma) {
+  const nomes = (NOMES_PAGINAS[slug] || NOMES_PAGINAS.sobre)[normalizarIdioma(idioma)];
+  const cat = PAGINAS_CATALOGO[slug] || {};
+  return {
+    slug, ficheiro: ficheiroDaPagina(slug), nav: nomes[0], titulo: nomes[1], subtitulo: '',
+    resumo: RESUMOS_PAGINAS[slug] || '', modulo: cat.modulo || '', menu: cat.menu !== false,
+    ia: slug !== 'inicio' && (!cat.modulo || cat.modulo === 'contacto')
+  };
+}
+function siteMultiPagina(site) {
+  const e = lerJsonSeguro(site && site['Variantes Json'], null);
+  return !!(e && Array.isArray(e.plano_paginas) && e.plano_paginas.length > 1);
+}
+function planoDoSite(site) {
+  const e = lerJsonSeguro(site && site['Variantes Json'], null);
+  return (e && Array.isArray(e.plano_paginas)) ? e.plano_paginas : [];
+}
+
+// Chamada à IA que devolve JSON e os tokens gastos.
+async function chamarJsonIA(sistema, conteudo, maxTokens) {
+  if (!OPENAI_API_KEY) throw new Error('Sem OPENAI_API_KEY');
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    signal: AbortSignal.timeout(90000),
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL,
+      reasoning_effort: 'low',
+      max_completion_tokens: maxTokens || 6000,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'system', content: sistema }, { role: 'user', content: conteudo }]
+    })
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('OpenAI falhou: ' + ((json.error && json.error.message) || res.status));
+  const texto = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+  const m = texto.match(/\{[\s\S]*\}/);
+  return { dados: JSON.parse(m ? m[0] : texto), tokens: (json.usage && json.usage.total_tokens) || 0 };
+}
+
+// ---- Plano do site: páginas e fotografias ----
+const SISTEMA_PLANO = 'És arquitecto de informação e director de arte de sites profissionais. '
+  + 'Planeias as páginas de um site e as fotografias de que ele precisa. Respondes só com um objecto JSON válido.';
+function limparPlanoPaginas(dados, tipo, idioma, pago) {
+  const regras = PAGINAS_TIPO[tipo] || PAGINAS_TIPO['Landing Page'];
+  const maxIA = pago ? PAGINAS_IA_MAX : PAGINAS_IA_MAX_FREE;
+  const pedidas = (dados && Array.isArray(dados.paginas) ? dados.paginas : []).filter(p => p && typeof p === 'object');
+  const porSlug = {};
+  pedidas.forEach(p => { const s = String(p.slug || '').toLowerCase().trim(); if (PAGINAS_CATALOGO[s] && !porSlug[s]) porSlug[s] = p; });
+  let slugs = regras.fixas.slice();
+  regras.opcionais.forEach(s => { if (porSlug[s]) slugs.splice(slugs.indexOf('contacto') >= 0 ? slugs.indexOf('contacto') : slugs.length, 0, s); });
+  // Respeita a ordem que a IA propôs para as opcionais (o contacto fica sempre no fim).
+  const ordemIA = pedidas.map(p => String(p.slug || '').toLowerCase());
+  const fixas = slugs.filter(s => regras.fixas.includes(s));
+  const opc = slugs.filter(s => !regras.fixas.includes(s)).sort((a, b) => ordemIA.indexOf(a) - ordemIA.indexOf(b));
+  slugs = fixas.filter(s => s !== 'contacto').concat(opc).concat(fixas.includes('contacto') ? ['contacto'] : []);
+  // Limite de páginas escritas pela IA (o contacto conta e fica sempre).
+  let contaIA = 0;
+  slugs = slugs.filter(s => {
+    const b = paginaBase(s, idioma);
+    if (!b.ia) return true;
+    if (s === 'contacto') return true;
+    const limite = maxIA - (slugs.includes('contacto') ? 1 : 0);
+    if (contaIA < limite) { contaIA++; return true; }
+    return false;
+  });
+  return slugs.map(s => {
+    const b = paginaBase(s, idioma);
+    const p = porSlug[s] || {};
+    const nav = textoCurto(p.nav, 22);
+    const titulo = textoCurto(p.titulo, 60);
+    return Object.assign(b, {
+      nav: nav || b.nav,
+      titulo: titulo || b.titulo,
+      subtitulo: textoCurto(p.subtitulo, 140),
+      resumo: textoCurto(p.resumo, 400) || b.resumo
+    });
+  });
+}
+function limparPedidosFotos(dados, tipo) {
+  const lista = (dados && Array.isArray(dados.fotos) ? dados.fotos : []).filter(f => f && f.consulta);
+  const max = (tipo === 'E-commerce' || tipo === 'Checkout') ? 3 : 6;
+  return lista.slice(0, max).map((f, i) => ({
+    uso: textoCurto(f.uso, 40).toLowerCase().replace(/[^a-z0-9à-ú-]+/gi, '-') || ('foto-' + (i + 1)),
+    consulta: textoCurto(f.consulta, 100),
+    descricao: textoCurto(f.descricao, 220),
+    orientacao: ['paisagem', 'retrato', 'quadrada'].includes(f.orientacao) ? f.orientacao : 'paisagem'
+  }));
+}
+async function planearSite({ tipo, nome, prompt, idioma, pago, comFotos }) {
+  const regras = PAGINAS_TIPO[tipo] || PAGINAS_TIPO['Landing Page'];
+  const lingua = normalizarIdioma(idioma);
+  const pedido = [
+    `Negócio: ${nome}. Tipo de site: ${tipo}. Idioma do site: ${IDIOMAS_SITE[lingua].nome}.`,
+    `Descrição pedida pela pessoa: ${textoCurto(prompt, 1500)}`,
+    `Páginas obrigatórias: ${regras.fixas.join(', ')}. Opcionais (escolhe só as que fazem sentido para ESTE negócio, no máximo ${(pago ? PAGINAS_IA_MAX : PAGINAS_IA_MAX_FREE)} páginas de conteúdo no total contando com sobre e contacto): ${regras.opcionais.join(', ') || 'nenhuma'}.`,
+    'Ex: um restaurante quer "menu" e "reservas"; uma agência quer "servicos" e "precos"; uma clínica quer "servicos" e "equipa".',
+    'Para cada página: "nav" (1 ou 2 palavras para o menu), "titulo" (título da página), "subtitulo" (uma frase curta) e "resumo" (em português: que secções e conteúdos leva, concretos para este negócio). Os textos "nav", "titulo" e "subtitulo" são no idioma do site.',
+    comFotos ? `Fotografias: 3 a ${(tipo === 'E-commerce' || tipo === 'Checkout') ? 3 : 6} fotos reais de que o site precisa (capa, sobre, serviços, ambiente...). Para cada uma: "uso" (onde entra, ex: capa, sobre, servico-1), "consulta" (3 a 6 palavras em INGLÊS para procurar num banco de fotos, concretas e visuais, ex: "african woman baker kneading bread"; quando houver pessoas, prefere pessoas africanas/moçambicanas; nunca marcas), "descricao" (em português, a foto ideal, para gerar com IA se não houver) e "orientacao" (paisagem, retrato ou quadrada).` : 'Fotografias: devolve "fotos": [].',
+    tipo === 'E-commerce' ? 'Estilos de loja: em "temas", escolhe os 3 estilos (ids diferentes) que melhor servem ESTE negócio, do melhor para o menos bom. Os estilos de nicho (fresco = mercearia/supermercado, sabor = restaurante/comida) só se o negócio for mesmo desse ramo:\n' + TEMAS_LOJA.map(t => '- ' + t.id + ': ' + t.resumo).join('\n') : '',
+    'Formato exacto: {"paginas":[{"slug":"sobre","nav":"...","titulo":"...","subtitulo":"...","resumo":"..."}],"fotos":[{"uso":"capa","consulta":"...","descricao":"...","orientacao":"paisagem"}]' + (tipo === 'E-commerce' ? ',"temas":["id1","id2","id3"]' : '') + '}'
+  ].filter(Boolean).join('\n');
+  try {
+    const r = await chamarJsonIA(SISTEMA_PLANO, pedido, 5000);
+    const temas = (r.dados && Array.isArray(r.dados.temas) ? r.dados.temas : []).map(x => String(x || '').toLowerCase().trim()).filter((x, i, a) => TEMAS_LOJA.some(t => t.id === x) && a.indexOf(x) === i).slice(0, 3);
+    return { paginas: limparPlanoPaginas(r.dados, tipo, lingua, pago), fotos: comFotos ? limparPedidosFotos(r.dados, tipo) : [], temas: tipo === 'E-commerce' ? temas : [], tokens: r.tokens };
+  } catch (erro) {
+    console.error('Plano do site falhou (sigo com as páginas base):', erro.message || erro);
+    const consulta = String(prompt || nome || '').split(/\s+/).slice(0, 6).join(' ');
+    return {
+      paginas: limparPlanoPaginas({}, tipo, lingua, pago),
+      fotos: comFotos && consulta ? [{ uso: 'capa', consulta, descricao: consulta, orientacao: 'paisagem', locale: 'pt-BR' }, { uso: 'sobre', consulta, descricao: consulta, orientacao: 'paisagem', locale: 'pt-BR' }] : [],
+      tokens: 0
+    };
+  }
+}
+
+// ---- Fotografias: Pexels primeiro, IA de imagens quando falta ----
+async function procurarFotoPexels(consulta, orientacao, usados, locale) {
+  if (!PEXELS_API_KEY || !consulta) return null;
+  const params = new URLSearchParams({ query: consulta, per_page: '10', orientation: { paisagem: 'landscape', retrato: 'portrait', quadrada: 'square' }[orientacao] || 'landscape' });
+  if (locale) params.set('locale', locale);
+  const r = await fetch('https://api.pexels.com/v1/search?' + params.toString(), { headers: { Authorization: PEXELS_API_KEY }, signal: AbortSignal.timeout(12000) });
+  if (!r.ok) throw new Error('Pexels respondeu ' + r.status);
+  const j = await r.json();
+  const lista = (j.photos || []).filter(f => f && f.src && !usados.has(f.id));
+  if (!lista.length) return null;
+  const f = lista[Math.floor(Math.random() * Math.min(3, lista.length))];
+  usados.add(f.id);
+  return { url: f.src.large2x || f.src.large || f.src.original, credito: f.photographer || '', id: f.id };
+}
+async function gerarFotoIA(descricao, orientacao) {
+  if (!FOTOS_IA || !OPENAI_API_KEY || !descricao) return null;
+  const size = orientacao === 'retrato' ? '1024x1536' : orientacao === 'quadrada' ? '1024x1024' : '1536x1024';
+  const corpo = { model: OPENAI_IMAGE_MODEL, prompt: descricao + '. Fotografia profissional e realista, luz natural bonita, composição limpa, sem texto, sem letras, sem logótipos, sem marcas de água.', size, quality: 'medium', n: 1, output_format: 'jpeg', output_compression: 85 };
+  async function pedir(c) {
+    const r = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST', signal: AbortSignal.timeout(150000),
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(c)
+    });
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok, j };
+  }
+  let { ok, j } = await pedir(corpo);
+  if (!ok && /output_(format|compression)/i.test(JSON.stringify(j))) {
+    delete corpo.output_format; delete corpo.output_compression;
+    ({ ok, j } = await pedir(corpo));
+  }
+  if (!ok) throw new Error('Imagem IA falhou: ' + ((j.error && j.error.message) || 'erro'));
+  const d = j.data && j.data[0];
+  if (d && d.b64_json) return { buffer: Buffer.from(d.b64_json, 'base64'), mime: corpo.output_format ? 'image/jpeg' : 'image/png' };
+  if (d && d.url) {
+    const rr = await fetch(d.url, { signal: AbortSignal.timeout(30000) });
+    if (rr.ok) return { buffer: Buffer.from(await rr.arrayBuffer()), mime: rr.headers.get('content-type') || 'image/png' };
+  }
+  return null;
+}
+// Prepara as fotos e sobe-as para a pasta do site. Nunca falha a geração:
+// o que não ficar pronto em 80 segundos fica de fora.
+async function prepararFotos({ owner, slug, pedidos }) {
+  if (!pedidos || !pedidos.length) return { fotos: [], tokens: 0 };
+  const usados = new Set();
+  const prontas = [];
+  let iaUsadas = 0, tokens = 0;
+  const trabalho = Promise.all(pedidos.map(async (p, i) => {
+    try {
+      let dados = null, fonte = '', credito = '';
+      try {
+        const f = await procurarFotoPexels(p.consulta, p.orientacao, usados, p.locale);
+        if (f) {
+          const r = await fetch(f.url, { signal: AbortSignal.timeout(25000) });
+          if (r.ok) { dados = { buffer: Buffer.from(await r.arrayBuffer()), mime: 'image/jpeg' }; fonte = 'pexels'; credito = f.credito; }
+        }
+      } catch (e) { console.error('Pexels:', e.message || e); }
+      if (!dados && iaUsadas < FOTOS_IA_MAX) {
+        iaUsadas++;
+        dados = await gerarFotoIA(p.descricao || p.consulta, p.orientacao);
+        if (dados) { fonte = 'ia'; tokens += TOKENS_POR_FOTO_IA; }
+      }
+      if (!dados || !dados.buffer || dados.buffer.length < 2000) return;
+      const ext = /png/.test(dados.mime) ? 'png' : 'jpg';
+      const url = await uploadParaBunny(`sites/${owner}/${slug}/fotos/${i + 1}-${p.uso}.${ext}`, dados.buffer, dados.mime);
+      prontas.push({ ordem: i, uso: p.uso, url, descricao: p.descricao || p.consulta, orientacao: p.orientacao, fonte, credito });
+    } catch (erro) {
+      console.error('Foto "' + p.uso + '" falhou:', erro.message || erro);
+    }
+  }));
+  await Promise.race([trabalho, new Promise(r => setTimeout(r, 80000))]);
+  return { fotos: prontas.slice().sort((a, b) => a.ordem - b.ordem).map(f => { const c = Object.assign({}, f); delete c.ordem; return c; }), tokens };
+}
+function instrucaoFotos(fotos) {
+  if (!fotos || !fotos.length) return '';
+  return '\nFOTOGRAFIAS DESTE SITE (fotos reais, já preparadas - usa-as, são parte do padrão profissional; estes são os únicos URLs de imagens externas permitidos, além das imagens que a pessoa anexou):'
+    + fotos.map((f, i) => `\n${i + 1}) [${f.uso}] ${f.url} - ${f.descricao || ''} (${f.orientacao || 'paisagem'})`).join('')
+    + '\nUsa-as grandes e bem enquadradas: <img> com object-fit:cover e alt descritivo, cantos e sombras a condizer com o site, sobreposições e cartões flutuantes por cima (números, avaliações, etiquetas), recortes em formas (arco, círculo, cantos assimétricos) quando servir a identidade. Cada foto no máximo uma vez por página.';
+}
+
+// ---- Instruções para as páginas ----
+function instrucaoPaginas(paginas, tipo) {
+  if (!Array.isArray(paginas) || paginas.length < 2) return '';
+  const menu = paginas.filter(p => p.menu !== false);
+  const lista = menu.map(p => `${p.nav} (${p.ficheiro})`).join(', ');
+  const outras = paginas.filter(p => p.slug !== 'inicio' && p.menu !== false).map(p => `- ${p.titulo} (${p.ficheiro}): ${p.resumo}`).join('\n');
+  const ehLoja = tipo === 'E-commerce';
+  return `\nSITE COM VÁRIAS PÁGINAS (não é uma página única nem uma "single page"): o site tem estas páginas no menu, por esta ordem: ${lista}.
+Estás a desenhar a PÁGINA INICIAL (index.html). As outras são criadas depois, a partir desta.
+NAVEGAÇÃO:
+- O menu do cabeçalho (no computador e no menu de telemóvel) tem EXACTAMENTE estes links, por esta ordem, com o href igual ao nome do ficheiro (ex: href="sobre.html"). Nunca âncoras "#" no menu. O logótipo leva a index.html.
+- Botões e chamadas para acção levam às páginas certas (ex: "Ver todos os serviços" -> servicos.html, "Fala connosco" -> contacto.html).
+- A inicial é a montra do site: uma secção forte para cada página importante, com um resumo apelativo e o link "Ver mais" para a página dela. Não ponhas o conteúdo completo de todas as páginas na inicial.
+- O link da página actual é marcado sozinho com aria-current="page": estiliza-o no CSS com o seletor [aria-current="page"].${ehLoja ? '\n- Loja: no cabeçalho põe também um botão de carrinho com o atributo data-dia-carrinho (ícone SVG de saco ou carrinho) e, dentro dele, <span data-dia-carrinho-contagem>0</span> numa bolinha - o sistema da loja liga-o sozinho. Um link "Loja" leva a loja.html.' : ''}
+O que vai em cada página (para os resumos e os links da inicial):
+${outras}
+ESTRUTURA OBRIGATÓRIA DO HTML (as outras páginas são montadas a partir desta):
+- Filhos directos do <body>, por esta ordem: <header data-dia="cabecalho">...</header>, <main data-dia="conteudo">...</main>, <footer data-dia="rodape">...</footer>; os <script> vêm depois do footer.
+- O cabeçalho e o rodapé servem para todas as páginas: nada lá dentro pode depender da inicial. O rodapé tem os links das páginas, os contactos e as redes.
+- Todo o CSS no <head>. Os estilos de botões, títulos, etiquetas, cartões, grelhas e secções são genéricos e reutilizáveis (classes como .btn, .seccao, .titulo-seccao, .cartao, .grelha), porque as outras páginas usam as mesmas classes.
+- O JavaScript (menu de telemóvel, animações, contadores) funciona em qualquer página: verifica sempre se os elementos existem antes de os usar. Animações de entrada nunca podem deixar conteúdo escondido se o JavaScript falhar (o conteúdo é visível por omissão; o JS só acrescenta a animação).`;
+}
+const INSTRUCAO_CONTACTO_MULTI = `\nCONTACTO (site com várias páginas): o formulário de contacto fica na página Contacto (contacto.html). Nesta página NÃO ponhas a div do formulário nem nenhum formulário. Mostra os contactos no rodapé e, no fim da inicial, uma chamada curta e elegante que leva a contacto.html.`;
+
+// ---- Estrutura: cabeçalho, conteúdo e rodapé marcados ----
+// Encontra o fim do elemento que abre em "inicio" (conta aberturas e fechos
+// da mesma tag, para aguentar elementos aninhados).
+function fimDoElemento(html, inicio, tag) {
+  const re = new RegExp('<(/?)' + tag + '\\b[^>]*>', 'gi');
+  re.lastIndex = inicio;
+  let nivel = 0, m;
+  while ((m = re.exec(html))) {
+    if (m[1]) { nivel--; if (nivel === 0) return m.index + m[0].length; }
+    else if (!/\/>$/.test(m[0])) nivel++;
+  }
+  return -1;
+}
+function marcarEstrutura(html) {
+  if (!/<header\b[^>]*data-dia=["']cabecalho["']/i.test(html)) {
+    html = html.replace(/<header\b(?![^>]*data-dia)/i, '<header data-dia="cabecalho"');
+  }
+  if (!/<footer\b[^>]*data-dia=["']rodape["']/i.test(html)) {
+    const re = /<footer\b(?![^>]*data-dia)/gi; let m, ultimo = -1;
+    while ((m = re.exec(html))) ultimo = m.index;
+    if (ultimo >= 0) html = html.slice(0, ultimo) + '<footer data-dia="rodape"' + html.slice(ultimo + 7);
+  }
+  if (!/<main\b[^>]*data-dia=["']conteudo["']/i.test(html)) {
+    if (/<main\b/i.test(html)) {
+      html = html.replace(/<main\b/i, '<main data-dia="conteudo"');
+    } else {
+      const ih = html.search(/<header\b[^>]*data-dia=["']cabecalho["']/i);
+      const fh = ih >= 0 ? fimDoElemento(html, ih, 'header') : -1;
+      const ifo = html.search(/<footer\b[^>]*data-dia=["']rodape["']/i);
+      const corpo = html.search(/<body\b[^>]*>/i);
+      const inicio = fh > 0 ? fh : (corpo >= 0 ? corpo + html.slice(corpo).indexOf('>') + 1 : -1);
+      let fim = ifo;
+      if (!(fim > inicio)) {
+        // Sem rodapé: o conteúdo vai até aos scripts do fim do <body>.
+        const fimBody = html.search(/<\/body>/i);
+        const antes = fimBody > 0 ? html.slice(0, fimBody) : html;
+        const finais = /(\s*<script\b[\s\S]*?<\/script>\s*)+$/i.exec(antes);
+        fim = finais ? finais.index : antes.length;
+      }
+      if (inicio > 0 && fim > inicio) html = html.slice(0, inicio) + '\n<main data-dia="conteudo">' + html.slice(inicio, fim) + '</main>\n' + html.slice(fim);
+    }
+  }
+  return html;
+}
+function partesDoHtml(html) {
+  const m = /<main\b[^>]*data-dia=["']conteudo["'][^>]*>/i.exec(html);
+  if (!m) return null;
+  const fim = fimDoElemento(html, m.index, 'main');
+  if (fim < 0) return null;
+  return { antes: html.slice(0, m.index), main: html.slice(m.index, fim), depois: html.slice(fim) };
+}
+function definirTitulo(html, titulo) {
+  const t = escaparHtml(titulo);
+  return /<title\b[^>]*>[\s\S]*?<\/title>/i.test(html) ? html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, '<title>' + t + '</title>') : html.replace(/<\/head>/i, '<title>' + t + '</title>\n</head>');
+}
+function tituloDoHtml(html) { const m = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html || ''); return m ? m[1].trim() : ''; }
+function definirMeta(html, nome, valor) {
+  const re = new RegExp('\\s*<meta\\s+name=["\']' + nome + '["\'][^>]*>', 'gi');
+  html = html.replace(re, '');
+  if (valor === null || valor === undefined || valor === '') return html;
+  const tag = `<meta name="${nome}" content="${escaparHtml(valor)}">`;
+  return /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>\n${tag}`) : tag + html;
+}
+function metaDoHtml(html, nome) {
+  const m = new RegExp('<meta\\s+name=["\']' + nome + '["\']\\s+content=["\']([^"\']*)["\']', 'i').exec(html || '');
+  return m ? m[1] : '';
+}
+function descricaoDoHtml(html) { return metaDoHtml(html, 'description'); }
+function semEstiloPagina(html) { return html.replace(/\s*<style\b[^>]*data-dia=["']pagina["'][^>]*>[\s\S]*?<\/style>/gi, ''); }
+
+// A "casca": a inicial com a estrutura marcada, as metas das páginas e o
+// script da navegação.
+function prepararCasca(html, plano) {
+  html = marcarEstrutura(html);
+  html = semEstiloPagina(html);
+  html = definirMeta(html, 'daniel-ia-paginas', plano.filter(p => p.menu !== false).map(p => p.ficheiro).join(' '));
+  html = definirMeta(html, 'daniel-ia-pagina', 'inicio');
+  return injectarNavSeNecessario(html);
+}
+function injectarNavSeNecessario(html) {
+  if (/site-nav\.js/.test(html) || !/name=["']daniel-ia-paginas["']/.test(html)) return html;
+  const s = `\n<script src="${SELF_URL}/site-nav.js" defer></script>\n`;
+  return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, s + '</body>') : html + s;
+}
+
+const CSS_PAGINA_MODULO = '.dia-pg-largura{max-width:1240px;margin:0 auto;padding:0 clamp(16px,4vw,32px);box-sizing:border-box}'
+  + '.dia-pg-topo{padding:clamp(36px,6vw,76px) 0 clamp(22px,3vw,34px);background:var(--dia-superficie,#f6f6f6);border-bottom:1px solid var(--dia-borda,rgba(0,0,0,.08));margin-bottom:clamp(20px,3vw,36px)}'
+  + '.dia-pg-migalhas{display:flex;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--dia-texto-suave,#666);margin-bottom:12px}.dia-pg-migalhas a{color:inherit;text-decoration:none}.dia-pg-migalhas a:hover{color:var(--dia-primaria,inherit)}'
+  + '.dia-pg-titulo{font-family:var(--dia-fonte-titulos,inherit);font-size:clamp(32px,5.4vw,60px);line-height:1.04;letter-spacing:-.02em;margin:0;color:var(--dia-texto,#111)}'
+  + '.dia-pg-sub{margin:12px 0 0;color:var(--dia-texto-suave,#666);font-size:clamp(15px,1.6vw,18px);max-width:640px;line-height:1.55}'
+  + '.dia-pg-corpo{padding-bottom:clamp(44px,6vw,90px)}.dia-pg-produto{padding-top:clamp(16px,3vw,32px);padding-bottom:clamp(44px,6vw,90px)}';
+function mainDePaginaModulo(p, idioma) {
+  const casa = NOMES_PAGINAS.inicio[normalizarIdioma(idioma)][0];
+  const divs = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog' };
+  const div = `<div id="${divs[p.modulo] || 'daniel-ia-produtos'}"></div>`;
+  if (p.modulo === 'produto') return `<main data-dia="conteudo"><div class="dia-pg-largura dia-pg-produto">${div}</div></main>`;
+  return `<main data-dia="conteudo"><section class="dia-pg-topo"><div class="dia-pg-largura"><nav class="dia-pg-migalhas" aria-label="breadcrumb"><a href="index.html">${escaparHtml(casa)}</a><span>/</span><span>${escaparHtml(p.titulo)}</span></nav><h1 class="dia-pg-titulo">${escaparHtml(p.titulo)}</h1>${p.subtitulo ? `<p class="dia-pg-sub">${escaparHtml(p.subtitulo)}</p>` : ''}</div></section><div class="dia-pg-largura dia-pg-corpo">${div}</div></main>`;
+}
+
+// Monta uma página: a casca com o <main> da página no lugar do da inicial.
+function montarPagina(casca, pagina, frag, nomeSite) {
+  const p = partesDoHtml(casca);
+  if (!p) throw new Error('A página inicial não tem a estrutura <main data-dia="conteudo">.');
+  let html = p.antes + frag.main + p.depois;
+  html = definirTitulo(html, `${frag.titulo || pagina.titulo} · ${nomeSite}`);
+  html = definirMeta(html, 'description', frag.descricao || pagina.subtitulo || '');
+  html = semEstiloPagina(html);
+  if (frag.estilo) html = html.replace(/<\/head>/i, `<style data-dia="pagina">${frag.estilo}</style>\n</head>`);
+  html = definirMeta(html, 'daniel-ia-pagina', pagina.slug);
+  return html;
+}
+// Depois de montar: módulos que esta página precisa (o contacto e o quiz
+// só existem nalgumas páginas).
+function completarPagina(html, siteId, tipo) {
+  const ehLoja = tipo === 'E-commerce' || tipo === 'Checkout';
+  html = injectarLojaSeNecessario(html, ehLoja, siteId);
+  html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
+  html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
+  html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
+  html = injectarContactoSeNecessario(html, siteId);
+  // O quiz só corre na página inicial.
+  html = html.replace(/\s*<script\b[^>]*quiz\.js[^>]*><\/script>/gi, '');
+  return injectarNavSeNecessario(html);
+}
+
+// ---- Uma página nova escrita pela IA (só o <main>) ----
+function cssDaCasca(html) {
+  const head = (/<head\b[^>]*>([\s\S]*?)<\/head>/i.exec(html) || [])[1] || '';
+  const blocos = [];
+  head.replace(/<style\b([^>]*)>([\s\S]*?)<\/style>/gi, (t, attrs, css) => {
+    if (/daniel-ia-responsivo|data-dia=["']pagina|data-daniel-ia/i.test(attrs)) return t;
+    blocos.push(css.trim());
+    return t;
+  });
+  return blocos.join('\n').slice(0, 60000);
+}
+function fontesDaCasca(html) {
+  const links = [];
+  String(html).replace(/<link\b[^>]*fonts\.googleapis[^>]*>/gi, t => { links.push(t); return t; });
+  return links.join('\n');
+}
+function extrairMainDaResposta(texto, slug) {
+  let t = String(texto || '').replace(/^```(html)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  let estilo = '';
+  t = t.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (tudo, css) => { estilo += css.trim() + '\n'; return ''; });
+  let main = '';
+  const ini = t.search(/<main\b/i);
+  if (ini >= 0) {
+    const fim = fimDoElemento(t, ini, 'main');
+    main = fim > 0 ? t.slice(ini, fim) : t.slice(ini) + '</main>';
+  } else {
+    const corpo = (/<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(t) || [])[1] || t;
+    main = '<main data-dia="conteudo">' + corpo + '</main>';
+  }
+  main = main
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/<(header|footer)\b[^>]*data-dia[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<main\b[^>]*>/i, `<main data-dia="conteudo" class="pg-${slug}">`);
+  return { main, estilo: estilo.trim().slice(0, 40000) };
+}
+async function gerarPaginaIA({ casca, pagina, plano, nome, tipo, prompt, idioma, fotos }) {
+  const lingua = normalizarIdioma(idioma);
+  const css = cssDaCasca(casca);
+  const p = partesDoHtml(casca);
+  const exemplo = p ? p.main.slice(0, 14000) : '';
+  const cab = ((/<header\b[\s\S]*?<\/header>/i.exec(casca) || [])[0] || '').slice(0, 5000);
+  const ehContacto = pagina.slug === 'contacto';
+  const sistema = `És o motor de páginas da Daniel IA, uma plataforma moçambicana de sites profissionais.
+Vais criar UMA página de um site que já existe. O cabeçalho, o rodapé, as fontes e o CSS do site já existem e são reutilizados - tu escreves só o conteúdo desta página.
+RESPOSTA: só um <style data-dia="pagina">...</style> (opcional, só com CSS novo) seguido de <main data-dia="conteudo">...</main>. Nada antes nem depois, sem markdown, sem <html>, <head>, <body>, <header>, <footer> nem <script>.
+${DIRECAO_DE_ARTE}
+REGRAS DESTA PÁGINA:
+- A página tem de parecer do mesmo site da inicial: usa as MESMAS classes, fichas --dia-*, botões, títulos, etiquetas, cartões, espaçamentos e cantos do CSS existente. CSS novo só para componentes novos, sempre com o prefixo .pg-${pagina.slug} (o <main> já tem essa classe).
+- Abre com um topo de página forte (título da página, uma frase e, se fizer sentido, uma foto ou composição), depois 3 a 6 secções com conteúdo real e com substância para este negócio (nunca "lorem ipsum" nem textos de enchimento), e fecha com uma chamada para acção que leva a outra página.
+- Links internos com o nome do ficheiro (ex: href="contacto.html"). Páginas do site: ${plano.filter(x => x.menu !== false).map(x => `${x.nav} = ${x.ficheiro}`).join(', ')}.
+- Responsiva a 360, 768 e 1280 px; nada a sair do ecrã.
+- Pode usar as mesmas classes de animação da inicial (o mesmo script corre aqui), mas o conteúdo nunca pode ficar invisível sem JavaScript.${ehContacto ? '\n- PÁGINA DE CONTACTO: inclui exactamente <div id="daniel-ia-contacto"></div> (o formulário a sério aparece lá dentro, já aberto) ao lado ou abaixo de cartões com telefone, WhatsApp, email, morada e horário, e um mapa estilizado desenhado em SVG/CSS (nunca um iframe). Não escrevas tu nenhum formulário.' : ''}
+IDIOMA: ${IDIOMAS_SITE[lingua].instrucao}${instrucaoFotos(fotos)}`;
+  const pedido = `Nome do negócio: ${nome}
+Tipo de site: ${tipo}
+Descrição do negócio: ${textoCurto(prompt, 1500)}
+PÁGINA A CRIAR: ${pagina.titulo} (${pagina.ficheiro})${pagina.subtitulo ? ' - ' + pagina.subtitulo : ''}
+O que leva: ${pagina.resumo}
+
+CSS do site (reutiliza estas classes):
+${css}
+
+Cabeçalho do site (só para referência, não o repitas):
+${cab}
+
+Início da página inicial (imita o estilo das secções):
+${exemplo}`;
+  const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      reasoning_effort: OPENAI_REASONING_EFFORT,
+      max_completion_tokens: Math.min(OPENAI_MAX_TOKENS, 24000),
+      messages: [{ role: 'system', content: sistema }, { role: 'user', content: pedido }]
+    })
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('OpenAI falhou: ' + JSON.stringify(json).slice(0, 300));
+  const texto = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
+  const tokens = (json.usage && json.usage.total_tokens) || 0;
+  const r = extrairMainDaResposta(texto, pagina.slug);
+  if (r.main.replace(/<[^>]+>/g, '').trim().length < 80) throw new Error('A página "' + pagina.slug + '" veio vazia.');
+  if (ehContacto && !/id=["']daniel-ia-contacto["']/.test(r.main)) {
+    r.main = r.main.replace(/<\/main>\s*$/i, '<section class="pg-contacto-form"><div class="dia-pg-largura"><div id="daniel-ia-contacto"></div></div></section></main>');
+    r.estilo += '\n' + CSS_PAGINA_MODULO;
+  }
+  return { fragmento: { main: r.main, estilo: r.estilo, titulo: pagina.titulo, descricao: pagina.subtitulo || '' }, tokens };
+}
+
+// ---- Fragmentos guardados (_paginas.json, na pasta do site) ----
+function pastaDoSite(site) { return String(site['Bunny Path'] || '').replace(/[^/]+$/, ''); }
+function cdnPastaDoSite(site) { return String(site['CDN URL'] || '').replace(/[^/]+$/, ''); }
+async function lerFragmentos(site) {
+  try { return JSON.parse((await descarregarDoBunny(pastaDoSite(site) + '_paginas.json')).toString('utf8')) || {}; }
+  catch (e) { return {}; }
+}
+async function guardarFragmentos(site, dados) {
+  await uploadParaBunny(pastaDoSite(site) + '_paginas.json', Buffer.from(JSON.stringify(dados), 'utf8'), 'application/json; charset=utf-8');
+}
+// Mexe no "Variantes Json" de um site sempre na fila (lê o mais recente).
+function mudarEstadoSite(siteId, fn) {
+  const anterior = filaVariantes.get(siteId) || Promise.resolve();
+  const proximo = anterior.catch(() => {}).then(async () => {
+    const site = await bubbleGet('site', siteId);
+    const e = lerJsonSeguro(site && site['Variantes Json'], {}) || {};
+    const r = fn(e) || e;
+    await bubblePatch('site', siteId, { 'Variantes Json': JSON.stringify(r) });
+    return r;
+  }).catch(erro => console.error('Não foi possível guardar o estado do site:', erro.message || erro));
+  filaVariantes.set(siteId, proximo);
+  return proximo;
+}
+function estadoPublicoPaginas(e, site) {
+  if (!e || !Array.isArray(e.plano_paginas) || e.plano_paginas.length < 2) return null;
+  const est = (e.paginas && e.paginas.lista) || [];
+  const cdn = site ? cdnPastaDoSite(site) : '';
+  return {
+    estado: (e.paginas && e.paginas.estado) || 'por construir',
+    lista: e.plano_paginas.map(p => {
+      const s = est.find(x => x.slug === p.slug);
+      return { slug: p.slug, ficheiro: p.ficheiro, nav: p.nav, titulo: p.titulo, menu: p.menu !== false, estado: p.slug === 'inicio' ? 'pronto' : ((s && s.estado) || 'por construir'), url: cdn ? cdn + p.ficheiro : '' };
+    })
+  };
+}
+
+// ---- Construir (ou montar outra vez) as páginas de um site ----
+const filaPaginas = new Map();
+function construirPaginas(siteId, opcoes) {
+  const anterior = filaPaginas.get(siteId) || Promise.resolve();
+  const proximo = anterior.catch(() => {}).then(() => construirPaginasAgora(siteId, opcoes || {}))
+    .catch(erro => console.error('Erro a construir as páginas de ' + siteId + ':', erro.message || erro));
+  filaPaginas.set(siteId, proximo);
+  return proximo;
+}
+async function emParalelo(lista, max, fn) {
+  let i = 0;
+  const trabalhadores = Array.from({ length: Math.min(max, lista.length) }, async () => {
+    while (i < lista.length) { const k = i++; await fn(lista[k], k); }
+  });
+  await Promise.all(trabalhadores);
+}
+// opcoes.regenerar: a IA escreve outra vez as páginas (ex: outro layout)
+// opcoes.soMontar: não chama a IA - só monta com o que já existe
+async function construirPaginasAgora(siteId, opcoes) {
+  const site = await bubbleGet('site', siteId);
+  if (!site || !site['Bunny Path'] || !site['CDN URL']) return;
+  const estado = lerJsonSeguro(site['Variantes Json'], {}) || {};
+  const plano = Array.isArray(estado.plano_paginas) ? estado.plano_paginas : [];
+  if (plano.length < 2) return;
+  const tipo = site['Tipo'] || 'Landing Page';
+  const nome = site['Nome'] || '';
+  const pasta = pastaDoSite(site);
+  let casca = (await descarregarDoBunny(site['Bunny Path'])).toString('utf8');
+  const cascaPreparada = prepararCasca(casca, plano);
+  if (cascaPreparada !== casca) {
+    casca = cascaPreparada;
+    await uploadParaBunny(site['Bunny Path'], Buffer.from(casca, 'utf8'), 'text/html; charset=utf-8');
+    await purgeCacheBunny(site['CDN URL']);
+  }
+  if (!partesDoHtml(casca)) {
+    console.error('Páginas de ' + siteId + ': a inicial não tem <main> - fica com uma página só.');
+    await mudarEstadoSite(siteId, e => { e.paginas = { estado: 'erro', lista: [] }; return e; });
+    return;
+  }
+  const idioma = idiomaDoHtml(casca) || 'pt';
+  const guardados = await lerFragmentos(site);
+  const frags = Object.assign({}, guardados.fragmentos || {});
+  const trabalho = plano.filter(p => p.slug !== 'inicio');
+  const lista = trabalho.map(p => ({ slug: p.slug, estado: 'a construir' }));
+  await mudarEstadoSite(siteId, e => { e.paginas = { estado: 'a construir', lista, inicio: new Date().toISOString() }; return e; });
+  let tokens = 0, falhas = 0;
+  await emParalelo(trabalho, 3, async (p) => {
+    const item = lista.find(x => x.slug === p.slug);
+    try {
+      let frag = !opcoes.regenerar ? frags[p.slug] : null;
+      if (!frag && p.modulo && p.modulo !== 'contacto') {
+        frag = { main: mainDePaginaModulo(p, idioma), estilo: CSS_PAGINA_MODULO, titulo: p.titulo, descricao: p.subtitulo || '' };
+      }
+      if (!frag) {
+        if (opcoes.soMontar) { item.estado = 'por construir'; return; }
+        const r = await gerarPaginaIA({ casca, pagina: p, plano, nome, tipo, prompt: site['Prompt Original'] || '', idioma, fotos: estado.fotos || [] });
+        tokens += r.tokens;
+        frag = r.fragmento;
+      }
+      frags[p.slug] = frag;
+      const html = completarPagina(montarPagina(casca, p, frag, nome), siteId, tipo);
+      const url = await uploadParaBunny(pasta + p.ficheiro, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+      await purgeCacheBunny(url);
+      item.estado = 'pronto';
+    } catch (erro) {
+      falhas++;
+      item.estado = 'erro';
+      console.error('Página "' + p.slug + '" de ' + siteId + ' falhou:', erro.message || erro);
+    }
+    await mudarEstadoSite(siteId, e => { e.paginas = { estado: 'a construir', lista, inicio: (e.paginas && e.paginas.inicio) || '' }; return e; });
+  });
+  await guardarFragmentos(site, { versao: 1, idioma, fragmentos: frags, actualizado: new Date().toISOString() });
+  if (tokens && opcoes.cobrar !== false) await cobrarTokens(site['Owner'], tokens);
+  await mudarEstadoSite(siteId, e => { e.paginas = { estado: falhas ? 'com erros' : 'pronto', lista, fim: new Date().toISOString() }; return e; });
+  if (site['Dominio Pull Zone Id']) await regrasDominioPaginas(site).catch(erro => console.error('Regras do domínio:', erro.message || erro));
+}
+
+// ---- Domínio próprio com várias páginas ----
+// A regra antiga mandava TODOS os caminhos para a inicial. Agora:
+//   "/"                 -> index.html
+//   "/sobre.html?x=1"   -> a mesma página da pasta do site
+async function regrasDominioPaginas(site) {
+  const id = site['Dominio Pull Zone Id'];
+  if (!id || !BUNNY_API_KEY || !site['CDN URL']) return;
+  const pasta = cdnPastaDoSite(site);
+  const zona = await bunnyApi('GET', '/pullzone/' + id);
+  for (const r of (zona && zona.EdgeRules) || []) {
+    if (/^Domínio personalizado/.test(r.Description || '') && r.Guid) await bunnyApi('DELETE', `/pullzone/${id}/edgerules/${r.Guid}`);
+  }
+  await bunnyApi('POST', `/pullzone/${id}/edgerules/addOrUpdate`, {
+    ActionType: 2, ActionParameter1: pasta.replace(/\/$/, '') + '{{path}}',
+    Triggers: [{ Type: 0, PatternMatches: ['*/'], PatternMatchingType: 2 }], TriggerMatchingType: 0,
+    Enabled: true, Description: 'Domínio personalizado - páginas do site'
+  });
+  await bunnyApi('POST', `/pullzone/${id}/edgerules/addOrUpdate`, {
+    ActionType: 2, ActionParameter1: pasta + 'index.html',
+    Triggers: [{ Type: 0, PatternMatches: ['*/'], PatternMatchingType: 0 }], TriggerMatchingType: 0,
+    Enabled: true, Description: 'Domínio personalizado - página inicial'
+  });
+  await bunnyApi('POST', `/pullzone/${id}/purgeCache`).catch(() => {});
+}
+
+// ---- Guardar uma página editada (editor visual ou IA) ----
+// Se o site tem várias páginas: o cabeçalho, o rodapé e o CSS mudam em
+// todas; o <main> só na página editada.
+async function lerPaginaDoSite(site, slug) {
+  const plano = planoDoSite(site);
+  const p = slug && slug !== 'inicio' ? plano.find(x => x.slug === slug) : null;
+  if (slug && slug !== 'inicio' && !p) throw Object.assign(new Error('pagina'), { utilizador: 'Esta página não existe neste site.' });
+  const caminho = p ? pastaDoSite(site) + p.ficheiro : site['Bunny Path'];
+  return { pagina: p, caminho, html: (await descarregarDoBunny(caminho)).toString('utf8') };
+}
+async function guardarPaginaDoSite(site, slug, htmlNovo) {
+  const siteId = site._id;
+  const plano = planoDoSite(site);
+  const multi = plano.length > 1;
+  const tipo = site['Tipo'] || 'Landing Page';
+  if (!multi || !slug || slug === 'inicio') {
+    const html = multi ? prepararCasca(htmlNovo, plano) : htmlNovo;
+    const url = await uploadParaBunny(site['Bunny Path'], Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+    await purgeCacheBunny(url);
+    if (multi) await construirPaginas(siteId, { soMontar: true });
+    return url;
+  }
+  const p = plano.find(x => x.slug === slug);
+  if (!p) throw Object.assign(new Error('pagina'), { utilizador: 'Esta página não existe neste site.' });
+  const partesNovo = partesDoHtml(marcarEstrutura(htmlNovo));
+  if (!partesNovo) throw Object.assign(new Error('estrutura'), { utilizador: 'A página perdeu a estrutura (cabeçalho, conteúdo e rodapé). Não foi guardada.' });
+  // 1. O conteúdo desta página
+  const estiloPagina = ((/<style\b[^>]*data-dia=["']pagina["'][^>]*>([\s\S]*?)<\/style>/i.exec(htmlNovo) || [])[1] || '').trim();
+  const guardados = await lerFragmentos(site);
+  const frags = Object.assign({}, guardados.fragmentos || {});
+  const tituloNovo = tituloDoHtml(htmlNovo).replace(/\s*·\s*[^·]*$/, '').trim();
+  frags[slug] = { main: partesNovo.main, estilo: estiloPagina, titulo: tituloNovo || p.titulo, descricao: descricaoDoHtml(htmlNovo) || (frags[slug] && frags[slug].descricao) || '' };
+  await guardarFragmentos(site, Object.assign({}, guardados, { fragmentos: frags, actualizado: new Date().toISOString() }));
+  // 2. O que é comum (cabeçalho, rodapé, CSS) passa para a inicial
+  const inicial = (await descarregarDoBunny(site['Bunny Path'])).toString('utf8');
+  const partesInicial = partesDoHtml(marcarEstrutura(inicial));
+  if (partesInicial) {
+    let casca = semEstiloPagina(partesNovo.antes) + partesInicial.main + partesNovo.depois;
+    casca = definirTitulo(casca, tituloDoHtml(inicial) || site['Nome'] || '');
+    casca = definirMeta(casca, 'description', descricaoDoHtml(inicial));
+    casca = prepararCasca(casca, plano);
+    const urlIni = await uploadParaBunny(site['Bunny Path'], Buffer.from(casca, 'utf8'), 'text/html; charset=utf-8');
+    await purgeCacheBunny(urlIni);
+  }
+  // 3. Todas as páginas montadas outra vez com a casca nova
+  await construirPaginas(siteId, { soMontar: true });
+  return cdnPastaDoSite(site) + p.ficheiro;
+}
+
+// ---- Script da navegação (todas as páginas de sites com várias páginas) ----
+const SITE_NAV_JS = `(function(){
+  var f = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+  if (!/\\.html?$/.test(f)) f = 'index.html';
+  var previa = /^v\\d+\\.html$/.test(f) || /[?&]dia_previa=1/.test(location.search);
+  var lang = (document.documentElement.lang || 'pt').slice(0, 2);
+  var AVISO = { pt: 'As outras páginas ficam prontas quando escolheres esta versão.', en: 'The other pages are built when you choose this version.', fr: 'Les autres pages sont créées quand vous choisissez cette version.', es: 'Las otras páginas se crean cuando eliges esta versión.' };
+  function aviso(){
+    var t = document.getElementById('dia-nav-aviso');
+    if (!t) {
+      t = document.createElement('div'); t.id = 'dia-nav-aviso';
+      t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483000;background:#140620;color:#fff;font:600 14px/1.4 system-ui,-apple-system,sans-serif;padding:12px 18px;border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.3);max-width:90vw;text-align:center;transition:opacity .3s';
+      document.body.appendChild(t);
+    }
+    t.textContent = AVISO[lang] || AVISO.pt; t.style.opacity = '1';
+    clearTimeout(t._f); t._f = setTimeout(function(){ t.style.opacity = '0'; }, 2600);
+  }
+  var links = document.querySelectorAll('a[href]');
+  for (var i = 0; i < links.length; i++) (function(a){
+    var h = a.getAttribute('href') || '';
+    if (/^(https?:|mailto:|tel:|#|javascript:|\\/\\/)/i.test(h)) return;
+    var alvo = h.split(/[?#]/)[0].split('/').pop().toLowerCase();
+    if (!/\\.html?$/.test(alvo)) return;
+    var actual = alvo === f || (previa && alvo === 'index.html');
+    if (actual) { a.setAttribute('aria-current', 'page'); a.classList.add('dia-activo'); }
+    if (previa) a.addEventListener('click', function(e){ e.preventDefault(); if (!actual) aviso(); });
+  })(links[i]);
+})();`;
+app.get('/site-nav.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(SITE_NAV_JS);
+});
+
+// ======================================================
+// Rotas do editor visual (1.60.0)
+// ======================================================
+['/site-paginas', '/site-pagina-ler', '/site-pagina-guardar', '/editor-imagem', '/editar-bloco', '/editar-bloco-estado', '/site-paginas-criar']
+  .forEach(r => ROTAS_PRIVADAS.add(r));
+Object.assign(LIMITES, {
+  '/site-pagina-guardar': [['owner', 60, 10 * MIN]],
+  '/editor-imagem': [['owner', 60, 10 * MIN]],
+  '/editar-bloco': [['owner', 20, 10 * MIN]],
+  '/site-paginas-criar': [['owner', 4, 60 * MIN]]
+});
+
+app.post('/site-paginas', async (req, res) => {
+  try {
+    const site = await siteDoDono(req.body.owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    const e = lerJsonSeguro(site['Variantes Json'], {}) || {};
+    const pub = estadoPublicoPaginas(e, site);
+    const paginas = pub ? pub.lista : [{ slug: 'inicio', ficheiro: String(site['Bunny Path'] || '').split('/').pop() || 'index.html', nav: 'Início', titulo: 'Início', menu: true, estado: 'pronto', url: site['CDN URL'] || '' }];
+    return res.json({ status: 'success', response: {
+      nome: site['Nome'] || '', tipo: site['Tipo'] || '', estado_site: site['Status'] || '', cdn_url: site['CDN URL'] || '',
+      multi: !!pub, estado_paginas: pub ? pub.estado : ((e.paginas && e.paginas.estado) || ''), paginas,
+      fotos: (Array.isArray(e.fotos) ? e.fotos : []).map(f => ({ url: f.url, descricao: f.descricao || '' })).slice(0, 12),
+      pode_criar_paginas: !pub && site['Status'] === 'Pronto' && !!site['Bunny Path'] && (site['Tipo'] || '') !== 'Checkout'
+    } });
+  } catch (erro) {
+    console.error('Erro em /site-paginas:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler as páginas.' });
+  }
+});
+
+app.post('/site-pagina-ler', async (req, res) => {
+  try {
+    const site = await siteDoDono(req.body.owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (!site['Bunny Path']) return res.json({ status: 'error', message: 'Este projecto ainda não tem páginas.' });
+    const r = await lerPaginaDoSite(site, String(req.body.pagina || 'inicio'));
+    return res.json({ status: 'success', response: { html: r.html, base: cdnPastaDoSite(site) } });
+  } catch (erro) {
+    if (erro.utilizador) return res.json({ status: 'error', message: erro.utilizador });
+    console.error('Erro em /site-pagina-ler:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível abrir esta página.' });
+  }
+});
+
+// Limpa o HTML que vem do editor: tira as marcas do editor e não deixa
+// entrar scripts, eventos ou iframes que não estavam já na página.
+function decodificarAtributo(v) {
+  return String(v || '').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, '\u00a0').replace(/&amp;/g, '&');
+}
+function atributoDe(tag, nome) {
+  const m = new RegExp('\\s' + nome + '\\s*=\\s*("([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i').exec(tag);
+  return m ? decodificarAtributo(m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4])) : '';
+}
+function limparHtmlDoEditor(novo, original) {
+  let html = String(novo || '');
+  const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
+  // O que a página já tinha (só isso pode ficar): scripts, iframes e eventos.
+  const scriptsTexto = new Set(), scriptsSrc = new Set(), iframes = new Set(), eventos = new Set(), jsLinks = new Set();
+  String(original || '').replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (t, attrs, corpo) => {
+    const src = atributoDe('<s' + attrs + '>', 'src');
+    if (src) scriptsSrc.add(src); else scriptsTexto.add(norm(corpo));
+    return t;
+  });
+  String(original || '').replace(/<iframe\b[^>]*>/gi, t => { iframes.add(atributoDe(t, 'src')); return t; });
+  String(original || '').replace(/\s(on[a-z]+)\s*=\s*("([^"]*)"|'([^']*)')/gi, (t, n, v, a, b) => { eventos.add(n.toLowerCase() + '=' + norm(decodificarAtributo(a !== undefined ? a : b))); return t; });
+  String(original || '').replace(/\s(href|src)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, (t, n, v) => { jsLinks.add(norm(decodificarAtributo(v.slice(1, -1)))); return t; });
+  html = html.replace(/\s+contenteditable=("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s+spellcheck=("false"|'false'|false)/gi, '')
+    .replace(/\s+data-ed-[a-z0-9-]+=("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s+data-ed-[a-z0-9-]+(?=[\s>])/gi, '')
+    .replace(/<base\b[^>]*data-ed[^>]*>/gi, '')
+    .replace(/<style\b[^>]*id=["']dia-ed-[^"']*["'][^>]*>[\s\S]*?<\/style>/gi, '');
+  html = html.replace(/\sclass=(["'])([^"']*)\1/gi, (t, q, v) => {
+    const limpo = v.split(/\s+/).filter(c => c && !/^dia-ed-/.test(c)).join(' ');
+    return limpo ? ` class=${q}${limpo}${q}` : '';
+  });
+  html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (t, attrs, corpo) => {
+    const src = atributoDe('<s' + attrs + '>', 'src');
+    return (src ? scriptsSrc.has(src) : scriptsTexto.has(norm(corpo))) ? t : '';
+  });
+  html = html.replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, t => iframes.has(atributoDe(t, 'src')) ? t : '');
+  html = html.replace(/\s(on[a-z]+)\s*=\s*("([^"]*)"|'([^']*)')/gi, (t, n, v, a, b) => eventos.has(n.toLowerCase() + '=' + norm(decodificarAtributo(a !== undefined ? a : b))) ? t : '');
+  html = html.replace(/\s(href|src)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, (t, n, v) => jsLinks.has(norm(decodificarAtributo(v.slice(1, -1)))) ? t : '');
+  if (!/^\s*<!doctype/i.test(html)) html = '<!DOCTYPE html>\n' + html;
+  return html;
+}
+
+app.post('/site-pagina-guardar', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const slug = String(req.body.pagina || 'inicio');
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (site['Status'] !== 'Pronto') return res.json({ status: 'error', message: 'Espera o site acabar de ser gerado antes de guardar.' });
+    const novo = String(req.body.html || '');
+    if (novo.length < 200 || novo.length > 3 * 1024 * 1024 || !/<html\b/i.test(novo) || !/<body\b/i.test(novo)) {
+      return res.json({ status: 'error', message: 'A página veio incompleta. Não foi guardada.' });
+    }
+    const actual = await lerPaginaDoSite(site, slug);
+    const tipo = site['Tipo'] || 'Landing Page';
+    let html = limparHtmlDoEditor(novo, actual.html);
+    html = manterMetasLoja(actual.html, html);
+    const ehLoja = tipo === 'E-commerce' || tipo === 'Checkout';
+    html = injectarLojaSeNecessario(html, ehLoja, site_id);
+    html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', site_id);
+    html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', site_id);
+    html = injectarBlogSeNecessario(html, tipo === 'Blog', site_id);
+    html = injectarContactoSeNecessario(html, site_id);
+    html = injectarQuizSeNecessario(html, ehLoja, site_id);
+    html = aplicarRedeResponsiva(html);
+    html = aplicarMarcaDeAgua(html, !(await temPlanoPago(owner)));
+    const url = await guardarPaginaDoSite(site, slug, html);
+    return res.json({ status: 'success', response: { url } });
+  } catch (erro) {
+    if (erro.utilizador) return res.json({ status: 'error', message: erro.utilizador });
+    console.error('Erro em /site-pagina-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar. Tenta outra vez.' });
+  }
+});
+
+app.post('/editor-imagem', async (req, res) => {
+  try {
+    const site = await siteDoDono(req.body.owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    const dados = String(req.body.imagem_data_url || '');
+    if (!/^data:image\/(jpeg|png|webp|gif);base64,/.test(dados) || dados.length > 8 * 1024 * 1024) {
+      return res.json({ status: 'error', message: 'Escolhe uma imagem JPG, PNG ou WEBP com menos de 6 MB.' });
+    }
+    const r = await uploadImagemBase64('sites-editor', req.body.owner, dados);
+    if (r.erro) return res.json({ status: 'error', message: r.erro });
+    if (!r.url) return res.json({ status: 'error', message: 'Não foi possível ler a imagem.' });
+    return res.json({ status: 'success', response: { url: r.url } });
+  } catch (erro) {
+    console.error('Erro em /editor-imagem:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível enviar a imagem.' });
+  }
+});
+
+// ---- Mudar só um bloco com a IA (em fundo; a página pergunta o estado) ----
+const trabalhosBloco = new Map();
+setInterval(() => {
+  const limite = Date.now() - 30 * 60 * 1000;
+  for (const [k, t] of trabalhosBloco) if (t.criado < limite) trabalhosBloco.delete(k);
+}, 5 * 60 * 1000).unref();
+async function editarBlocoIA({ blocoHtml, pedido, casca, idioma, nome, tipo, fotos }) {
+  const lingua = normalizarIdioma(idioma);
+  const sistema = `És o motor de edição de blocos da Daniel IA. Recebes o HTML de UMA secção de um site e um pedido de alteração.
+Devolve só essa secção já alterada: o mesmo elemento de topo (a mesma tag e as mesmas classes de topo), sem markdown, sem explicações, sem <html>, <head>, <body> nem <script>.
+Mantém o estilo do site: usa as classes e as fichas --dia-* do CSS que recebes. Se precisares de CSS novo, põe um único <style> como primeiro filho da secção, com seletores que comecem pelo seletor da própria secção.
+O resultado tem de continuar profissional, acabado e responsivo (360, 768, 1280 px). Mantém tudo o que o pedido não manda mudar.
+Não mexas em divs com id que começa por "daniel-ia-" (são sistemas automáticos) - mantém-nas exactamente como estão.
+IDIOMA: ${IDIOMAS_SITE[lingua].instrucao}${instrucaoFotos(fotos)}`;
+  const conteudo = `Negócio: ${nome} (${tipo})
+PEDIDO: ${pedido}
+
+CSS do site:
+${cssDaCasca(casca).slice(0, 40000)}
+
+SECÇÃO A ALTERAR:
+${blocoHtml}`;
+  const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: OPENAI_MODEL, reasoning_effort: OPENAI_REASONING_EFFORT, max_completion_tokens: 16000, messages: [{ role: 'system', content: sistema }, { role: 'user', content: conteudo }] })
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('OpenAI falhou: ' + JSON.stringify(json).slice(0, 300));
+  let html = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+  html = html.replace(/^```(html)?\s*/i, '').replace(/```\s*$/i, '').trim().replace(/<script\b[\s\S]*?<\/script>/gi, '');
+  if (!/^<[a-z]/i.test(html) || html.replace(/<[^>]+>/g, '').trim().length < 2) throw new Error('A IA devolveu um bloco vazio.');
+  return { html, tokens: (json.usage && json.usage.total_tokens) || 0 };
+}
+app.post('/editar-bloco', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const pedido = textoCurto(req.body.pedido, 900);
+    const bloco = String(req.body.bloco_html || '');
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (pedido.length < 3) return res.json({ status: 'error', message: 'Escreve o que queres mudar neste bloco.' });
+    if (bloco.length < 10 || bloco.length > 200000) return res.json({ status: 'error', message: 'Este bloco é demasiado grande para mudar de uma vez. Escolhe uma parte mais pequena.' });
+    const user = await bubbleGet('user', owner);
+    const planId = await garantirPlano(owner, user);
+    const plano = planId ? await bubbleGet('plan', planId) : null;
+    if (!plano || semTokens(user, plano)) return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+    const id = crypto.randomBytes(9).toString('hex');
+    trabalhosBloco.set(id, { owner, estado: 'a trabalhar', criado: Date.now() });
+    res.json({ status: 'success', response: { trabalho_id: id } });
+    (async () => {
+      const t = trabalhosBloco.get(id);
+      try {
+        const actual = await lerPaginaDoSite(site, String(req.body.pagina || 'inicio'));
+        const e = lerJsonSeguro(site['Variantes Json'], {}) || {};
+        const r = await editarBlocoIA({ blocoHtml: bloco, pedido, casca: actual.html, idioma: idiomaDoHtml(actual.html) || 'pt', nome: site['Nome'] || '', tipo: site['Tipo'] || '', fotos: e.fotos || [] });
+        await cobrarTokens(owner, r.tokens);
+        Object.assign(t, { estado: 'pronto', html: r.html });
+      } catch (erro) {
+        console.error('Erro em /editar-bloco:', erro.message || erro);
+        Object.assign(t, { estado: 'erro', erro: 'A IA não conseguiu mudar este bloco. Tenta descrever de outra forma.' });
+      }
+    })();
+  } catch (erro) {
+    console.error('Erro em /editar-bloco:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível começar. Tenta outra vez.' });
+  }
+});
+app.post('/editar-bloco-estado', (req, res) => {
+  const t = trabalhosBloco.get(String(req.body.trabalho_id || ''));
+  if (!t || t.owner !== req.body.owner) return res.json({ status: 'error', message: 'Este pedido já não existe. Tenta outra vez.' });
+  return res.json({ status: 'success', response: { estado: t.estado, html: t.html || '', erro: t.erro || '' } });
+});
+
+// ---- Transformar um site antigo (uma página só) num site com várias páginas ----
+async function reescreverMenuIA({ cabecalho, plano, idioma }) {
+  const sistema = 'És o motor de edição de blocos da Daniel IA. Recebes o <header> de um site e a lista das páginas novas. Devolve só o <header> completo alterado, sem markdown e sem explicações.';
+  const conteudo = `As páginas do site passam a ser: ${plano.filter(p => p.menu !== false).map(p => `${p.nav} (${p.ficheiro})`).join(', ')}.
+Muda o menu (no computador e no telemóvel) para ter exactamente estes links, por esta ordem, com href igual ao nome do ficheiro. O logótipo leva a index.html. Botões do cabeçalho que apontavam para "#contacto" ou parecido passam a levar a contacto.html (se existir). Mantém tudo o resto igual (classes, estrutura, estilo), os textos no idioma ${IDIOMAS_SITE[normalizarIdioma(idioma)].nome} e o atributo data-dia="cabecalho" no <header>.
+
+${cabecalho}`;
+  const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL, reasoning_effort: 'low', max_completion_tokens: 8000, messages: [{ role: 'system', content: sistema }, { role: 'user', content: conteudo }] })
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('OpenAI falhou: ' + JSON.stringify(json).slice(0, 300));
+  let html = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+  html = html.replace(/^```(html)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const ini = html.search(/<header\b/i);
+  const fim = ini >= 0 ? fimDoElemento(html, ini, 'header') : -1;
+  if (ini < 0 || fim < 0) throw new Error('A IA não devolveu o cabeçalho.');
+  html = html.slice(ini, fim);
+  if (!/data-dia=["']cabecalho["']/.test(html)) html = html.replace(/<header\b/i, '<header data-dia="cabecalho"');
+  return { html, tokens: (json.usage && json.usage.total_tokens) || 0 };
+}
+app.post('/site-paginas-criar', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await siteDoDono(owner, site_id);
+    if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (siteMultiPagina(site)) return res.json({ status: 'error', message: 'Este site já tem várias páginas.' });
+    if (site['Status'] !== 'Pronto' || !site['Bunny Path']) return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
+    if ((site['Tipo'] || '') === 'Checkout') return res.json({ status: 'error', message: 'A página de venda fica numa página só, para levar directo à compra.' });
+    const user = await bubbleGet('user', owner);
+    const planId = await garantirPlano(owner, user);
+    const plano = planId ? await bubbleGet('plan', planId) : null;
+    if (!plano || semTokens(user, plano)) return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+    const pago = String(plano['Name'] || '').trim().toLowerCase() !== 'free';
+    await mudarEstadoSite(site_id, e => { e.paginas = { estado: 'a planear', lista: [] }; return e; });
+    res.json({ status: 'success', response: { site_id } });
+    (async () => {
+      try {
+        let html = (await descarregarDoBunny(site['Bunny Path'])).toString('utf8');
+        const idioma = idiomaDoHtml(html) || 'pt';
+        const plan = await planearSite({ tipo: site['Tipo'] || 'Landing Page', nome: site['Nome'] || '', prompt: site['Prompt Original'] || site['Nome'] || '', idioma, pago, comFotos: false });
+        html = marcarEstrutura(html);
+        if (!partesDoHtml(html)) throw new Error('sem estrutura');
+        const ih = html.search(/<header\b[^>]*data-dia=["']cabecalho["']/i);
+        const fh = ih >= 0 ? fimDoElemento(html, ih, 'header') : -1;
+        let tokens = plan.tokens;
+        if (ih >= 0 && fh > ih) {
+          const menu = await reescreverMenuIA({ cabecalho: html.slice(ih, fh), plano: plan.paginas, idioma });
+          tokens += menu.tokens;
+          html = html.slice(0, ih) + menu.html + html.slice(fh);
+        }
+        // O formulário de contacto passa para a página Contacto.
+        html = html.replace(/<div\b[^>]*id=["']daniel-ia-contacto["'][^>]*>\s*<\/div>/i, '');
+        html = prepararCasca(html, plan.paginas);
+        await uploadParaBunny(site['Bunny Path'], Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+        await purgeCacheBunny(site['CDN URL']);
+        await cobrarTokens(owner, tokens);
+        await mudarEstadoSite(site_id, e => { e.plano_paginas = plan.paginas; return e; });
+        await construirPaginas(site_id, {});
+      } catch (erro) {
+        console.error('Erro a criar as páginas de ' + site_id + ':', erro.message || erro);
+        await mudarEstadoSite(site_id, e => { e.paginas = { estado: 'erro', lista: [] }; delete e.plano_paginas; return e; });
+      }
+    })();
+  } catch (erro) {
+    console.error('Erro em /site-paginas-criar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível começar. Tenta outra vez.' });
+  }
+});
+
+// ======================================================
+// Quiz antes do checkout (1.60.0)
+// ------------------------------------------------------
+// Perguntas com pontos; no fim aparece o resultado e só então o checkout.
+// A configuração fica no "Loja Blocos Json" do site (chave "quiz"), ao
+// lado da montra e das categorias. As respostas ficam num ficheiro JSON no
+// Bunny (quiz/<site>.json), sem precisar de mais nada no Bubble.
+// ======================================================
+['/quiz-config', '/quiz-guardar', '/quiz-gerar', '/quiz-respostas'].forEach(r => ROTAS_PRIVADAS.add(r));
+Object.assign(LIMITES, {
+  '/quiz-responder': [['ip', 20, 10 * MIN], ['site', 400, 60 * MIN]],
+  '/quiz-guardar': [['owner', 60, 10 * MIN]],
+  '/quiz-gerar': [['owner', 12, 60 * MIN]]
+});
+function inteiroEntre(v, min, max, padrao) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : padrao;
+}
+function limparQuiz(q) {
+  q = (q && typeof q === 'object') ? q : {};
+  const perguntas = (Array.isArray(q.perguntas) ? q.perguntas : []).slice(0, 15).map(p => {
+    p = p && typeof p === 'object' ? p : {};
+    return {
+      texto: textoLimpo(p.texto, 220),
+      ajuda: textoLimpo(p.ajuda, 220),
+      imagem: linkImagem(p.imagem),
+      opcoes: (Array.isArray(p.opcoes) ? p.opcoes : []).slice(0, 6).map(o => ({ texto: textoLimpo(o && o.texto, 140), pontos: inteiroEntre(o && o.pontos, -100, 100, 0) })).filter(o => o.texto)
+    };
+  }).filter(p => p.texto && p.opcoes.length >= 2);
+  const resultados = (Array.isArray(q.resultados) ? q.resultados : []).slice(0, 6).map(r => ({
+    min: inteiroEntre(r && r.min, -1000, 10000, 0),
+    titulo: textoLimpo(r && r.titulo, 100),
+    texto: textoLimpo(r && r.texto, 600),
+    botao: textoLimpo(r && r.botao, 40)
+  })).filter(r => r.titulo).sort((a, b) => a.min - b.min);
+  return {
+    ativo: q.ativo === true && perguntas.length > 0,
+    bloquear: q.bloquear !== false,
+    mostrar_pontos: q.mostrar_pontos !== false,
+    captar: ['nao', 'opcional', 'obrigatorio'].includes(q.captar) ? q.captar : 'opcional',
+    etiqueta: textoLimpo(q.etiqueta, 40),
+    titulo: textoLimpo(q.titulo, 140),
+    subtitulo: textoLimpo(q.subtitulo, 300),
+    botao_iniciar: textoLimpo(q.botao_iniciar, 40),
+    cta: textoLimpo(q.cta, 40),
+    perguntas,
+    resultados
+  };
+}
+function quizDoSite(site) {
+  const m = lerJsonSeguro(site && site['Loja Blocos Json'], {}) || {};
+  return m.quiz ? limparQuiz(m.quiz) : null;
+}
+async function guardarQuizNoSite(siteId, quiz) {
+  const site = await bubbleGet('site', siteId);
+  const m = lerJsonSeguro(site && site['Loja Blocos Json'], {}) || {};
+  m.quiz = limparQuiz(quiz);
+  await bubblePatch('site', siteId, { 'Loja Blocos Json': JSON.stringify(m) });
+  return m.quiz;
+}
+function injectarQuizSeNecessario(html, ehLoja, siteId) {
+  if (!ehLoja || /quiz\.js/.test(html)) return html;
+  const pagina = metaDoHtml(html, 'daniel-ia-pagina');
+  if (pagina && pagina !== 'inicio') return html;
+  const s = `\n<script src="${SELF_URL}/quiz.js" defer></script>\n`;
+  return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, s + '</body>') : html + s;
+}
+const INSTRUCAO_QUIZ = `\nQUIZ ANTES DO CHECKOUT: esta página abre com um quiz de perguntas com pontos; só no fim aparece a oferta. Logo a seguir ao cabeçalho (antes da div da loja), põe exactamente <div id="daniel-ia-quiz"></div>, numa secção com fundo suave e um título curto por cima a convidar a responder (ex: "Descobre em 1 minuto o ideal para ti"). O quiz a sério aparece sozinho lá dentro - não escrevas tu perguntas nem botões. As secções de benefícios e garantias ficam depois da div da loja.`;
+
+const SISTEMA_QUIZ = 'És especialista em funis de venda com quiz (como os quizzes de marketing do Brasil): perguntas curtas e envolventes que fazem a pessoa pensar no problema dela, '
+  + 'dão pontos e no fim mostram um resultado que leva naturalmente à oferta. Respondes só com um objecto JSON válido.';
+async function gerarQuizIA({ nome, tipo, prompt, descricao, idioma, produtos }) {
+  const lingua = normalizarIdioma(idioma);
+  const pedido = [
+    `Negócio: ${nome} (${tipo}). Idioma do quiz: ${IDIOMAS_SITE[lingua].nome} - todos os textos nesse idioma.`,
+    `Sobre o negócio e a oferta: ${textoCurto(prompt, 1200)}`,
+    descricao ? `O que o dono quer no quiz: ${textoCurto(descricao, 800)}` : '',
+    produtos && produtos.length ? `Produtos à venda: ${produtos.slice(0, 12).join('; ')}` : '',
+    'Cria 5 a 7 perguntas, cada uma com 3 ou 4 opções curtas. Cada opção vale de 0 a 10 pontos: mais pontos = mais a pessoa precisa/combina com a oferta.',
+    'Cria 3 resultados (faixas de pontuação, "min" é a pontuação mínima de cada faixa, a primeira com min 0), do menos ao mais, cada um com título forte, um texto de 1 a 3 frases que liga o resultado à oferta e o texto do botão (ex: "Ver a minha oferta").',
+    'Também: "etiqueta" (ex: "Quiz de 1 minuto"), "titulo" (chamativo, uma pergunta ou promessa), "subtitulo" (uma frase), "botao_iniciar", "cta" (botão final por omissão).',
+    'Sê honesto: nada de promessas de saúde, dinheiro fácil ou resultados garantidos.',
+    'Formato exacto: {"etiqueta":"...","titulo":"...","subtitulo":"...","botao_iniciar":"...","cta":"...","perguntas":[{"texto":"...","opcoes":[{"texto":"...","pontos":0}]}],"resultados":[{"min":0,"titulo":"...","texto":"...","botao":"..."}]}'
+  ].filter(Boolean).join('\n');
+  const r = await chamarJsonIA(SISTEMA_QUIZ, pedido, 6000);
+  const quiz = limparQuiz(Object.assign({}, r.dados, { ativo: true, bloquear: true, mostrar_pontos: true, captar: 'opcional' }));
+  if (!quiz.perguntas.length) throw new Error('O quiz veio sem perguntas.');
+  return { quiz, tokens: r.tokens };
+}
+
+// ---- Rotas ----
+app.post('/quiz-ler', async (req, res) => {
+  try {
+    const site = await bubbleGet('site', req.body.site_id).catch(() => null);
+    const quiz = site ? quizDoSite(site) : null;
+    return res.json({ status: 'success', response: { quiz: quiz && quiz.ativo ? quiz : null } });
+  } catch (erro) {
+    return res.json({ status: 'success', response: { quiz: null } });
+  }
+});
+app.post('/quiz-config', async (req, res) => {
+  try {
+    const site = await siteDoDono(req.body.owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para ver esta loja.' });
+    const respostas = await lerRespostasQuiz(site._id);
+    return res.json({ status: 'success', response: { quiz: quizDoSite(site), total_respostas: respostas.length, cdn_url: site['CDN URL'] || '', tipo: site['Tipo'] || '' } });
+  } catch (erro) {
+    console.error('Erro em /quiz-config:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler o quiz.' });
+  }
+});
+app.post('/quiz-guardar', async (req, res) => {
+  try {
+    const site = await siteDoDono(req.body.owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const q = limparQuiz(req.body.quiz);
+    if (req.body.quiz && req.body.quiz.ativo === true && !q.perguntas.length) return res.json({ status: 'error', message: 'O quiz precisa de pelo menos uma pergunta com duas opções.' });
+    if (q.ativo && !q.resultados.length) return res.json({ status: 'error', message: 'Junta pelo menos um resultado.' });
+    const quiz = await guardarQuizNoSite(site._id, q);
+    // Sites antigos: o quiz precisa do script na página inicial.
+    if (quiz.ativo && site['Bunny Path']) {
+      const html = (await descarregarDoBunny(site['Bunny Path'])).toString('utf8');
+      const tipo = site['Tipo'] || '';
+      const novo = injectarQuizSeNecessario(html, tipo === 'E-commerce' || tipo === 'Checkout', site._id);
+      if (novo !== html) {
+        const url = await uploadParaBunny(site['Bunny Path'], Buffer.from(novo, 'utf8'), 'text/html; charset=utf-8');
+        await purgeCacheBunny(url);
+      }
+    }
+    return res.json({ status: 'success', response: { quiz } });
+  } catch (erro) {
+    console.error('Erro em /quiz-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar o quiz.' });
+  }
+});
+app.post('/quiz-gerar', async (req, res) => {
+  try {
+    const { owner } = req.body;
+    const site = await siteDoDono(owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para alterar esta loja.' });
+    const user = await bubbleGet('user', owner);
+    const planId = await garantirPlano(owner, user);
+    const plano = planId ? await bubbleGet('plan', planId) : null;
+    if (!plano || semTokens(user, plano)) return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+    const produtos = (await produtosDaLoja(site._id).catch(() => [])).map(p => `${p['Nome']} (${Number(p['Preco MZN']) || 0} MZN)`);
+    const html = site['Bunny Path'] ? (await descarregarDoBunny(site['Bunny Path']).catch(() => Buffer.from(''))).toString('utf8') : '';
+    const r = await gerarQuizIA({ nome: site['Nome'] || '', tipo: site['Tipo'] || '', prompt: site['Prompt Original'] || '', descricao: textoCurto(req.body.descricao, 800), idioma: idiomaDoHtml(html) || 'pt', produtos });
+    await cobrarTokens(owner, r.tokens);
+    return res.json({ status: 'success', response: { quiz: r.quiz } });
+  } catch (erro) {
+    console.error('Erro em /quiz-gerar:', erro.message || erro);
+    return res.json({ status: 'error', message: 'A IA não conseguiu criar o quiz agora. Tenta outra vez.' });
+  }
+});
+
+// ---- Respostas (ficheiro JSON no Bunny, uma fila por site) ----
+const filaQuiz = new Map();
+async function lerRespostasQuiz(siteId) {
+  try { const l = JSON.parse((await descarregarDoBunny(`quiz/${siteId}.json`)).toString('utf8')); return Array.isArray(l) ? l : []; }
+  catch (e) { return []; }
+}
+function juntarRespostaQuiz(siteId, resposta) {
+  const anterior = filaQuiz.get(siteId) || Promise.resolve();
+  const proximo = anterior.catch(() => {}).then(async () => {
+    const lista = await lerRespostasQuiz(siteId);
+    lista.unshift(resposta);
+    await uploadParaBunny(`quiz/${siteId}.json`, Buffer.from(JSON.stringify(lista.slice(0, 5000)), 'utf8'), 'application/json; charset=utf-8');
+  });
+  filaQuiz.set(siteId, proximo);
+  return proximo;
+}
+app.post('/quiz-responder', async (req, res) => {
+  try {
+    const site = await bubbleGet('site', req.body.site_id).catch(() => null);
+    const quiz = site ? quizDoSite(site) : null;
+    if (!quiz || !quiz.ativo) return res.json({ status: 'error', message: 'Quiz indisponível.' });
+    const escolhas = (Array.isArray(req.body.respostas) ? req.body.respostas : []).slice(0, quiz.perguntas.length).map(v => parseInt(v, 10));
+    let pontos = 0;
+    const detalhe = quiz.perguntas.map((p, i) => {
+      const o = Number.isInteger(escolhas[i]) ? p.opcoes[escolhas[i]] : null;
+      if (o) pontos += o.pontos;
+      return o ? o.texto : '';
+    });
+    let resultado = '';
+    quiz.resultados.forEach(r => { if (pontos >= r.min) resultado = r.titulo; });
+    await juntarRespostaQuiz(site._id, {
+      data: new Date().toISOString(),
+      nome: textoLimpo(req.body.nome, 80),
+      contacto: textoLimpo(req.body.contacto, 120),
+      pontos, resultado, respostas: detalhe,
+      completo: detalhe.every(Boolean)
+    });
+    return res.json({ status: 'success', response: { pontos, resultado } });
+  } catch (erro) {
+    console.error('Erro em /quiz-responder:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível registar a resposta.' });
+  }
+});
+app.post('/quiz-respostas', async (req, res) => {
+  try {
+    const site = await siteDoDono(req.body.owner, req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Não tens permissão para ver esta loja.' });
+    const lista = await lerRespostasQuiz(site._id);
+    return res.json({ status: 'success', response: { respostas: lista.slice(0, 1000), total: lista.length } });
+  } catch (erro) {
+    console.error('Erro em /quiz-respostas:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler as respostas.' });
+  }
+});
+app.get('/quiz.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(QUIZ_JS);
+});
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
