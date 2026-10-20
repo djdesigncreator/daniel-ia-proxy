@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.61.1'; // 21/10/2026 - venda de domínios (TurboHost + Bunny DNS) + diagnóstico
+const VERSION = '1.61.2'; // 21/10/2026 - domínios: respostas coladas da TurboHost e extensões compostas (co.mz, com.br)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -13787,8 +13787,7 @@ async function turbo(caminho, corpo) {
     body: JSON.stringify(Object.assign({ key: TURBOHOST_KEY }, corpo))
   });
   const texto = await r.text();
-  let json = null;
-  try { json = texto ? JSON.parse(texto) : null; } catch (e) { json = null; }
+  const json = lerJsonTurbo(texto);
   if (!r.ok || !json) {
     const e = new Error('TurboHost respondeu ' + r.status + ': ' + esconderChaveTurbo(texto).slice(0, 300));
     ultimoErroTurbo = { quando: new Date().toISOString(), rota: caminho, erro: e.message };
@@ -13798,6 +13797,74 @@ async function turbo(caminho, corpo) {
   return json;
 }
 let ultimoErroTurbo = null;
+// A TurboHost às vezes manda vários JSON colados ({...}{...}{...}): um por
+// extensão que falhou e um com os resultados. Junta tudo num só objecto.
+function lerJsonTurbo(texto) {
+  texto = String(texto || '').trim();
+  if (!texto) return null;
+  try { return JSON.parse(texto); } catch (e) { /* pode vir colado */ }
+  const partes = [];
+  let nivel = 0, inicio = -1, emTexto = false, escape = false;
+  for (let i = 0; i < texto.length; i++) {
+    const ch = texto[i];
+    if (emTexto) { if (escape) escape = false; else if (ch === '\\') escape = true; else if (ch === '"') emTexto = false; continue; }
+    if (ch === '"') { emTexto = true; continue; }
+    if (ch === '{') { if (nivel === 0) inicio = i; nivel++; }
+    else if (ch === '}') { nivel--; if (nivel === 0 && inicio >= 0) { try { partes.push(JSON.parse(texto.slice(inicio, i + 1))); } catch (e) { /* ignora pedaço partido */ } inicio = -1; } }
+  }
+  if (!partes.length) return null;
+  if (partes.length === 1) return partes[0];
+  const boas = partes.filter(x => turboOk(x));
+  const avisos = partes.filter(x => !turboOk(x)).map(x => turboErro(x));
+  if (!boas.length) return Object.assign({}, partes[0], { avisos });
+  const junto = Object.assign({}, boas[0], { avisos });
+  boas.slice(1).forEach(x => {
+    if (x.data && typeof x.data === 'object' && !Array.isArray(x.data) && junto.data && typeof junto.data === 'object' && !Array.isArray(junto.data)) Object.assign(junto.data, x.data);
+    else if (Array.isArray(x.data) && Array.isArray(junto.data)) junto.data = junto.data.concat(x.data);
+  });
+  return junto;
+}
+// Disponibilidade de várias extensões. A TurboHost tira o ponto às extensões
+// compostas (co.mz -> "comz") e diz que não existem; para essas tenta outras
+// formas de perguntar e lembra-se da que funcionou.
+const formaTldComposto = {};
+function resultadoValido(x) {
+  if (!x || typeof x !== 'object') return false;
+  const st = String(x.status != null ? x.status : (x.available != null ? (x.available ? 'available' : 'unavailable') : '')).toLowerCase();
+  return ['available', 'unavailable', 'registered', 'taken', 'free', 'true', 'false'].includes(st);
+}
+async function verDisponibilidade(sld, tlds) {
+  const simples = tlds.filter(t => !t.includes('.'));
+  const compostos = tlds.filter(t => t.includes('.'));
+  const mapa = {};
+  if (simples.length) {
+    const j = await turbo('/domain-availability-check', { sld, tlds: simples });
+    if (!turboOk(j)) throw new Error('Disponibilidade: ' + turboErro(j));
+    Object.assign(mapa, mapaDisponibilidade(j));
+  }
+  await Promise.all(compostos.map(async t => {
+    const dom = sld + '.' + t;
+    const i = t.indexOf('.');
+    const formas = [
+      { nome: 'tld', corpo: { sld, tlds: [t] } },
+      { nome: 'sld-com-ponto', corpo: { sld: sld + '.' + t.slice(0, i), tlds: [t.slice(i + 1)] } },
+      { nome: 'tld-com-ponto', corpo: { sld, tlds: ['.' + t] } },
+      { nome: 'dominio', corpo: { domain: dom, sld, tld: t } }
+    ];
+    const primeiro = formaTldComposto[t];
+    if (primeiro) formas.sort((a, b) => (a.nome === primeiro ? -1 : 0) - (b.nome === primeiro ? -1 : 0));
+    for (const f of formas) {
+      try {
+        const j = await turbo('/domain-availability-check', f.corpo);
+        const m = mapaDisponibilidade(j);
+        const x = m[dom] || Object.values(m).find(v => resultadoValido(v));
+        if (resultadoValido(x)) { mapa[dom] = x; formaTldComposto[t] = f.nome; return; }
+      } catch (e) { /* tenta a forma seguinte */ }
+    }
+    mapa[dom] = { status: 'unknown' };
+  }));
+  return mapa;
+}
 function esconderChaveTurbo(t) {
   t = String(t || '');
   return TURBOHOST_KEY ? t.split(TURBOHOST_KEY).join('***') : t;
@@ -13942,9 +14009,7 @@ app.post('/dominio-procurar', async (req, res) => {
       tlds = [tld].concat(tlds.filter(t => t !== tld));
     }
     tlds = tlds.slice(0, 14);
-    const j = await turbo('/domain-availability-check', { sld, tlds });
-    if (!turboOk(j)) throw new Error('Disponibilidade: ' + turboErro(j));
-    const disp = mapaDisponibilidade(j);
+    const disp = await verDisponibilidade(sld, tlds);
     const lista = tlds.map(t => {
       const d = disp[sld + '.' + t] || {};
       const p = produtos.get(t);
@@ -13952,7 +14017,7 @@ app.post('/dominio-procurar', async (req, res) => {
       const livre = livreTurbo(d);
       return {
         dominio: sld + '.' + t, tld: t, livre: livre && !d.premium, premium: !!d.premium,
-        estado: d.premium ? 'premium' : (livre ? 'livre' : (d.status ? 'ocupado' : 'desconhecido')),
+        estado: d.premium ? 'premium' : (livre ? 'livre' : (resultadoValido(d) ? 'ocupado' : 'desconhecido')),
         preco: pr.registo, renovacao: pr.renovacao, transferencia: pr.transferencia, privacidade: pr.privacidade,
         documentos: documentosDoTld(p)
       };
@@ -14054,8 +14119,7 @@ app.post('/dominio-pedido', async (req, res) => {
     }
     // Ainda está livre? (para transferências tem de estar ocupado)
     if (!transferir) {
-      const j = await turbo('/domain-availability-check', { sld, tlds: [tld] });
-      const d = mapaDisponibilidade(j)[dominio];
+      const d = (await verDisponibilidade(sld, [tld]))[dominio];
       if (!d || !livreTurbo(d) || d.premium) {
         return res.json({ status: 'error', message: 'Alguém registou "' + dominio + '" agora mesmo, ou não está disponível. Escolhe outro.' });
       }
@@ -14443,7 +14507,14 @@ app.post('/admin-dominios-teste', async (req, res) => {
     try { r.ip_do_servidor = (await (await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(8000) })).json()).ip; } catch (e) { r.ip_do_servidor = '?'; }
     if (TURBOHOST_KEY) {
       r.produtos = await turboBruto('/products', { types: ['domain'] });
-      r.disponibilidade = await turboBruto('/domain-availability-check', { sld: 'danieliateste' + Math.floor(Math.random() * 9000 + 1000), tlds: ['com', 'co.mz'] });
+      const teste = 'danieliateste' + Math.floor(Math.random() * 9000 + 1000);
+      r.disponibilidade = await turboBruto('/domain-availability-check', { sld: teste, tlds: ['com', 'mz'] });
+      try {
+        const m = await verDisponibilidade(teste, ['com', 'mz', 'co.mz', 'com.br']);
+        r.disponibilidade_lida = {};
+        Object.keys(m).forEach(k => { r.disponibilidade_lida[k] = livreTurbo(m[k]) ? 'livre' : String(m[k].status || '?'); });
+        r.formas_compostas = Object.assign({}, formaTldComposto);
+      } catch (e) { r.erro_disponibilidade = esconderChaveTurbo(e.message); }
       try { const m = await produtosDominio(true); r.extensoes_lidas = m.size; r.exemplo = Array.from(m.keys()).slice(0, 12); } catch (e) { r.extensoes_lidas = 0; r.erro_leitura = esconderChaveTurbo(e.message); }
     }
     registar(admin, 'dominios-teste', r.extensoes_lidas ? 'ok' : 'falhou');
