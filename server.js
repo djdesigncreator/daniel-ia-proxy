@@ -2089,8 +2089,8 @@ Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos 
 O site deve ser responsivo, moderno e profissional.
 IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
 ${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : (referencia ? instrucaoReferencia({ referencia: 'fiel', analise: null }, tipo, true) : pontoDePartidaVisual())}
-IMPORTANTE: o site tem de parecer acabado e profissional - nunca com ar de esqueleto, com caixas vazias ou textos de enchimento. Acabado não quer dizer comprido: o tamanho e a quantidade de secções seguem a descrição. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, desenvolve o suficiente para aquele negócio, com textos com substância.
-${guia}${padroesDoTipo(tipo)}${instrucaoPaginas(paginas, tipo)}${quiz ? INSTRUCAO_QUIZ : ''}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
+IMPORTANTE: o site tem de parecer acabado, profissional e RICO - nunca com ar de esqueleto, com caixas vazias, pouca informação ou textos de enchimento. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, o site é completo e cheio de informação útil, como o de uma marca líder do sector (ver SITE RICO E VIVO).
+${guia}${padroesDoTipo(tipo)}${instrucaoRiqueza(tipo)}${instrucaoPaginas(paginas, tipo)}${quiz ? INSTRUCAO_QUIZ : ''}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
@@ -5789,6 +5789,8 @@ app.post('/generate', async (req, res) => {
     // Quiz antes do checkout (só lojas e páginas de venda).
     const quizPedido = (tipo === 'Checkout' || tipo === 'E-commerce') && req.body.quiz && req.body.quiz.ativo === true
       ? { descricao: textoCurto(req.body.quiz.descricao, 800) } : null;
+    // Por omissão os sites têm várias páginas; "uma página só" é escolha da pessoa.
+    const umaPagina = req.body.uma_pagina === true;
     if (referencia_data_url && !referenciaValida(referencia_data_url)) {
       return res.json({ status: 'error', message: 'A imagem de referência não é válida. Usa um JPG, PNG ou WEBP com menos de 6 MB.' });
     }
@@ -5848,11 +5850,11 @@ app.post('/generate', async (req, res) => {
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta ----
     if (variantes === 3) {
-      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua })
+      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua, umaPagina })
         .catch(erro => console.error('Erro em processarVariantes:', erro));
       return;
     }
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua })
+    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua, umaPagina })
       .catch(erro => console.error('Erro em processarGeracao:', erro));
 
   } catch (erro) {
@@ -5884,7 +5886,7 @@ function guardarVariantes(siteId, estado) {
   return proximo;
 }
 
-async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente, quiz, pago }) {
+async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, manterSite, logoExistente, quiz, pago, umaPagina }) {
   const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const comReferencia = !!referencia_data_url;
   const direcoes = comReferencia ? direcoesDaReferencia(tipo, null) : escolherDirecoes(tipo);
@@ -5936,7 +5938,7 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
       if (anterior && Array.isArray(anterior.plano_paginas) && anterior.plano_paginas.length > 1) {
         return { paginas: anterior.plano_paginas, fotos: anterior.fotos || [], temas: anterior.temas_sugeridos || [], tokens: 0 };
       }
-      const plan = await planearSite({ tipo, nome, prompt, idioma, pago: pago !== false, comFotos: true });
+      const plan = await planearSite({ tipo, nome, prompt, idioma, pago: pago !== false, comFotos: true, umaPagina: !!(umaPagina || (anterior && anterior.uma_pagina)) });
       const fts = await prepararFotos({ owner, slug, pedidos: plan.fotos });
       return { paginas: plan.paginas, fotos: fts.fotos, temas: plan.temas || [], tokens: (plan.tokens || 0) + (fts.tokens || 0) };
     })().catch(erro => { console.error('Plano e fotos falharam:', erro.message || erro); return { paginas: [], fotos: [], tokens: 0 }; });
@@ -5966,6 +5968,7 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
       });
     }
     if (planoR.paginas && planoR.paginas.length > 1) estado.plano_paginas = planoR.paginas;
+    if (umaPagina || (anterior && anterior.uma_pagina)) estado.uma_pagina = true;
     estado.fotos = planoR.fotos || [];
     estado.preparacao = 'pronta';
     await guardarVariantes(siteId, estado);
@@ -6197,7 +6200,7 @@ app.post('/escolher-variante', async (req, res) => {
   }
 });
 
-async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz, pago }) {
+async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz, pago, umaPagina }) {
   try {
     // ---- Logótipo (opcional) ----
     // Esta função já corre depois de termos respondido ao pedido (ver nota
@@ -6241,7 +6244,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     const siteSlug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const [planoR, quizR] = await Promise.all([
       (async () => {
-        const plan = await planearSite({ tipo, nome, prompt, idioma, pago: pago !== false, comFotos: true });
+        const plan = await planearSite({ tipo, nome, prompt, idioma, pago: pago !== false, comFotos: true, umaPagina: !!umaPagina });
         const fts = await prepararFotos({ owner, slug: siteSlug, pedidos: plan.fotos });
         return { paginas: plan.paginas, fotos: fts.fotos, tokens: (plan.tokens || 0) + (fts.tokens || 0) };
       })().catch(erro => { console.error('Plano e fotos falharam:', erro.message || erro); return { paginas: [], fotos: [], tokens: 0 }; }),
@@ -6282,6 +6285,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
       'Logo URL': logoUrl
     };
     if (planoPaginas.length) fimSite['Variantes Json'] = JSON.stringify({ plano_paginas: planoPaginas, fotos: planoR.fotos || [] });
+    else if (umaPagina) fimSite['Variantes Json'] = JSON.stringify({ uma_pagina: true, fotos: planoR.fotos || [] });
     await bubblePatch('site', siteId, fimSite);
     if (planoPaginas.length) construirPaginas(siteId, {});
 
@@ -11261,13 +11265,13 @@ const FOTOS_IA = (clean(process.env.FOTOS_IA) || 'sim').toLowerCase() !== 'nao';
 const OPENAI_IMAGE_MODEL = clean(process.env.OPENAI_IMAGE_MODEL) || 'gpt-image-1';
 const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 3);
 const TOKENS_POR_FOTO_IA = Math.max(0, parseInt(clean(process.env.TOKENS_POR_FOTO_IA), 10) || 3000);
-const PAGINAS_IA_MAX_FREE = 2;
-const PAGINAS_IA_MAX = 4;
+const PAGINAS_IA_MAX_FREE = 3;
+const PAGINAS_IA_MAX = 6;
 
 const PAGINAS_CATALOGO = {
   inicio: {}, loja: { modulo: 'loja' }, produto: { modulo: 'produto', menu: false },
   trabalhos: { modulo: 'portfolio' }, albuns: { modulo: 'galeria' }, artigos: { modulo: 'blog' },
-  sobre: {}, servicos: {}, precos: {}, menu: {}, reservas: {}, galeria: {}, equipa: {}, perguntas: {},
+  sobre: {}, servicos: {}, precos: {}, menu: {}, reservas: {}, galeria: {}, equipa: {}, perguntas: {}, processo: {}, testemunhos: {},
   contacto: { modulo: 'contacto' }
 };
 const NOMES_PAGINAS = {
@@ -11285,6 +11289,8 @@ const NOMES_PAGINAS = {
   galeria: { pt: ['Galeria', 'Galeria'], en: ['Gallery', 'Gallery'], fr: ['Galerie', 'Galerie'], es: ['Galería', 'Galería'] },
   equipa: { pt: ['Equipa', 'A nossa equipa'], en: ['Team', 'Our team'], fr: ['Équipe', 'Notre équipe'], es: ['Equipo', 'Nuestro equipo'] },
   perguntas: { pt: ['Perguntas', 'Perguntas frequentes'], en: ['FAQ', 'Frequently asked questions'], fr: ['FAQ', 'Questions fréquentes'], es: ['Preguntas', 'Preguntas frecuentes'] },
+  processo: { pt: ['Como funciona', 'Como funciona'], en: ['How it works', 'How it works'], fr: ['Comment ça marche', 'Comment ça marche'], es: ['Cómo funciona', 'Cómo funciona'] },
+  testemunhos: { pt: ['Clientes', 'O que dizem os clientes'], en: ['Reviews', 'What our clients say'], fr: ['Avis', 'Ce que disent nos clients'], es: ['Opiniones', 'Lo que dicen los clientes'] },
   contacto: { pt: ['Contacto', 'Contacto'], en: ['Contact', 'Contact'], fr: ['Contact', 'Contact'], es: ['Contacto', 'Contacto'] }
 };
 const RESUMOS_PAGINAS = {
@@ -11302,15 +11308,18 @@ const RESUMOS_PAGINAS = {
   galeria: 'uma galeria de imagens do espaço, dos trabalhos ou dos produtos',
   equipa: 'as pessoas da equipa, com funções e uma frase de cada',
   perguntas: 'as perguntas frequentes em acordeão, agrupadas por tema',
+  processo: 'como funciona passo a passo (do primeiro contacto à entrega), prazos, o que a pessoa recebe e garantias',
+  testemunhos: 'depoimentos de clientes por tipo de serviço ou produto, resultados, números e uma chamada para acção',
   contacto: 'os contactos (telefone, WhatsApp, email, morada, horário), um mapa desenhado e o formulário'
 };
 const PAGINAS_TIPO = {
-  'E-commerce': { fixas: ['inicio', 'loja', 'produto', 'sobre', 'contacto'], opcionais: ['perguntas'] },
-  'Checkout': { fixas: ['inicio'], opcionais: [] },
-  'Landing Page': { fixas: ['inicio', 'sobre', 'contacto'], opcionais: ['servicos', 'precos', 'menu', 'reservas', 'galeria', 'equipa', 'perguntas'] },
-  'Portefólio': { fixas: ['inicio', 'trabalhos', 'sobre', 'contacto'], opcionais: ['servicos'] },
-  'Galeria': { fixas: ['inicio', 'albuns', 'sobre', 'contacto'], opcionais: ['servicos', 'precos'] },
-  'Blog': { fixas: ['inicio', 'artigos', 'sobre', 'contacto'], opcionais: [] }
+  'E-commerce': { fixas: ['inicio', 'loja', 'produto', 'sobre', 'contacto'], opcionais: ['processo', 'perguntas', 'testemunhos'] },
+  // Página de venda (1.60.0): também com várias páginas; a oferta fica na inicial.
+  'Checkout': { fixas: ['inicio', 'sobre', 'perguntas', 'contacto'], opcionais: ['processo', 'testemunhos', 'servicos', 'equipa'] },
+  'Landing Page': { fixas: ['inicio', 'sobre', 'contacto'], opcionais: ['servicos', 'processo', 'precos', 'menu', 'reservas', 'galeria', 'equipa', 'testemunhos', 'perguntas'] },
+  'Portefólio': { fixas: ['inicio', 'trabalhos', 'sobre', 'contacto'], opcionais: ['servicos', 'processo', 'precos', 'testemunhos'] },
+  'Galeria': { fixas: ['inicio', 'albuns', 'sobre', 'contacto'], opcionais: ['servicos', 'precos', 'processo', 'testemunhos'] },
+  'Blog': { fixas: ['inicio', 'artigos', 'sobre', 'contacto'], opcionais: ['servicos', 'perguntas'] }
 };
 function ficheiroDaPagina(slug) { return slug === 'inicio' ? 'index.html' : slug + '.html'; }
 function paginaBase(slug, idioma) {
@@ -11402,13 +11411,13 @@ function limparPedidosFotos(dados, tipo) {
     orientacao: ['paisagem', 'retrato', 'quadrada'].includes(f.orientacao) ? f.orientacao : 'paisagem'
   }));
 }
-async function planearSite({ tipo, nome, prompt, idioma, pago, comFotos }) {
+async function planearSite({ tipo, nome, prompt, idioma, pago, comFotos, umaPagina }) {
   const regras = PAGINAS_TIPO[tipo] || PAGINAS_TIPO['Landing Page'];
   const lingua = normalizarIdioma(idioma);
   const pedido = [
     `Negócio: ${nome}. Tipo de site: ${tipo}. Idioma do site: ${IDIOMAS_SITE[lingua].nome}.`,
     `Descrição pedida pela pessoa: ${textoCurto(prompt, 1500)}`,
-    `Páginas obrigatórias: ${regras.fixas.join(', ')}. Opcionais (escolhe só as que fazem sentido para ESTE negócio, no máximo ${(pago ? PAGINAS_IA_MAX : PAGINAS_IA_MAX_FREE)} páginas de conteúdo no total contando com sobre e contacto): ${regras.opcionais.join(', ') || 'nenhuma'}.`,
+    umaPagina ? 'A pessoa escolheu um site de UMA página só: devolve "paginas": [{"slug":"inicio"}].' : `Páginas obrigatórias: ${regras.fixas.join(', ')}. Opcionais: ${regras.opcionais.join(', ') || 'nenhuma'}. O site deve ser RICO e completo: escolhe sempre pelo menos 2 opcionais que sirvam ESTE negócio (até ${(pago ? PAGINAS_IA_MAX : PAGINAS_IA_MAX_FREE)} páginas de conteúdo no total, contando com as obrigatórias que não são da loja, dos trabalhos, dos álbuns ou dos artigos).`,
     'Ex: um restaurante quer "menu" e "reservas"; uma agência quer "servicos" e "precos"; uma clínica quer "servicos" e "equipa".',
     'Para cada página: "nav" (1 ou 2 palavras para o menu), "titulo" (título da página), "subtitulo" (uma frase curta) e "resumo" (em português: que secções e conteúdos leva, concretos para este negócio). Os textos "nav", "titulo" e "subtitulo" são no idioma do site.',
     comFotos ? `Fotografias: 3 a ${(tipo === 'E-commerce' || tipo === 'Checkout') ? 3 : 6} fotos reais de que o site precisa (capa, sobre, serviços, ambiente...). Para cada uma: "uso" (onde entra, ex: capa, sobre, servico-1), "consulta" (3 a 6 palavras em INGLÊS para procurar num banco de fotos, concretas e visuais, ex: "african woman baker kneading bread"; quando houver pessoas, prefere pessoas africanas/moçambicanas; nunca marcas), "descricao" (em português, a foto ideal, para gerar com IA se não houver) e "orientacao" (paisagem, retrato ou quadrada).` : 'Fotografias: devolve "fotos": [].',
@@ -11418,12 +11427,12 @@ async function planearSite({ tipo, nome, prompt, idioma, pago, comFotos }) {
   try {
     const r = await chamarJsonIA(SISTEMA_PLANO, pedido, 5000);
     const temas = (r.dados && Array.isArray(r.dados.temas) ? r.dados.temas : []).map(x => String(x || '').toLowerCase().trim()).filter((x, i, a) => TEMAS_LOJA.some(t => t.id === x) && a.indexOf(x) === i).slice(0, 3);
-    return { paginas: limparPlanoPaginas(r.dados, tipo, lingua, pago), fotos: comFotos ? limparPedidosFotos(r.dados, tipo) : [], temas: tipo === 'E-commerce' ? temas : [], tokens: r.tokens };
+    return { paginas: umaPagina ? [paginaBase('inicio', lingua)] : limparPlanoPaginas(r.dados, tipo, lingua, pago), fotos: comFotos ? limparPedidosFotos(r.dados, tipo) : [], temas: tipo === 'E-commerce' ? temas : [], tokens: r.tokens };
   } catch (erro) {
     console.error('Plano do site falhou (sigo com as páginas base):', erro.message || erro);
     const consulta = String(prompt || nome || '').split(/\s+/).slice(0, 6).join(' ');
     return {
-      paginas: limparPlanoPaginas({}, tipo, lingua, pago),
+      paginas: umaPagina ? [paginaBase('inicio', lingua)] : limparPlanoPaginas({}, tipo, lingua, pago),
       fotos: comFotos && consulta ? [{ uso: 'capa', consulta, descricao: consulta, orientacao: 'paisagem', locale: 'pt-BR' }, { uso: 'sobre', consulta, descricao: consulta, orientacao: 'paisagem', locale: 'pt-BR' }] : [],
       tokens: 0
     };
@@ -11545,6 +11554,59 @@ function instrucaoFotos(fotos) {
   return '\nFOTOGRAFIAS DESTE SITE (fotos reais, já preparadas - usa-as, são parte do padrão profissional; estes são os únicos URLs de imagens externas permitidos, além das imagens que a pessoa anexou):'
     + fotos.map((f, i) => `\n${i + 1}) [${f.uso}] ${f.url} - ${f.descricao || ''} (${f.orientacao || 'paisagem'})`).join('')
     + '\nUsa-as grandes e bem enquadradas: <img> com object-fit:cover e alt descritivo, cantos e sombras a condizer com o site, sobreposições e cartões flutuantes por cima (números, avaliações, etiquetas), recortes em formas (arco, círculo, cantos assimétricos) quando servir a identidade. Cada foto no máximo uma vez por página.';
+}
+
+// ---- Sites ricos e sempre diferentes (1.60.0) ----
+// Cada versão recebe uma mão-cheia de padrões de secção sorteados de uma
+// biblioteca grande, para nunca sair duas vezes o mesmo molde.
+const PADROES_SECCAO = [
+  'faixa de números grandes animados (anos, clientes, entregas, cidades), com uma legenda curta por baixo de cada um',
+  'grelha "bento" com cartões de tamanhos diferentes: um grande com foto e 3 a 4 pequenos com ícone e texto',
+  'linha do tempo horizontal (vertical no telemóvel) com os passos do processo numerados',
+  'secção em duas colunas: foto grande com cantos assimétricos de um lado e lista de vantagens com ícones do outro, com um cartão flutuante por cima da foto (número ou avaliação)',
+  'depoimentos em cartões com aspas grandes desenhadas, estrelas, nome e cidade; um deles em destaque maior',
+  'tabela de comparação "connosco vs. sem nós" com vistos e cruzes em SVG',
+  'acordeão de perguntas frequentes em duas colunas, com um cartão de contacto ao lado',
+  'faixa larga em cor forte com uma frase enorme e um botão, com formas decorativas em SVG',
+  'cartões de serviço com ícone, título, 2 frases, uma lista curta de "inclui" e um link "Saber mais"',
+  'galeria em mosaico (masonry) com legendas que aparecem ao passar o rato',
+  'secção "para quem é": 3 a 4 perfis de cliente em cartões, cada um com o problema e a solução',
+  'faixa de texto em movimento contínuo com palavras-chave do negócio separadas por um símbolo',
+  'secção de garantias e confiança: selos desenhados em SVG (pagamento seguro, entrega, garantia, apoio) com uma frase cada',
+  'cartões de preços com um plano em destaque, lista do que inclui e botão; preços em MZN',
+  'secção "antes e depois" ou problema → solução em duas colunas contrastantes',
+  'equipa ou fundador: foto (ou monograma desenhado) com citação pessoal e assinatura',
+  'mapa estilizado desenhado em SVG com as zonas de entrega ou atendimento e uma lista de cidades',
+  'cartões com efeito de vidro (glassmorphism) sobre um fundo com gradiente e formas desfocadas',
+  'secção de destaque com um número gigante como fundo gráfico e texto por cima',
+  'abas (tabs) em CSS/JS simples para mostrar categorias de serviços ou de menu sem sair da página',
+  'carrossel horizontal com scroll-snap de cartões (serviços, projectos ou depoimentos), com setas',
+  'chamada final de ecrã inteiro com fundo em foto escurecida, título forte e dois botões (principal e WhatsApp)',
+  'lista de "o que recebes" com vistos grandes e um cartão lateral fixo (sticky) com o resumo e o botão',
+  'faixa de passos em círculos ligados por uma linha tracejada animada',
+  'secção editorial com um título gigante à esquerda e parágrafos em duas colunas à direita, com uma citação em destaque',
+  'cartões que se viram (flip) ou se expandem ao passar o rato para mostrar detalhes',
+  'secção de horário e localização com um relógio/ícone desenhado, dias da semana em grelha e o estado "Aberto agora"',
+  'barra de logótipos ou parceiros desenhados como monogramas em SVG (sem marcas reais), em movimento lento'
+];
+function sortearPadroesSeccao(n) {
+  const a = PADROES_SECCAO.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a.slice(0, n);
+}
+function instrucaoRiqueza(tipo) {
+  const extra = {
+    'E-commerce': 'Loja: depois da div da loja, junta 4 a 6 secções ricas (vantagens e entregas, como comprar passo a passo, a marca com link para sobre.html, depoimentos, perguntas rápidas, uma faixa para encomendar no WhatsApp). Os produtos continuam a ser os protagonistas.',
+    'Checkout': 'Página de venda COMPLETA (como as melhores páginas de venda): depois da div da loja, desenvolve a venda com 6 a 9 secções - a promessa, os benefícios explicados, para quem é, como funciona, o que a pessoa recebe, garantia, depoimentos, perguntas frequentes e uma chamada final com um botão que leva de volta à oferta (href="#daniel-ia-produtos"). Isto substitui a regra de "textos curtos" do guia.',
+  }[tipo] || 'A página inicial tem no mínimo 8 secções diferentes entre o hero e o rodapé.';
+  return `\nSITE RICO E VIVO (regra base, a não ser que a descrição peça algo simples ou curto - aí manda a descrição):
+- Nada de sites "mortos" ou pobres: cada secção tem informação concreta e útil para este negócio (o que faz, como, para quem, quanto custa em MZN quando faz sentido, prazos, zonas, horários, garantias, passos, exemplos). Parágrafos com substância, listas, números e detalhes - nunca frases genéricas de enchimento.
+- ${extra}
+- Varia a forma das secções: nunca duas secções seguidas com o mesmo desenho (ex: três grelhas de cartões iguais seguidas).
+- Depoimentos: escreve-os como exemplos realistas que o dono vai trocar pelos verdadeiros - só o primeiro nome e a cidade, sem empresas nem números inventados como se fossem factos.
+- Interacção: hover nos cartões, contadores animados, acordeões, abas ou carrosséis onde fizer sentido (sempre com o conteúdo visível sem JavaScript).
+PADRÕES DE SECÇÃO SORTEADOS PARA ESTA VERSÃO (usa pelo menos 4 deles, adaptados ao negócio, para esta versão ser diferente das outras e de qualquer site anterior):
+${sortearPadroesSeccao(6).map(x => '- ' + x).join('\n')}`;
 }
 
 // ---- Instruções para as páginas ----
@@ -11744,7 +11806,8 @@ RESPOSTA: só um <style data-dia="pagina">...</style> (opcional, só com CSS nov
 ${DIRECAO_DE_ARTE}
 REGRAS DESTA PÁGINA:
 - A página tem de parecer do mesmo site da inicial: usa as MESMAS classes, fichas --dia-*, botões, títulos, etiquetas, cartões, espaçamentos e cantos do CSS existente. CSS novo só para componentes novos, sempre com o prefixo .pg-${pagina.slug} (o <main> já tem essa classe).
-- Abre com um topo de página forte (título da página, uma frase e, se fizer sentido, uma foto ou composição), depois 3 a 6 secções com conteúdo real e com substância para este negócio (nunca "lorem ipsum" nem textos de enchimento), e fecha com uma chamada para acção que leva a outra página.
+- Abre com um topo de página forte (título da página, uma frase e, se fizer sentido, uma foto ou composição), depois 5 a 8 secções com conteúdo real, concreto e com substância para este negócio (números, passos, listas, preços em MZN quando fizer sentido, exemplos; nunca "lorem ipsum" nem textos de enchimento), com formas diferentes entre si, e fecha com uma chamada para acção que leva a outra página.
+- Padrões de secção sorteados para esta página (usa pelo menos 2, adaptados): ${sortearPadroesSeccao(4).join(' | ')}.
 - Links internos com o nome do ficheiro (ex: href="contacto.html"). Páginas do site: ${plano.filter(x => x.menu !== false).map(x => `${x.nav} = ${x.ficheiro}`).join(', ')}.
 - Responsiva a 360, 768 e 1280 px; nada a sair do ecrã.
 - Pode usar as mesmas classes de animação da inicial (o mesmo script corre aqui), mas o conteúdo nunca pode ficar invisível sem JavaScript.${ehContacto ? '\n- PÁGINA DE CONTACTO: inclui exactamente <div id="daniel-ia-contacto"></div> (o formulário a sério aparece lá dentro, já aberto) ao lado ou abaixo de cartões com telefone, WhatsApp, email, morada e horário, e um mapa estilizado desenhado em SVG/CSS (nunca um iframe). Não escrevas tu nenhum formulário.' : ''}
@@ -12030,7 +12093,7 @@ app.post('/site-paginas', async (req, res) => {
       nome: site['Nome'] || '', tipo: site['Tipo'] || '', estado_site: site['Status'] || '', cdn_url: site['CDN URL'] || '',
       multi: !!pub, estado_paginas: pub ? pub.estado : ((e.paginas && e.paginas.estado) || ''), paginas,
       fotos: (Array.isArray(e.fotos) ? e.fotos : []).map(f => ({ url: f.url, descricao: f.descricao || '' })).slice(0, 12),
-      pode_criar_paginas: !pub && site['Status'] === 'Pronto' && !!site['Bunny Path'] && (site['Tipo'] || '') !== 'Checkout'
+      pode_criar_paginas: !pub && site['Status'] === 'Pronto' && !!site['Bunny Path']
     } });
   } catch (erro) {
     console.error('Erro em /site-paginas:', erro);
@@ -12250,7 +12313,6 @@ app.post('/site-paginas-criar', async (req, res) => {
     if (!site) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
     if (siteMultiPagina(site)) return res.json({ status: 'error', message: 'Este site já tem várias páginas.' });
     if (site['Status'] !== 'Pronto' || !site['Bunny Path']) return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
-    if ((site['Tipo'] || '') === 'Checkout') return res.json({ status: 'error', message: 'A página de venda fica numa página só, para levar directo à compra.' });
     const user = await bubbleGet('user', owner);
     const planId = await garantirPlano(owner, user);
     const plano = planId ? await bubbleGet('plan', planId) : null;
