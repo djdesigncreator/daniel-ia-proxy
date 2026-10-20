@@ -11255,6 +11255,8 @@ const QUIZ_JS = "/*\n  Daniel IA - quiz antes do checkout (1.60.0)\n  ----------
 //     a inicial muda (edição com IA, editor visual, outro layout).
 // ======================================================
 const PEXELS_API_KEY = clean(process.env.PEXELS_API_KEY);
+// Pixabay: alternativa grátis ao Pexels (o Pexels pausou as chaves novas).
+const PIXABAY_API_KEY = clean(process.env.PIXABAY_API_KEY);
 const FOTOS_IA = (clean(process.env.FOTOS_IA) || 'sim').toLowerCase() !== 'nao';
 const OPENAI_IMAGE_MODEL = clean(process.env.OPENAI_IMAGE_MODEL) || 'gpt-image-1';
 const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 3);
@@ -11442,6 +11444,33 @@ async function procurarFotoPexels(consulta, orientacao, usados, locale) {
   usados.add(f.id);
   return { url: f.src.large2x || f.src.large || f.src.original, credito: f.photographer || '', id: f.id };
 }
+// Pixabay: as respostas ficam guardadas 24 h (regra da API) e as fotos são
+// sempre copiadas para o Bunny (a Pixabay não deixa usar os links deles).
+const cachePixabay = new Map();
+async function procurarFotoPixabay(consulta, orientacao, usados) {
+  if (!PIXABAY_API_KEY || !consulta) return null;
+  const params = new URLSearchParams({
+    key: PIXABAY_API_KEY, q: String(consulta).slice(0, 100), image_type: 'photo', safesearch: 'true', per_page: '20',
+    orientation: { paisagem: 'horizontal', retrato: 'vertical' }[orientacao] || 'all', min_width: '1000'
+  });
+  const chave = params.toString();
+  let hits;
+  const guardado = cachePixabay.get(chave);
+  if (guardado && Date.now() - guardado.em < 24 * 3600 * 1000) hits = guardado.hits;
+  else {
+    const r = await fetch('https://pixabay.com/api/?' + chave, { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error('Pixabay respondeu ' + r.status);
+    const j = await r.json();
+    hits = Array.isArray(j.hits) ? j.hits : [];
+    if (cachePixabay.size > 500) cachePixabay.clear();
+    cachePixabay.set(chave, { em: Date.now(), hits });
+  }
+  const lista = hits.filter(f => f && f.largeImageURL && !usados.has('pb' + f.id));
+  if (!lista.length) return null;
+  const f = lista[Math.floor(Math.random() * Math.min(3, lista.length))];
+  usados.add('pb' + f.id);
+  return { url: f.largeImageURL, credito: f.user || '', id: f.id };
+}
 async function gerarFotoIA(descricao, orientacao) {
   if (!FOTOS_IA || !OPENAI_API_KEY || !descricao) return null;
   const size = orientacao === 'retrato' ? '1024x1536' : orientacao === 'quadrada' ? '1024x1024' : '1536x1024';
@@ -11486,6 +11515,15 @@ async function prepararFotos({ owner, slug, pedidos }) {
           if (r.ok) { dados = { buffer: Buffer.from(await r.arrayBuffer()), mime: 'image/jpeg' }; fonte = 'pexels'; credito = f.credito; }
         }
       } catch (e) { console.error('Pexels:', e.message || e); }
+      if (!dados) {
+        try {
+          const f = await procurarFotoPixabay(p.consulta, p.orientacao, usados);
+          if (f) {
+            const r = await fetch(f.url, { signal: AbortSignal.timeout(25000) });
+            if (r.ok) { dados = { buffer: Buffer.from(await r.arrayBuffer()), mime: /\.png(\?|$)/i.test(f.url) ? 'image/png' : 'image/jpeg' }; fonte = 'pixabay'; credito = f.credito; }
+          }
+        } catch (e) { console.error('Pixabay:', e.message || e); }
+      }
       if (!dados && iaUsadas < FOTOS_IA_MAX) {
         iaUsadas++;
         dados = await gerarFotoIA(p.descricao || p.consulta, p.orientacao);
