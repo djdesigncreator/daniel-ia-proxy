@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.61.2'; // 21/10/2026 - domínios: respostas coladas da TurboHost e extensões compostas (co.mz, com.br)
+const VERSION = '1.61.3'; // 21/10/2026 - domínios: preços em MZN da TurboHost, respostas coladas, extensões compostas
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -13943,25 +13943,36 @@ async function produtosDominio(forcar) {
   cacheProdutosDominio = { t: Date.now(), m };
   return m;
 }
-// Preço em dólares (sem promoções: nunca vendemos abaixo do custo).
-function usdDe(p, tipo) {
+// Custo na TurboHost, sempre em meticais (sem promoções: nunca vendemos
+// abaixo do custo). A conta da TurboHost pode cobrar em MZN (o caso real)
+// ou em USD; só em USD é que se usa o câmbio.
+function moedaDe(p, tipo) {
+  const x = p && p.pricing && p.pricing[tipo || 'register'];
+  return String((x && x.currency) || 'USD').toUpperCase();
+}
+function custoMznDe(p, tipo, c) {
   const x = p && p.pricing && p.pricing[tipo];
   if (!x || x.period === 'none') return 0;
-  return Math.max(0, Number(x.amount) || 0);
+  const valor = Math.max(0, Number(x.amount) || 0);
+  return moedaDe(p, tipo) === 'MZN' ? valor : valor * c.taxa;
 }
-function mznDe(usd, c) {
-  if (!(usd > 0)) return 0;
-  return Math.ceil((usd * c.taxa * (1 + c.margem / 100)) / 10) * 10;
+function mznDe(custoMzn, c) {
+  if (!(custoMzn > 0)) return 0;
+  return Math.ceil((custoMzn * (1 + c.margem / 100)) / 10) * 10;
 }
 function precosDoTld(tld, p, c) {
   const fixo = c.fixos && Number(c.fixos[tld]) > 0 ? Math.round(Number(c.fixos[tld])) : 0;
-  const registo = fixo || mznDe(usdDe(p, 'register'), c);
+  const custo = {
+    registo: custoMznDe(p, 'register', c), renovacao: custoMznDe(p, 'renewal', c),
+    transferencia: custoMznDe(p, 'transfer', c), privacidade: custoMznDe(p, 'whois_privacy', c)
+  };
   return {
-    registo,
-    renovacao: fixo || mznDe(usdDe(p, 'renewal'), c),
-    transferencia: mznDe(usdDe(p, 'transfer'), c),
-    privacidade: mznDe(usdDe(p, 'whois_privacy'), c),
-    custo_usd: { registo: usdDe(p, 'register'), renovacao: usdDe(p, 'renewal'), transferencia: usdDe(p, 'transfer'), privacidade: usdDe(p, 'whois_privacy') }
+    registo: fixo || mznDe(custo.registo, c),
+    renovacao: fixo || mznDe(custo.renovacao, c),
+    transferencia: mznDe(custo.transferencia, c),
+    privacidade: mznDe(custo.privacidade, c),
+    moeda: moedaDe(p),
+    custo_mzn: custo
   };
 }
 // Campos extra que a extensão exige (ex: número de identificação, um ficheiro).
@@ -14129,11 +14140,11 @@ app.post('/dominio-pedido', async (req, res) => {
     const base = transferir ? pr.transferencia : pr.registo;
     if (!(base > 0)) return res.json({ status: 'error', message: 'Esta extensão não está à venda neste momento.' });
     const valor = base + (privacidade ? pr.privacidade : 0);
-    const custoUsd = (transferir ? pr.custo_usd.transferencia : pr.custo_usd.registo) + (privacidade ? pr.custo_usd.privacidade : 0);
+    const custoMzn = (transferir ? pr.custo_mzn.transferencia : pr.custo_mzn.registo) + (privacidade ? pr.custo_mzn.privacidade : 0);
     const dominioId = await bubbleCreate('dominio', {
       'Owner': owner, 'Site': site_id, 'Nome': dominio, 'Estado': 'Por pagar', 'Valor MZN': valor,
       'Dados Json': JSON.stringify({
-        tld, sld, operacao: transferir ? 'transferencia' : 'registo', anos: 1, privacidade, custo_usd: Math.round(custoUsd * 100) / 100,
+        tld, sld, operacao: transferir ? 'transferencia' : 'registo', anos: 1, privacidade, custo_mzn: Math.round(custoMzn * 100) / 100, moeda_turbo: pr.moeda,
         taxa: c.taxa, margem: c.margem, titular: { nome: titular.FirstName + ' ' + titular.LastName, email: titular.EMail, cidade: titular.City },
         criado: new Date().toISOString(), tentativas: 0, historico: [{ em: new Date().toISOString(), estado: 'Por pagar' }]
       })
@@ -14333,7 +14344,7 @@ async function avancarDominio(d) {
       return;
     }
     await mudarDominio(d._id, 'A registar', dd => {
-      dd.order_id = j.order_id; dd.invoice_id = j.invoice_id; dd.custo_real_usd = Number(j.fee) || dd.custo_usd; dd.erro = ''; dd.registado_em = new Date().toISOString(); dd.ultima_nota = 'comprado (' + (j.order_status || '') + ')';
+      dd.order_id = j.order_id; dd.invoice_id = j.invoice_id; dd.custo_real_mzn = Number(j.fee) > 0 ? (dd.moeda_turbo === 'MZN' ? Number(j.fee) : Number(j.fee) * (dd.taxa || 66)) : dd.custo_mzn; dd.erro = ''; dd.registado_em = new Date().toISOString(); dd.ultima_nota = 'comprado (' + (j.order_status || '') + ')';
     });
     return;
   }
@@ -14427,15 +14438,15 @@ app.post('/admin-dominios', async (req, res) => {
     const c = await configDominios();
     const lista = await bubbleListTodos('dominio', [], 2000).catch(() => []);
     lista.sort((a, b) => String(b['Created Date'] || '').localeCompare(String(a['Created Date'] || '')));
-    let tldsDisponiveis = [];
-    try { tldsDisponiveis = Array.from((await produtosDominio()).keys()).sort(); } catch (e) { tldsDisponiveis = []; }
+    let tldsDisponiveis = [], moedaTurbo = '';
+    try { const m = await produtosDominio(); tldsDisponiveis = Array.from(m.keys()).sort(); moedaTurbo = moedaDe(m.get('com') || m.values().next().value); } catch (e) { tldsDisponiveis = []; }
     const emails = {};
     return res.json({ status: 'success', response: {
-      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, config: c, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
+      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, moeda_turbo: moedaTurbo, config: c, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
       dominios: lista.filter(d => d['Estado'] !== 'Por pagar').slice(0, 300).map(d => {
         const x = dadosDominio(d);
         return { id: d._id, dominio: d['Nome'], estado: d['Estado'], owner: d['Owner'], site: d['Site'], valor_mzn: Number(d['Valor MZN']) || 0,
-          custo_usd: Number(x.custo_real_usd || x.custo_usd) || 0, taxa: x.taxa || c.taxa, expira: d['Expira'] || '', erro: x.erro || '',
+          custo_mzn: Math.round(Number(x.custo_real_mzn || x.custo_mzn) || 0), moeda_turbo: x.moeda_turbo || '', expira: d['Expira'] || '', erro: x.erro || '',
           operacao: x.operacao || 'registo', titular: x.titular || {}, criado: x.criado || '', historico: (x.historico || []).slice(-8) };
       })
     } });
