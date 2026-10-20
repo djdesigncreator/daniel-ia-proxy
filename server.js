@@ -8465,7 +8465,7 @@ app.post('/assinatura-pagar', async (req, res) => {
         valor: String(valor),
         nome_cliente: nome,
         carteira: MOZPAYMENT_WALLET,
-        nome_producto: assinatura['Tipo'] === 'Recarga' ? 'Recarga de tokens Daniel IA' : 'Assinatura Daniel IA',
+        nome_producto: assinatura['Tipo'] === 'Recarga' ? 'Recarga de tokens Daniel IA' : (/Dominio/.test(assinatura['Tipo'] || '') ? 'Domínio Daniel IA' : 'Assinatura Daniel IA'),
         return_url: returnUrl
       })
     });
@@ -8521,7 +8521,7 @@ app.post('/assinatura-estado', async (req, res) => {
       status: 'success',
       response: {
         estado: assinatura['Estado'], valor_mzn: assinatura['Valor MZN'],
-        tipo: assinatura['Tipo'] === 'Recarga' ? 'recarga' : 'plano', tokens: Number(assinatura['Tokens']) || 0
+        tipo: assinatura['Tipo'] === 'Recarga' ? 'recarga' : (assinatura['Tipo'] === 'Dominio' ? 'dominio' : (assinatura['Tipo'] === 'Renovacao Dominio' ? 'renovacao-dominio' : 'plano')), tokens: Number(assinatura['Tokens']) || 0, dominio_id: /Dominio/.test(assinatura['Tipo'] || '') ? (assinatura['Pacote'] || '') : ''
       }
     });
   } catch (erro) {
@@ -8758,6 +8758,10 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
       'Transaction ID': String(body.transaction_id || ''),
       'Webhook Processado': true
     });
+
+    // ---- Domínios (1.60.0) ----
+    if (assinatura['Tipo'] === 'Dominio') { await dominioPago(assinatura); return; }
+    if (assinatura['Tipo'] === 'Renovacao Dominio') { await dominioRenovacaoPaga(assinatura); return; }
 
     // ---- Recarga de tokens (1.59.0): soma aos tokens extra e fica por aqui ----
     if (assinatura['Tipo'] === 'Recarga') {
@@ -9640,7 +9644,7 @@ app.post('/admin-resumo', async (req, res) => {
         versao: VERSION, ligado_ha_min: Math.round(process.uptime() / 60), sessao_modo: SESSAO_MODO,
         config: {
           openai: !!OPENAI_API_KEY, resend: !!clean(process.env.RESEND_KEY), bunny_api: !!clean(process.env.BUNNY_API_KEY),
-          stream: !!clean(process.env.STREAM_KEY), mozpayment: !!clean(process.env.MOZPAYMENT_EMAIL), kyc_cifra: !!clean(process.env.KYC_ENC_KEY),
+          stream: !!clean(process.env.STREAM_KEY), mozpayment: !!clean(process.env.MOZPAYMENT_EMAIL), kyc_cifra: !!clean(process.env.KYC_ENC_KEY), turbohost: !!clean(process.env.TURBOHOST_KEY),
           admin_secret: !!ADMIN_SECRET, admin_emails: ADMIN_EMAILS.length
         },
         cartao: estadoCartaoEmbutir
@@ -9881,6 +9885,8 @@ function pacoteParaLista(p) {
 function ordenarPacotes(a, b) { return (a.ordem - b.ordem) || (a.tokens - b.tokens); }
 function rotuloAssinatura(planos, a) {
   if (a['Tipo'] === 'Recarga') return 'Recarga · ' + milhares(a['Tokens']) + ' tokens';
+  if (a['Tipo'] === 'Dominio') return 'Domínio';
+  if (a['Tipo'] === 'Renovacao Dominio') return 'Renovação de domínio';
   return nomePlanoDe(planos, a['Plano']);
 }
 
@@ -13739,6 +13745,641 @@ function direcoesDoTemplate(t) {
   }, tl ? { tema: tl.id, temaPrompt: tl.prompt } : {}));
 }
 
+
+// ======================================================
+// Comprar domínios (1.60.0) - TurboHost (revendedor) + Bunny DNS
+// ------------------------------------------------------
+// 1. /dominio-procurar: disponibilidade + preço em MZN (TurboHost).
+// 2. /dominio-pedido: guarda o pedido (tipo "dominio" no Bubble) e cria
+//    uma Assinatura com Tipo "Dominio" - o pagamento usa as mesmas rotas
+//    dos planos (/assinatura-pagar, /assinatura-estado, webhook).
+// 3. Webhook pago -> Estado "Pago" -> o trabalhador (de 3 em 3 minutos):
+//      Pago       : cria a zona no Bunny DNS e compra na TurboHost já com
+//                   os nameservers do Bunny  -> "A registar"
+//      A registar : pergunta o estado até "active"          -> "A ligar"
+//      A ligar    : liga o site (Pull Zone + www) e o SSL    -> "Activo"
+// 4. Renovação: aviso 30 e 7 dias antes, pagamento igual, renova na API.
+// A chave da TurboHost só existe aqui (TURBOHOST_KEY) - nunca no browser.
+// ======================================================
+const TURBOHOST_KEY = clean(process.env.TURBOHOST_KEY);
+const TURBOHOST_URL = (clean(process.env.TURBOHOST_URL) || 'https://my.turbo.host/api/reseller').replace(/\/+$/, '');
+const DOMINIO_NS = ['kiki.bunny.net', 'coco.bunny.net'];
+const DOMINIO_PADRAO = {
+  taxa: Number(clean(process.env.DOMINIO_TAXA_USD)) || 66,
+  margem: Number(clean(process.env.DOMINIO_MARGEM)) || 30,
+  tlds: (clean(process.env.DOMINIO_TLDS) || 'co.mz,mz,com,net,org,store,shop,online,africa,co,com.br')
+    .split(',').map(t => t.trim().toLowerCase().replace(/^\./, '')).filter(Boolean),
+  fixos: {}
+};
+// Contacto técnico e de cobrança (opcional): JSON com FirstName, LastName,
+// Company, EMail, City, State, AddressLine1, ZipCode, Phone. Sem ele, usa
+// os dados do cliente em todos os contactos.
+let DOMINIO_CONTACTO_TEC = null;
+try { DOMINIO_CONTACTO_TEC = clean(process.env.DOMINIO_CONTACTO) ? JSON.parse(clean(process.env.DOMINIO_CONTACTO)) : null; } catch (e) { DOMINIO_CONTACTO_TEC = null; }
+
+const ESTADOS_DOMINIO = ['Por pagar', 'Pago', 'A registar', 'A ligar', 'Activo', 'Erro', 'Expirado', 'Cancelado'];
+
+async function turbo(caminho, corpo) {
+  if (!TURBOHOST_KEY) throw new Error('A variável TURBOHOST_KEY não está configurada no container.');
+  const r = await fetch(TURBOHOST_URL + caminho, {
+    method: 'POST', signal: AbortSignal.timeout(45000),
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(Object.assign({ key: TURBOHOST_KEY }, corpo))
+  });
+  const texto = await r.text();
+  let json = null;
+  try { json = texto ? JSON.parse(texto) : null; } catch (e) { json = null; }
+  if (!r.ok || !json) throw new Error('TurboHost respondeu ' + r.status + ': ' + texto.slice(0, 300));
+  return json;
+}
+function turboOk(json) {
+  return !!json && String(json.status || '').toLowerCase() === 'successful';
+}
+function turboErro(json) {
+  if (!json) return 'sem resposta';
+  return String(json.message || json.error || json.msg || (json.errors && JSON.stringify(json.errors)) || json.status || 'erro desconhecido').slice(0, 300);
+}
+
+// ---- Configuração (taxa, margem, extensões e preços fixos), editável no painel ----
+let cacheConfigDominios = null;
+async function configDominios() {
+  if (cacheConfigDominios && Date.now() - cacheConfigDominios.t < 60000) return cacheConfigDominios.c;
+  let c = Object.assign({}, DOMINIO_PADRAO);
+  try {
+    const guardado = JSON.parse((await descarregarDoBunny('config/dominios.json')).toString('utf8'));
+    if (guardado && typeof guardado === 'object') {
+      if (Number(guardado.taxa) > 0) c.taxa = Number(guardado.taxa);
+      if (Number(guardado.margem) >= 0) c.margem = Number(guardado.margem);
+      if (Array.isArray(guardado.tlds) && guardado.tlds.length) c.tlds = guardado.tlds;
+      if (guardado.fixos && typeof guardado.fixos === 'object') c.fixos = guardado.fixos;
+    }
+  } catch (e) { /* ainda não há configuração guardada */ }
+  cacheConfigDominios = { t: Date.now(), c };
+  return c;
+}
+function limparTld(t) { return String(t || '').trim().toLowerCase().replace(/^\.+/, '').replace(/[^a-z0-9.]/g, '').slice(0, 24); }
+
+// ---- Preços da TurboHost (cache de 6 horas) ----
+let cacheProdutosDominio = null;
+async function produtosDominio(forcar) {
+  if (!forcar && cacheProdutosDominio && Date.now() - cacheProdutosDominio.t < 6 * 3600 * 1000) return cacheProdutosDominio.m;
+  const j = await turbo('/products', { types: ['domain'] });
+  if (!turboOk(j) || !Array.isArray(j.data)) throw new Error('Preços da TurboHost: ' + turboErro(j));
+  const m = new Map();
+  j.data.forEach(p => { if (p && p.name && p.type === 'domain') m.set(String(p.name).toLowerCase(), p); });
+  cacheProdutosDominio = { t: Date.now(), m };
+  return m;
+}
+// Preço em dólares (sem promoções: nunca vendemos abaixo do custo).
+function usdDe(p, tipo) {
+  const x = p && p.pricing && p.pricing[tipo];
+  if (!x || x.period === 'none') return 0;
+  return Math.max(0, Number(x.amount) || 0);
+}
+function mznDe(usd, c) {
+  if (!(usd > 0)) return 0;
+  return Math.ceil((usd * c.taxa * (1 + c.margem / 100)) / 10) * 10;
+}
+function precosDoTld(tld, p, c) {
+  const fixo = c.fixos && Number(c.fixos[tld]) > 0 ? Math.round(Number(c.fixos[tld])) : 0;
+  const registo = fixo || mznDe(usdDe(p, 'register'), c);
+  return {
+    registo,
+    renovacao: fixo || mznDe(usdDe(p, 'renewal'), c),
+    transferencia: mznDe(usdDe(p, 'transfer'), c),
+    privacidade: mznDe(usdDe(p, 'whois_privacy'), c),
+    custo_usd: { registo: usdDe(p, 'register'), renovacao: usdDe(p, 'renewal'), transferencia: usdDe(p, 'transfer'), privacidade: usdDe(p, 'whois_privacy') }
+  };
+}
+// Campos extra que a extensão exige (ex: número de identificação, um ficheiro).
+function documentosDoTld(p) {
+  const lista = [];
+  (Array.isArray(p && p.documents) ? p.documents : []).forEach(grupo => {
+    if (!grupo || typeof grupo !== 'object') return;
+    Object.keys(grupo).forEach(chave => {
+      const d = grupo[chave] || {};
+      if (!/^[A-Za-z0-9_]{1,40}$/.test(chave)) return;
+      lista.push({
+        chave, nome: textoCurto(d.name || chave, 80), tipo: ['text', 'select', 'file'].includes(d.type) ? d.type : 'text',
+        descricao: textoCurto(d.description || '', 240), obrigatorio: d.required !== false,
+        opcoes: d.options && typeof d.options === 'object' ? Object.keys(d.options).slice(0, 40).map(k => ({ valor: k, texto: textoCurto(d.options[k], 80) })) : [],
+        extensoes: textoCurto(d.allowed_ext || '', 80), max_mb: Number(d.max_file_size) || 3
+      });
+    });
+  });
+  return lista;
+}
+
+// "Padaria Sol" -> "padariasol"; "padariasol.co.mz" -> { sld: "padariasol", tld: "co.mz" }
+function separarDominio(texto, tldsConhecidos) {
+  let v = limparDominio(texto).replace(/^www\./, '').replace(/\s+/g, '');
+  v = v.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const tlds = tldsConhecidos.slice().sort((a, b) => b.length - a.length);
+  let tld = '';
+  for (const t of tlds) { if (v.endsWith('.' + t)) { tld = t; v = v.slice(0, -t.length - 1); break; } }
+  if (!tld && v.includes('.')) { const i = v.indexOf('.'); tld = limparTld(v.slice(i + 1)); v = v.slice(0, i); }
+  const sld = v.replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').slice(0, 63);
+  return { sld, tld };
+}
+
+// ---- Pesquisa: disponibilidade + preço ----
+app.post('/dominio-procurar', async (req, res) => {
+  try {
+    if (!TURBOHOST_KEY) return res.json({ status: 'error', message: 'A compra de domínios ainda não está activa. Tenta mais tarde.' });
+    const c = await configDominios();
+    const produtos = await produtosDominio();
+    const { sld, tld } = separarDominio(req.body.nome, Array.from(produtos.keys()));
+    if (sld.length < 2) return res.json({ status: 'error', message: 'Escreve o nome que queres (pelo menos 2 letras ou números).' });
+    let tlds = c.tlds.filter(t => produtos.has(t));
+    if (tld) {
+      if (!produtos.has(tld)) return res.json({ status: 'error', message: 'Ainda não vendemos domínios ".' + tld + '". Experimenta outra extensão.' });
+      tlds = [tld].concat(tlds.filter(t => t !== tld));
+    }
+    tlds = tlds.slice(0, 14);
+    const j = await turbo('/domain-availability-check', { sld, tlds });
+    if (!turboOk(j) || !j.data) throw new Error('Disponibilidade: ' + turboErro(j));
+    const lista = tlds.map(t => {
+      const d = j.data[sld + '.' + t] || {};
+      const p = produtos.get(t);
+      const pr = precosDoTld(t, p, c);
+      const livre = String(d.status || '').toLowerCase() === 'available';
+      return {
+        dominio: sld + '.' + t, tld: t, livre: livre && !d.premium, premium: !!d.premium,
+        estado: d.premium ? 'premium' : (livre ? 'livre' : (d.status ? 'ocupado' : 'desconhecido')),
+        preco: pr.registo, renovacao: pr.renovacao, transferencia: pr.transferencia, privacidade: pr.privacidade,
+        documentos: documentosDoTld(p)
+      };
+    }).filter(x => x.preco > 0);
+    return res.json({ status: 'success', response: { sld, procurado: tld ? sld + '.' + tld : '', resultados: lista } });
+  } catch (erro) {
+    console.error('Erro em /dominio-procurar:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível procurar agora. Tenta outra vez daqui a pouco.' });
+  }
+});
+
+// ---- Pedido: guarda os dados e cria o pagamento ----
+function limparContacto(t, email) {
+  const s = (v, n) => textoCurto(v, n || 80);
+  const tel = String((t && t.telefone) || '').replace(/\D/g, '').replace(/^258/, '').slice(0, 12);
+  const nomeCompleto = s(t && t.nome, 120);
+  const partes = nomeCompleto.split(/\s+/);
+  return {
+    FirstName: s(t && t.primeiro_nome) || partes[0] || '',
+    LastName: s(t && t.apelido) || partes.slice(1).join(' ') || partes[0] || '',
+    Company: s(t && t.empresa, 100),
+    EMail: s(t && t.email, 120) || email || '',
+    Country: (s(t && t.pais, 2) || 'MZ').toUpperCase(),
+    City: s(t && t.cidade, 60),
+    State: s(t && t.provincia, 60) || s(t && t.cidade, 60),
+    AddressLine1: s(t && t.morada, 120),
+    AddressLine2: '',
+    ZipCode: s(t && t.codigo_postal, 12) || '1100',
+    PhoneCountryCode: Number(String((t && t.indicativo) || '258').replace(/\D/g, '')) || 258,
+    Phone: tel,
+    FaxCountryCode: Number(String((t && t.indicativo) || '258').replace(/\D/g, '')) || 258,
+    Fax: tel
+  };
+}
+function contactoValido(c) {
+  if (!c.FirstName || !c.LastName) return 'Escreve o nome completo do titular.';
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.EMail)) return 'Escreve um email válido do titular.';
+  if (c.Phone.length < 8) return 'Escreve um número de telefone válido do titular.';
+  if (!c.City) return 'Escreve a cidade do titular.';
+  if (!c.AddressLine1 || c.AddressLine1.length < 4) return 'Escreve a morada do titular.';
+  return '';
+}
+async function lerSensivelDominio(id) {
+  try { return JSON.parse(decifrarKyc(await descarregarDoBunny(`dominios-privado/${id}.bin`)).toString('utf8')); } catch (e) { return {}; }
+}
+async function guardarSensivelDominio(id, dados) {
+  await uploadParaBunny(`dominios-privado/${id}.bin`, cifrarKyc(Buffer.from(JSON.stringify(dados), 'utf8')), 'application/octet-stream');
+}
+function dadosDominio(d) { return lerJsonSeguro(d && d['Dados Json'], {}) || {}; }
+async function mudarDominio(id, estado, mudar) {
+  const d = await bubbleGet('dominio', id);
+  const dados = dadosDominio(d);
+  if (typeof mudar === 'function') mudar(dados, d);
+  dados.historico = (dados.historico || []).concat([{ em: new Date().toISOString(), estado: estado || d['Estado'], nota: dados.ultima_nota || '' }]).slice(-30);
+  delete dados.ultima_nota;
+  const patch = { 'Dados Json': JSON.stringify(dados) };
+  if (estado) patch['Estado'] = estado;
+  if (dados.expira) patch['Expira'] = dados.expira;
+  await bubblePatch('dominio', id, patch);
+  return Object.assign({}, d, patch, { _id: id });
+}
+
+app.post('/dominio-pedido', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    if (!TURBOHOST_KEY) return res.json({ status: 'error', message: 'A compra de domínios ainda não está activa. Tenta mais tarde.' });
+    const validacao = await validarSiteParaDominio(owner, site_id);
+    if (validacao.erro) return res.json({ status: 'error', codigo: /plano/i.test(validacao.erro) ? 'plano' : '', message: validacao.erro });
+    const c = await configDominios();
+    const produtos = await produtosDominio();
+    const { sld, tld } = separarDominio(req.body.dominio, Array.from(produtos.keys()));
+    const p = produtos.get(tld);
+    if (!sld || !p) return res.json({ status: 'error', message: 'Escolhe um domínio da lista.' });
+    const dominio = sld + '.' + tld;
+    const transferir = req.body.operacao === 'transferencia';
+    const epp = textoCurto(req.body.epp, 120);
+    if (transferir && !epp) return res.json({ status: 'error', message: 'Para transferir, escreve o código de transferência (EPP/Auth Code) que o teu registador actual te deu.' });
+    const user = await bubbleGet('user', owner);
+    const titular = limparContacto(req.body.titular || {}, emailDoUsuario(user));
+    const erroTitular = contactoValido(titular);
+    if (erroTitular) return res.json({ status: 'error', message: erroTitular });
+    // Documentos pedidos pela extensão
+    const pedidos = documentosDoTld(p);
+    const docs = {};
+    const recebidos = (req.body.documentos && typeof req.body.documentos === 'object') ? req.body.documentos : {};
+    for (const d of pedidos) {
+      const v = recebidos[d.chave];
+      if (d.tipo === 'file') {
+        const m = v && /^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(v.data || ''));
+        if (!m) { if (d.obrigatorio) return res.json({ status: 'error', message: 'Falta o ficheiro "' + d.nome + '".' }); continue; }
+        if (m[2].length * 0.75 > d.max_mb * 1048576) return res.json({ status: 'error', message: 'O ficheiro "' + d.nome + '" é demasiado grande (máximo ' + d.max_mb + ' MB).' });
+        docs[d.chave] = { name: textoCurto(v.nome || 'documento', 80).replace(/[^\w.\- ]/g, ''), data: m[2] };
+      } else {
+        const t = textoCurto(v, 200);
+        if (!t && d.obrigatorio) return res.json({ status: 'error', message: 'Preenche o campo "' + d.nome + '".' });
+        if (d.tipo === 'select' && t && !d.opcoes.some(o => o.valor === t)) return res.json({ status: 'error', message: 'Escolhe uma opção válida em "' + d.nome + '".' });
+        if (t) docs[d.chave] = t;
+      }
+    }
+    // Ainda está livre? (para transferências tem de estar ocupado)
+    if (!transferir) {
+      const j = await turbo('/domain-availability-check', { sld, tlds: [tld] });
+      const d = j && j.data && j.data[dominio];
+      if (!d || String(d.status).toLowerCase() !== 'available' || d.premium) {
+        return res.json({ status: 'error', message: 'Alguém registou "' + dominio + '" agora mesmo, ou não está disponível. Escolhe outro.' });
+      }
+    }
+    const pr = precosDoTld(tld, p, c);
+    const privacidade = req.body.privacidade === true && pr.privacidade > 0;
+    const base = transferir ? pr.transferencia : pr.registo;
+    if (!(base > 0)) return res.json({ status: 'error', message: 'Esta extensão não está à venda neste momento.' });
+    const valor = base + (privacidade ? pr.privacidade : 0);
+    const custoUsd = (transferir ? pr.custo_usd.transferencia : pr.custo_usd.registo) + (privacidade ? pr.custo_usd.privacidade : 0);
+    const dominioId = await bubbleCreate('dominio', {
+      'Owner': owner, 'Site': site_id, 'Nome': dominio, 'Estado': 'Por pagar', 'Valor MZN': valor,
+      'Dados Json': JSON.stringify({
+        tld, sld, operacao: transferir ? 'transferencia' : 'registo', anos: 1, privacidade, custo_usd: Math.round(custoUsd * 100) / 100,
+        taxa: c.taxa, margem: c.margem, titular: { nome: titular.FirstName + ' ' + titular.LastName, email: titular.EMail, cidade: titular.City },
+        criado: new Date().toISOString(), tentativas: 0, historico: [{ em: new Date().toISOString(), estado: 'Por pagar' }]
+      })
+    });
+    await guardarSensivelDominio(dominioId, { titular, docs, epp: transferir ? epp : '' });
+    const assinaturaId = await bubbleCreate('assinatura', {
+      'User': owner, 'Valor MZN': valor, 'Metodo': '', 'ID Pagamento': '', 'Estado': 'Pendente', 'Transaction ID': '',
+      'Webhook Processado': false, 'Tipo': 'Dominio', 'Pacote': dominioId, 'Created Date': new Date().toISOString()
+    });
+    await mudarDominio(dominioId, null, dd => { dd.assinatura = assinaturaId; });
+    return res.json({ status: 'success', response: { dominio_id: dominioId, assinatura_id: assinaturaId, dominio, valor_mzn: valor } });
+  } catch (erro) {
+    console.error('Erro em /dominio-pedido:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível preparar a compra. Tenta outra vez.' });
+  }
+});
+
+// ---- Os meus domínios ----
+function dominioPublico(d) {
+  const x = dadosDominio(d);
+  return {
+    id: d._id, dominio: d['Nome'], site_id: d['Site'], estado: d['Estado'], valor_mzn: Number(d['Valor MZN']) || 0,
+    expira: d['Expira'] || x.expira || '', operacao: x.operacao || 'registo', privacidade: !!x.privacidade,
+    criado: x.criado || d['Created Date'] || '', erro_cliente: d['Estado'] === 'Erro' ? 'Estamos a tratar do teu domínio. Se demorar, fala connosco.' : ''
+  };
+}
+app.post('/dominios', async (req, res) => {
+  try {
+    const lista = await bubbleListTodos('dominio', [{ key: 'Owner', constraint_type: 'equals', value: req.body.owner }], 500);
+    const visiveis = lista.filter(d => d['Estado'] !== 'Por pagar' || (Date.now() - new Date(d['Created Date'] || 0).getTime()) < 3 * 3600 * 1000);
+    visiveis.sort((a, b) => String(b['Created Date'] || '').localeCompare(String(a['Created Date'] || '')));
+    return res.json({ status: 'success', response: { dominios: visiveis.map(dominioPublico), activo: !!TURBOHOST_KEY } });
+  } catch (erro) {
+    console.error('Erro em /dominios:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler os teus domínios.' });
+  }
+});
+app.post('/dominio-estado', async (req, res) => {
+  try {
+    const d = await bubbleGet('dominio', req.body.dominio_id).catch(() => null);
+    if (!d || d['Owner'] !== req.body.owner) return res.json({ status: 'error', message: 'Domínio não encontrado.' });
+    return res.json({ status: 'success', response: dominioPublico(d) });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível ler o estado.' });
+  }
+});
+
+// ---- Renovar ----
+app.post('/dominio-renovar', async (req, res) => {
+  try {
+    const d = await bubbleGet('dominio', req.body.dominio_id).catch(() => null);
+    if (!d || d['Owner'] !== req.body.owner) return res.json({ status: 'error', message: 'Domínio não encontrado.' });
+    if (!['Activo', 'Expirado'].includes(d['Estado'])) return res.json({ status: 'error', message: 'Este domínio ainda não pode ser renovado.' });
+    const x = dadosDominio(d);
+    const c = await configDominios();
+    const p = (await produtosDominio()).get(x.tld);
+    if (!p) return res.json({ status: 'error', message: 'Esta extensão não está disponível para renovação. Fala connosco.' });
+    const pr = precosDoTld(x.tld, p, c);
+    const valor = pr.renovacao + (x.privacidade ? pr.privacidade : 0);
+    const assinaturaId = await bubbleCreate('assinatura', {
+      'User': req.body.owner, 'Valor MZN': valor, 'Metodo': '', 'ID Pagamento': '', 'Estado': 'Pendente', 'Transaction ID': '',
+      'Webhook Processado': false, 'Tipo': 'Renovacao Dominio', 'Pacote': d._id, 'Created Date': new Date().toISOString()
+    });
+    return res.json({ status: 'success', response: { assinatura_id: assinaturaId, valor_mzn: valor, dominio: d['Nome'] } });
+  } catch (erro) {
+    console.error('Erro em /dominio-renovar:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível preparar a renovação.' });
+  }
+});
+
+// ---- Chamado pelo webhook dos pagamentos ----
+async function dominioPago(assinatura) {
+  const id = assinatura['Pacote'];
+  if (!id) return;
+  await mudarDominio(id, 'Pago', dd => { dd.pago_em = new Date().toISOString(); dd.ultima_nota = 'pagamento confirmado'; });
+  const d = await bubbleGet('dominio', id).catch(() => null);
+  if (d) await avisarClienteDominio(d, 'Pagamento do domínio recebido', `Recebemos o teu pagamento de <strong>${escaparHtml(milhares(d['Valor MZN']))} MZN</strong> por <strong>${escaparHtml(d['Nome'])}</strong>. Estamos a registar o domínio e a ligá-lo ao teu site. Costuma ficar pronto entre alguns minutos e algumas horas - avisamos-te por email.`);
+  setTimeout(() => trabalharDominios().catch(() => {}), 500);
+}
+async function dominioRenovacaoPaga(assinatura) {
+  const id = assinatura['Pacote'];
+  const d = await bubbleGet('dominio', id).catch(() => null);
+  if (!d) return;
+  try {
+    const j = await turbo('/order/renewal', { domain: d['Nome'], period_type: 'year', period_duration: 1 });
+    if (!turboOk(j)) throw new Error(turboErro(j));
+    const novo = j.new_duedate ? new Date(String(j.new_duedate).replace(' ', 'T') + 'Z').toISOString() : '';
+    await mudarDominio(id, 'Activo', dd => { if (novo) dd.expira = novo; dd.avisos = {}; dd.ultima_nota = 'renovado'; dd.renovacoes = (dd.renovacoes || 0) + 1; });
+    await avisarClienteDominio(d, 'Domínio renovado', `O teu domínio <strong>${escaparHtml(d['Nome'])}</strong> foi renovado${novo ? ' até ' + escaparHtml(new Date(novo).toLocaleDateString('pt-PT')) : ''}.`);
+  } catch (erro) {
+    console.error('Renovação do domínio falhou:', d['Nome'], erro.message || erro);
+    await mudarDominio(id, null, dd => { dd.erro = 'Renovação: ' + String(erro.message || erro).slice(0, 300); dd.renovacao_pendente = true; dd.ultima_nota = 'renovação falhou'; });
+    await avisarAdminDominio(d['Nome'], 'A renovação paga falhou na TurboHost: ' + String(erro.message || erro).slice(0, 300) + '. Renova à mão no painel da TurboHost.');
+  }
+}
+
+async function avisarClienteDominio(d, titulo, html) {
+  try {
+    const user = await bubbleGet('user', d['Owner']);
+    const email = emailDoUsuario(user);
+    if (!email) return;
+    await enviarEmail(email, titulo + ' - Daniel IA', templateEmailKyc(titulo,
+      'Olá' + (user['Full Name'] ? ', ' + escaparHtml(String(user['Full Name']).split(' ')[0]) : '') + '!', [html],
+      { texto: 'Ver os meus domínios', url: 'https://app.daniel-ia.pro/dominios/' }));
+  } catch (e) { console.error('Email do domínio falhou:', e.message || e); }
+}
+async function avisarAdminDominio(nome, texto) {
+  try {
+    const para = ADMIN_EMAIL || (typeof ADMIN_EMAILS !== 'undefined' && ADMIN_EMAILS[0]) || '';
+    if (para) await enviarEmail(para, 'Domínio precisa de atenção: ' + nome, templateEmailKyc('Domínio: ' + nome, 'Atenção', [escaparHtml(texto)], { texto: 'Abrir o painel', url: 'https://app.daniel-ia.pro/admin/#dominios' }));
+  } catch (e) { /* o registo fica na consola */ }
+  console.error('[dominios]', nome, texto);
+}
+
+// ---- Bunny DNS: zona e registos ----
+async function zonaBunnyDns(dominio) {
+  const r = await bunnyApi('GET', '/dnszone?search=' + encodeURIComponent(dominio) + '&perPage=50');
+  const lista = (r && r.Items) || (Array.isArray(r) ? r : []);
+  const z = lista.find(x => String(x.Domain || '').toLowerCase() === dominio);
+  if (z) return z;
+  return await bunnyApi('POST', '/dnszone', { Domain: dominio });
+}
+async function registoBunnyDns(zona, registo) {
+  const existentes = (zona.Records || []).filter(r => String(r.Name || '') === registo.Name && r.Type === registo.Type);
+  if (existentes.length) return existentes[0];
+  return await bunnyApi('PUT', '/dnszone/' + zona.Id + '/records', registo);
+}
+async function prepararDnsDominio(dominio, pullZoneId, hostnameCdn) {
+  const zona = await zonaBunnyDns(dominio);
+  try {
+    await registoBunnyDns(zona, { Type: 7, Name: '', PullZoneId: Number(pullZoneId), Ttl: 300 });
+  } catch (e) {
+    // Sem o tipo "Pull Zone", usa o CNAME achatado (Flatten) na raiz.
+    await registoBunnyDns(zona, { Type: 6, Name: '', Value: hostnameCdn, Ttl: 300 });
+  }
+  await registoBunnyDns(zona, { Type: 2, Name: 'www', Value: hostnameCdn, Ttl: 300 });
+  return zona;
+}
+
+// ---- O trabalhador: avança cada domínio pago um passo de cada vez ----
+let aTrabalharDominios = false;
+async function trabalharDominios() {
+  if (aTrabalharDominios || !TURBOHOST_KEY) return;
+  aTrabalharDominios = true;
+  try {
+    for (const estado of ['Pago', 'A registar', 'A ligar']) {
+      const lista = await bubbleListTodos('dominio', [{ key: 'Estado', constraint_type: 'equals', value: estado }], 200).catch(() => []);
+      for (const d of lista) {
+        try { await avancarDominio(d); } catch (erro) { console.error('Domínio', d['Nome'], erro.message || erro); }
+      }
+    }
+    await lembrarRenovacoes();
+  } finally {
+    aTrabalharDominios = false;
+  }
+}
+async function avancarDominio(d) {
+  const x = dadosDominio(d);
+  const nome = d['Nome'];
+  const site = await bubbleGet('site', d['Site']).catch(() => null);
+  if (d['Estado'] === 'Pago') {
+    // Já está na conta de revendedor? (ex: a compra passou mas a resposta perdeu-se)
+    const det = await turbo('/order/detail', { domain: nome }).catch(() => null);
+    if (det && det.domain && String(det.domain).toLowerCase() === nome) {
+      await mudarDominio(d._id, 'A registar', dd => { dd.order_id = dd.order_id || det.id; dd.ultima_nota = 'já estava na conta'; });
+      return;
+    }
+    if ((x.tentativas || 0) >= 6) {
+      await mudarDominio(d._id, 'Erro', dd => { dd.ultima_nota = 'demasiadas tentativas'; });
+      await avisarAdminDominio(nome, 'A compra falhou 6 vezes: ' + (x.erro || '') + '. O cliente já pagou ' + d['Valor MZN'] + ' MZN. Confirma o saldo na TurboHost e carrega em "Tentar outra vez" no painel.');
+      return;
+    }
+    // Zona DNS antes da compra: alguns registos verificam os nameservers.
+    if (BUNNY_API_KEY) await zonaBunnyDns(nome).catch(e => console.error('Zona DNS (antes da compra):', e.message || e));
+    const s = await lerSensivelDominio(d._id);
+    const titular = s.titular;
+    if (!titular) {
+      await mudarDominio(d._id, 'Erro', dd => { dd.erro = 'Dados do titular em falta.'; });
+      await avisarAdminDominio(nome, 'Faltam os dados do titular deste domínio pago.');
+      return;
+    }
+    const tec = DOMINIO_CONTACTO_TEC ? Object.assign({}, titular, DOMINIO_CONTACTO_TEC) : titular;
+    const corpo = {
+      type: 'domain', id: x.tld, period_type: 'year', period_duration: x.anos || 1,
+      options: {
+        domain: nome, transfer: x.operacao === 'transferencia', epp_code: s.epp || '', whois_privacy: !!x.privacidade,
+        whois: { registrant: titular, administrative: titular, technical: tec, billing: tec },
+        nameservers: DOMINIO_NS, docs: s.docs || {}
+      }
+    };
+    let j;
+    try { j = await turbo('/buy', corpo); } catch (e) { j = { status: 'error', message: e.message }; }
+    if (!turboOk(j)) {
+      const erro = turboErro(j);
+      await mudarDominio(d._id, null, dd => { dd.tentativas = (dd.tentativas || 0) + 1; dd.erro = erro; dd.ultima_nota = 'compra falhou'; });
+      if ((x.tentativas || 0) === 0) await avisarAdminDominio(nome, 'A compra na TurboHost falhou: ' + erro + '. Vou tentar outra vez sozinho.');
+      return;
+    }
+    await mudarDominio(d._id, 'A registar', dd => {
+      dd.order_id = j.order_id; dd.invoice_id = j.invoice_id; dd.custo_real_usd = Number(j.fee) || dd.custo_usd; dd.erro = ''; dd.registado_em = new Date().toISOString(); dd.ultima_nota = 'comprado (' + (j.order_status || '') + ')';
+    });
+    return;
+  }
+  if (d['Estado'] === 'A registar') {
+    const det = await turbo('/order/detail', { domain: nome }).catch(e => ({ status: 'erro', message: e.message }));
+    const st = String(det && det.status || '').toLowerCase();
+    if (st === 'active') {
+      const expira = det.due_date ? new Date(String(det.due_date).replace(' ', 'T') + 'Z') : null;
+      await mudarDominio(d._id, 'A ligar', dd => { if (expira && !isNaN(expira)) dd.expira = expira.toISOString(); dd.ultima_nota = 'activo na TurboHost'; });
+      if (x.operacao === 'transferencia') {
+        await turbo('/order/transaction', { domain: nome, action: 'modify-nameservers', nameservers: DOMINIO_NS }).catch(e => console.error('Nameservers depois da transferência:', e.message || e));
+      }
+      return;
+    }
+    if (['cancelled', 'canceled', 'failed', 'refunded', 'fraud'].includes(st)) {
+      await mudarDominio(d._id, 'Erro', dd => { dd.erro = 'Estado na TurboHost: ' + st; });
+      await avisarAdminDominio(nome, 'A encomenda ficou "' + st + '" na TurboHost. O cliente já pagou.');
+      return;
+    }
+    // Ainda em processamento: espera (até 7 dias nas transferências, 2 dias nos registos).
+    const desde = new Date(x.registado_em || x.pago_em || Date.now()).getTime();
+    const limite = (x.operacao === 'transferencia' ? 7 : 2) * 24 * 3600 * 1000;
+    if (Date.now() - desde > limite && !x.avisado_demora) {
+      await mudarDominio(d._id, null, dd => { dd.avisado_demora = true; });
+      await avisarAdminDominio(nome, 'O domínio ainda não ficou activo na TurboHost (estado: ' + (st || 'desconhecido') + ').');
+    }
+    return;
+  }
+  if (d['Estado'] === 'A ligar') {
+    if (!site || !site['CDN URL']) {
+      await mudarDominio(d._id, 'Activo', dd => { dd.ultima_nota = 'activo (sem site para ligar)'; });
+      return;
+    }
+    const { pullZoneId, hostnameCdn } = await prepararPullZoneDominio(site, site._id, nome);
+    await prepararDnsDominio(nome, pullZoneId, hostnameCdn);
+    for (const h of [nome, 'www.' + nome]) {
+      await bunnyApi('POST', '/pullzone/' + pullZoneId + '/addHostname', { Hostname: h }).catch(() => {});
+    }
+    let ok = false;
+    try {
+      await bunnyApi('GET', '/pullzone/loadFreeCertificate?hostname=' + encodeURIComponent(nome));
+      ok = true;
+      await bunnyApi('GET', '/pullzone/loadFreeCertificate?hostname=' + encodeURIComponent('www.' + nome)).catch(() => {});
+    } catch (e) { ok = false; }
+    if (ok) {
+      await bubblePatch('site', site._id, { 'Dominio Estado': 'Activo' });
+      await mudarDominio(d._id, 'Activo', dd => { dd.ligado_em = new Date().toISOString(); dd.ultima_nota = 'site ligado com SSL'; });
+      await avisarClienteDominio(d, 'O teu domínio está no ar', `O teu site já abre em <strong><a href="https://${escaparHtml(nome)}" style="color:#5E1585;">${escaparHtml(nome)}</a></strong>, com cadeado de segurança (HTTPS).`);
+    } else {
+      const desde = new Date(x.registado_em || Date.now()).getTime();
+      if (Date.now() - desde > 48 * 3600 * 1000 && !x.avisado_ssl) {
+        await mudarDominio(d._id, null, dd => { dd.avisado_ssl = true; });
+        await avisarAdminDominio(nome, 'Passaram 48 horas e o SSL ainda não foi emitido. Confirma os nameservers (' + DOMINIO_NS.join(', ') + ').');
+      }
+    }
+  }
+}
+async function lembrarRenovacoes() {
+  if (lembrarRenovacoes.ultima && Date.now() - lembrarRenovacoes.ultima < 6 * 3600 * 1000) return;
+  lembrarRenovacoes.ultima = Date.now();
+  const activos = await bubbleListTodos('dominio', [{ key: 'Estado', constraint_type: 'equals', value: 'Activo' }], 2000).catch(() => []);
+  for (const d of activos) {
+    const exp = new Date(d['Expira'] || 0).getTime();
+    if (!exp) continue;
+    const dias = Math.ceil((exp - Date.now()) / 86400000);
+    const x = dadosDominio(d);
+    const avisos = x.avisos || {};
+    if (dias < 0) {
+      await mudarDominio(d._id, 'Expirado', dd => { dd.ultima_nota = 'expirou'; });
+      await avisarClienteDominio(d, 'O teu domínio expirou', `O domínio <strong>${escaparHtml(d['Nome'])}</strong> expirou. Renova já para não o perderes.`);
+      continue;
+    }
+    for (const marca of [30, 7, 1]) {
+      if (dias <= marca && !avisos['d' + marca]) {
+        await mudarDominio(d._id, null, dd => { dd.avisos = Object.assign({}, dd.avisos || {}, { ['d' + marca]: true }); });
+        await avisarClienteDominio(d, 'Renova o teu domínio', `O domínio <strong>${escaparHtml(d['Nome'])}</strong> expira daqui a ${dias} dia${dias === 1 ? '' : 's'}. Renova com um clique em "Os meus domínios" para o site continuar no ar.`);
+        break;
+      }
+    }
+  }
+}
+if (TURBOHOST_KEY) {
+  setTimeout(() => trabalharDominios().catch(() => {}), 20000);
+  setInterval(() => trabalharDominios().catch(() => {}), 3 * 60 * 1000);
+}
+
+// ---- Painel ----
+app.post('/admin-dominios', async (req, res) => {
+  try {
+    if (!(await exigirAdmin(req, res))) return;
+    const c = await configDominios();
+    const lista = await bubbleListTodos('dominio', [], 2000).catch(() => []);
+    lista.sort((a, b) => String(b['Created Date'] || '').localeCompare(String(a['Created Date'] || '')));
+    let tldsDisponiveis = [];
+    try { tldsDisponiveis = Array.from((await produtosDominio()).keys()).sort(); } catch (e) { tldsDisponiveis = []; }
+    const emails = {};
+    return res.json({ status: 'success', response: {
+      activo: !!TURBOHOST_KEY, config: c, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
+      dominios: lista.filter(d => d['Estado'] !== 'Por pagar').slice(0, 300).map(d => {
+        const x = dadosDominio(d);
+        return { id: d._id, dominio: d['Nome'], estado: d['Estado'], owner: d['Owner'], site: d['Site'], valor_mzn: Number(d['Valor MZN']) || 0,
+          custo_usd: Number(x.custo_real_usd || x.custo_usd) || 0, taxa: x.taxa || c.taxa, expira: d['Expira'] || '', erro: x.erro || '',
+          operacao: x.operacao || 'registo', titular: x.titular || {}, criado: x.criado || '', historico: (x.historico || []).slice(-8) };
+      })
+    } });
+  } catch (erro) {
+    console.error('Erro em /admin-dominios:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler os domínios.' });
+  }
+});
+app.post('/admin-dominios-config', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const b = req.body.config || {};
+    const c = {
+      taxa: Math.min(500, Math.max(1, Number(b.taxa) || DOMINIO_PADRAO.taxa)),
+      margem: Math.min(500, Math.max(0, Number(b.margem) || 0)),
+      tlds: (Array.isArray(b.tlds) ? b.tlds : String(b.tlds || '').split(',')).map(limparTld).filter(Boolean).slice(0, 30),
+      fixos: {}
+    };
+    if (!c.tlds.length) c.tlds = DOMINIO_PADRAO.tlds;
+    Object.keys(b.fixos || {}).slice(0, 60).forEach(k => { const t = limparTld(k); const v = Math.round(Number(b.fixos[k]) || 0); if (t && v > 0) c.fixos[t] = v; });
+    await uploadParaBunny('config/dominios.json', Buffer.from(JSON.stringify(c), 'utf8'), 'application/json; charset=utf-8');
+    cacheConfigDominios = { t: Date.now(), c: Object.assign({}, DOMINIO_PADRAO, c) };
+    registar(admin, 'dominios-config', JSON.stringify(c).slice(0, 300));
+    return res.json({ status: 'success', response: { config: cacheConfigDominios.c } });
+  } catch (erro) {
+    console.error('Erro em /admin-dominios-config:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar.' });
+  }
+});
+app.post('/admin-dominio-tentar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const d = await bubbleGet('dominio', req.body.dominio_id).catch(() => null);
+    if (!d) return res.json({ status: 'error', message: 'Domínio não encontrado.' });
+    if (d['Estado'] !== 'Erro') return res.json({ status: 'error', message: 'Só dá para tentar outra vez quando está em "Erro".' });
+    const x = dadosDominio(d);
+    const volta = x.order_id ? (x.ligado_em ? 'Activo' : 'A registar') : 'Pago';
+    await mudarDominio(d._id, volta, dd => { dd.tentativas = 0; dd.avisado_demora = false; dd.avisado_ssl = false; dd.ultima_nota = 'tentar outra vez (painel)'; });
+    registar(admin, 'dominio-tentar', d['Nome']);
+    setTimeout(() => trabalharDominios().catch(() => {}), 300);
+    return res.json({ status: 'success', response: { estado: volta } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível.' });
+  }
+});
+
+['/dominio-procurar', '/dominio-pedido', '/dominios', '/dominio-estado', '/dominio-renovar', '/admin-dominios', '/admin-dominios-config', '/admin-dominio-tentar']
+  .forEach(r => ROTAS_PRIVADAS.add(r));
+Object.assign(LIMITES, {
+  '/dominio-procurar': [['owner', 60, 10 * MIN], ['ip', 120, 10 * MIN]],
+  '/dominio-pedido': [['owner', 12, 60 * MIN]],
+  '/dominio-renovar': [['owner', 12, 60 * MIN]]
+});
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
