@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.61.0'; // 21/10/2026 - venda de domínios (TurboHost + Bunny DNS)
+const VERSION = '1.61.1'; // 21/10/2026 - venda de domínios (TurboHost + Bunny DNS) + diagnóstico
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -13789,11 +13789,52 @@ async function turbo(caminho, corpo) {
   const texto = await r.text();
   let json = null;
   try { json = texto ? JSON.parse(texto) : null; } catch (e) { json = null; }
-  if (!r.ok || !json) throw new Error('TurboHost respondeu ' + r.status + ': ' + texto.slice(0, 300));
+  if (!r.ok || !json) {
+    const e = new Error('TurboHost respondeu ' + r.status + ': ' + esconderChaveTurbo(texto).slice(0, 300));
+    ultimoErroTurbo = { quando: new Date().toISOString(), rota: caminho, erro: e.message };
+    throw e;
+  }
+  if (!turboOk(json)) ultimoErroTurbo = { quando: new Date().toISOString(), rota: caminho, erro: turboErro(json) };
   return json;
 }
+let ultimoErroTurbo = null;
+function esconderChaveTurbo(t) {
+  t = String(t || '');
+  return TURBOHOST_KEY ? t.split(TURBOHOST_KEY).join('***') : t;
+}
 function turboOk(json) {
-  return !!json && String(json.status || '').toLowerCase() === 'successful';
+  if (!json) return false;
+  const st = String(json.status || json.result || '').toLowerCase();
+  if (['successful', 'success', 'ok', 'true'].includes(st)) return true;
+  // algumas respostas não trazem "status", só os dados
+  return !json.status && !json.error && !json.errors && (json.data != null || json.id != null || json.invoice_id != null);
+}
+// Lista de produtos, venha como lista, como objecto ou dentro de data.domains
+function listaTurbo(d) {
+  if (Array.isArray(d)) return d;
+  if (d && typeof d === 'object') {
+    for (const k of ['domains', 'products', 'items', 'list']) if (Array.isArray(d[k])) return d[k];
+    return Object.keys(d).map(k => (d[k] && typeof d[k] === 'object') ? Object.assign({ name: d[k].name || k }, d[k]) : null).filter(Boolean);
+  }
+  return [];
+}
+// Resposta da disponibilidade -> { "nome.tld": {status, premium} }
+function mapaDisponibilidade(j) {
+  const d = j && (j.data != null ? j.data : j);
+  const m = {};
+  const juntar = (x, chave) => {
+    if (!x || typeof x !== 'object') return;
+    const dom = String(x.domain || x.domain_name || (x.sld && x.tld ? x.sld + '.' + String(x.tld).replace(/^\./, '') : '') || chave || '').toLowerCase();
+    if (dom) m[dom] = x;
+  };
+  if (Array.isArray(d)) d.forEach(x => juntar(x));
+  else if (d && typeof d === 'object') Object.keys(d).forEach(k => juntar(d[k], k));
+  return m;
+}
+function livreTurbo(x) {
+  if (!x) return false;
+  const st = String(x.status != null ? x.status : (x.available != null ? (x.available ? 'available' : 'unavailable') : '')).toLowerCase();
+  return st === 'available' || st === 'free' || st === 'true';
 }
 function turboErro(json) {
   if (!json) return 'sem resposta';
@@ -13824,9 +13865,14 @@ let cacheProdutosDominio = null;
 async function produtosDominio(forcar) {
   if (!forcar && cacheProdutosDominio && Date.now() - cacheProdutosDominio.t < 6 * 3600 * 1000) return cacheProdutosDominio.m;
   const j = await turbo('/products', { types: ['domain'] });
-  if (!turboOk(j) || !Array.isArray(j.data)) throw new Error('Preços da TurboHost: ' + turboErro(j));
+  const lista = listaTurbo(j && j.data != null ? j.data : j);
+  if (!turboOk(j) || !lista.length) throw new Error('Preços da TurboHost: ' + turboErro(j));
   const m = new Map();
-  j.data.forEach(p => { if (p && p.name && p.type === 'domain') m.set(String(p.name).toLowerCase(), p); });
+  lista.forEach(p => {
+    const nome = p && String(p.name || p.tld || p.extension || '').toLowerCase().replace(/^\./, '');
+    if (nome && (!p.type || p.type === 'domain')) m.set(nome, p);
+  });
+  if (!m.size) throw new Error('Preços da TurboHost: a lista veio sem extensões.');
   cacheProdutosDominio = { t: Date.now(), m };
   return m;
 }
@@ -13897,12 +13943,13 @@ app.post('/dominio-procurar', async (req, res) => {
     }
     tlds = tlds.slice(0, 14);
     const j = await turbo('/domain-availability-check', { sld, tlds });
-    if (!turboOk(j) || !j.data) throw new Error('Disponibilidade: ' + turboErro(j));
+    if (!turboOk(j)) throw new Error('Disponibilidade: ' + turboErro(j));
+    const disp = mapaDisponibilidade(j);
     const lista = tlds.map(t => {
-      const d = j.data[sld + '.' + t] || {};
+      const d = disp[sld + '.' + t] || {};
       const p = produtos.get(t);
       const pr = precosDoTld(t, p, c);
-      const livre = String(d.status || '').toLowerCase() === 'available';
+      const livre = livreTurbo(d);
       return {
         dominio: sld + '.' + t, tld: t, livre: livre && !d.premium, premium: !!d.premium,
         estado: d.premium ? 'premium' : (livre ? 'livre' : (d.status ? 'ocupado' : 'desconhecido')),
@@ -13912,7 +13959,7 @@ app.post('/dominio-procurar', async (req, res) => {
     }).filter(x => x.preco > 0);
     return res.json({ status: 'success', response: { sld, procurado: tld ? sld + '.' + tld : '', resultados: lista } });
   } catch (erro) {
-    console.error('Erro em /dominio-procurar:', erro.message || erro);
+    console.error('Erro em /dominio-procurar:', esconderChaveTurbo(erro.message || erro));
     return res.json({ status: 'error', message: 'Não foi possível procurar agora. Tenta outra vez daqui a pouco.' });
   }
 });
@@ -14008,8 +14055,8 @@ app.post('/dominio-pedido', async (req, res) => {
     // Ainda está livre? (para transferências tem de estar ocupado)
     if (!transferir) {
       const j = await turbo('/domain-availability-check', { sld, tlds: [tld] });
-      const d = j && j.data && j.data[dominio];
-      if (!d || String(d.status).toLowerCase() !== 'available' || d.premium) {
+      const d = mapaDisponibilidade(j)[dominio];
+      if (!d || !livreTurbo(d) || d.premium) {
         return res.json({ status: 'error', message: 'Alguém registou "' + dominio + '" agora mesmo, ou não está disponível. Escolhe outro.' });
       }
     }
@@ -14320,7 +14367,7 @@ app.post('/admin-dominios', async (req, res) => {
     try { tldsDisponiveis = Array.from((await produtosDominio()).keys()).sort(); } catch (e) { tldsDisponiveis = []; }
     const emails = {};
     return res.json({ status: 'success', response: {
-      activo: !!TURBOHOST_KEY, config: c, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
+      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, config: c, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
       dominios: lista.filter(d => d['Estado'] !== 'Por pagar').slice(0, 300).map(d => {
         const x = dadosDominio(d);
         return { id: d._id, dominio: d['Nome'], estado: d['Estado'], owner: d['Owner'], site: d['Site'], valor_mzn: Number(d['Valor MZN']) || 0,
@@ -14373,7 +14420,40 @@ app.post('/admin-dominio-tentar', async (req, res) => {
   }
 });
 
-['/dominio-procurar', '/dominio-pedido', '/dominios', '/dominio-estado', '/dominio-renovar', '/admin-dominios', '/admin-dominios-config', '/admin-dominio-tentar']
+// ---- Diagnóstico (painel): mostra o que a TurboHost responde, sem a chave ----
+async function turboBruto(caminho, corpo) {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(TURBOHOST_URL + caminho, {
+      method: 'POST', signal: AbortSignal.timeout(30000),
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(Object.assign({ key: TURBOHOST_KEY }, corpo))
+    });
+    const texto = await r.text();
+    return { http: r.status, ms: Date.now() - t0, resposta: esconderChaveTurbo(texto).slice(0, 1500) };
+  } catch (e) {
+    return { http: 0, ms: Date.now() - t0, resposta: 'Sem ligação: ' + esconderChaveTurbo(e.message || String(e)) };
+  }
+}
+app.post('/admin-dominios-teste', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const r = { chave: !!TURBOHOST_KEY, chave_tamanho: TURBOHOST_KEY.length, url: TURBOHOST_URL, ultimo_erro: ultimoErroTurbo };
+    try { r.ip_do_servidor = (await (await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(8000) })).json()).ip; } catch (e) { r.ip_do_servidor = '?'; }
+    if (TURBOHOST_KEY) {
+      r.produtos = await turboBruto('/products', { types: ['domain'] });
+      r.disponibilidade = await turboBruto('/domain-availability-check', { sld: 'danieliateste' + Math.floor(Math.random() * 9000 + 1000), tlds: ['com', 'co.mz'] });
+      try { const m = await produtosDominio(true); r.extensoes_lidas = m.size; r.exemplo = Array.from(m.keys()).slice(0, 12); } catch (e) { r.extensoes_lidas = 0; r.erro_leitura = esconderChaveTurbo(e.message); }
+    }
+    registar(admin, 'dominios-teste', r.extensoes_lidas ? 'ok' : 'falhou');
+    return res.json({ status: 'success', response: r });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível testar.' });
+  }
+});
+
+['/dominio-procurar', '/dominio-pedido', '/dominios', '/dominio-estado', '/dominio-renovar', '/admin-dominios', '/admin-dominios-config', '/admin-dominio-tentar', '/admin-dominios-teste']
   .forEach(r => ROTAS_PRIVADAS.add(r));
 Object.assign(LIMITES, {
   '/dominio-procurar': [['owner', 60, 10 * MIN], ['ip', 120, 10 * MIN]],
