@@ -12819,6 +12819,8 @@ html.js .rv.on{opacity:1;transform:none}
 .h-loja .grande>.foto{position:absolute;inset:0;border-radius:0}.h-loja .grande>.foto::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.66),rgba(0,0,0,.1))}
 .h-loja .grande .cx{position:relative;z-index:1;max-width:520px}.h-loja .grande .etq{color:#fff}
 .h-loja h1{font-size:clamp(36px,5.4vw,68px)}
+.h-foto .fundo .arte .dia-ic,.h-loja .grande>.foto .arte .dia-ic,.h-galeria .palco>.foto .arte .dia-ic{display:none}
+.h-foto em.dest,.h-loja .grande em.dest,.h-galeria em.dest{color:color-mix(in srgb,var(--t-dest-cor) 55%,#fff)}
 .h-loja .lado{display:grid;gap:16px}
 .h-loja .mini{position:relative;border-radius:var(--t-raio-foto);overflow:hidden;min-height:180px;padding:24px;display:flex;flex-direction:column;justify-content:flex-end;background:var(--t-fundo2);text-decoration:none}
 .h-loja .mini.c1{background:color-mix(in srgb,var(--dia-primaria) 16%,var(--dia-superficie))}.h-loja .mini.c2{background:color-mix(in srgb,var(--t-destaque) 20%,var(--dia-superficie))}
