@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.60.0'; // 19/10/2026 - sites com várias páginas, fotografias reais (Pexels + IA), editor visual, quiz antes do checkout
+const VERSION = '1.61.0'; // 21/10/2026 - venda de domínios (TurboHost + Bunny DNS)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
