@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.61.3'; // 21/10/2026 - domínios: preços em MZN da TurboHost, respostas coladas, extensões compostas
+const VERSION = '1.62.0'; // 21/10/2026 - estatísticas dos sites (visitas, origens, vendas) + domínios
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -925,6 +925,7 @@ function templateEmailAvisoExpiracao(nome, nomePlano, dataExpira, diasRestantes)
 // ======================================================
 
 async function uploadParaBunny(caminho, buffer, contentType) {
+  buffer = comMedicao(caminho, buffer, contentType);
   const url = `https://${STORAGE_HOST}/${STORAGE_ZONE}/${caminho}`;
   const res = await fetch(url, {
     method: 'PUT',
@@ -7204,6 +7205,7 @@ app.post('/contacto-enviar', async (req, res) => {
     }
 
     const site = await bubbleGet('site', site_id);
+    if (site) medirContactoFormulario(site);
     if (!site) {
       return res.json({ status: 'error', message: 'Projecto não encontrado.' });
     }
@@ -13767,7 +13769,7 @@ const DOMINIO_NS = ['kiki.bunny.net', 'coco.bunny.net'];
 const DOMINIO_PADRAO = {
   taxa: Number(clean(process.env.DOMINIO_TAXA_USD)) || 66,
   margem: Number(clean(process.env.DOMINIO_MARGEM)) || 30,
-  tlds: (clean(process.env.DOMINIO_TLDS) || 'co.mz,mz,com,net,org,store,shop,online,africa,co,com.br')
+  tlds: (clean(process.env.DOMINIO_TLDS) || 'co.mz,mz,com,net,org,store,shop,online,africa,co')
     .split(',').map(t => t.trim().toLowerCase().replace(/^\./, '')).filter(Boolean),
   fixos: {}
 };
@@ -13857,7 +13859,9 @@ async function verDisponibilidade(sld, tlds) {
       try {
         const j = await turbo('/domain-availability-check', f.corpo);
         const m = mapaDisponibilidade(j);
-        const x = m[dom] || Object.values(m).find(v => resultadoValido(v));
+        // Só vale a resposta para ESTE domínio exacto. A TurboHost pode "limpar" o nome
+        // (ex: djdesign.com + br -> djdesigncom.br) e responder sobre outro domínio.
+        const x = m[dom];
         if (resultadoValido(x)) { mapa[dom] = x; formaTldComposto[t] = f.nome; return; }
       } catch (e) { /* tenta a forma seguinte */ }
     }
@@ -14541,6 +14545,415 @@ Object.assign(LIMITES, {
   '/dominio-procurar': [['owner', 60, 10 * MIN], ['ip', 120, 10 * MIN]],
   '/dominio-pedido': [['owner', 12, 60 * MIN]],
   '/dominio-renovar': [['owner', 12, 60 * MIN]]
+});
+
+// ======================================================
+// Estatísticas dos sites (1.62.0)
+// ------------------------------------------------------
+// 1. Cada página dos sites leva /dia-medir.js (posto sozinho quando o HTML
+//    é gravado no Bunny - ver comMedicao, chamada pelo uploadParaBunny).
+//    O script manda um "beacon" anónimo a /m: página vista, de onde veio,
+//    telemóvel ou computador, produto visto, clique no WhatsApp/telefone.
+//    Sem cookies nem dados pessoais: o visitante é só um número ao acaso
+//    guardado no navegador, para contar visitantes únicos por dia.
+// 2. O servidor soma tudo em memória e grava de minuto a minuto em
+//    estatisticas/<owner>/<slug>/<AAAA-MM>.json (um ficheiro por mês).
+// 3. /estatisticas junta as visitas com as encomendas da loja e devolve
+//    tudo pronto para os gráficos do painel.
+// ======================================================
+const EST_DIAS_PERMITIDOS = [7, 30, 90];
+
+const MEDIR_JS = `(function(){
+  try {
+    var s = document.currentScript;
+    var k = s && s.getAttribute('data-k');
+    if (!k) return;
+    var ficheiro = (location.pathname.split('/').pop() || 'index.html');
+    if (/^v\\d+\\.html$/.test(ficheiro) || /dia_previa/.test(location.search)) return;
+    if (/bot|crawl|spider|headless|lighthouse/i.test(navigator.userAgent || '')) return;
+    var U = ${JSON.stringify(SELF_URL + '/m')};
+    var vid = '';
+    try {
+      vid = localStorage.getItem('dia_v') || '';
+      if (!/^[a-z0-9]{8,40}$/.test(vid)) { vid = (Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24); localStorage.setItem('dia_v', vid); }
+    } catch (e) { vid = ''; }
+    var rh = '';
+    try { rh = document.referrer ? new URL(document.referrer).hostname : ''; } catch (e) { rh = ''; }
+    if (rh && rh === location.hostname) rh = '=';
+    var q = location.search || '';
+    var utm = (/[?&]utm_source=([^&]{1,40})/.exec(q) || [])[1] || (/[?&]fbclid=/.test(q) ? 'facebook' : '') || (/[?&]gclid=/.test(q) ? 'google' : '');
+    function env(t, x){
+      var corpo = JSON.stringify({ k: k, t: t, x: x || '', v: vid, p: ficheiro, r: rh, u: utm, d: (window.innerWidth || 1000) < 768 ? 'm' : 'd' });
+      try {
+        if (navigator.sendBeacon && navigator.sendBeacon(U, new Blob([corpo], { type: 'text/plain' }))) return;
+      } catch (e) {}
+      try { fetch(U, { method: 'POST', body: corpo, keepalive: true, mode: 'no-cors', headers: { 'Content-Type': 'text/plain' } }); } catch (e) {}
+    }
+    env('v');
+    window.addEventListener('dia-produto-visto', function(e){ if (e && e.detail) env('p', String(e.detail)); });
+    document.addEventListener('click', function(e){
+      var a = e.target && e.target.closest ? e.target.closest('a') : null;
+      if (!a) return;
+      var h = (a.getAttribute('href') || '').toLowerCase();
+      if (/wa\\.me|whatsapp\\.com|whatsapp:/.test(h)) env('w');
+      else if (h.indexOf('tel:') === 0) env('c', 'tel');
+      else if (h.indexOf('mailto:') === 0) env('c', 'mail');
+    }, true);
+    var abrir = window.open;
+    window.open = function(u){
+      try { if (/wa\\.me|whatsapp/i.test(String(u || ''))) env('w'); } catch (e) {}
+      return abrir.apply(window, arguments);
+    };
+  } catch (e) {}
+})();`;
+
+app.get('/dia-medir.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(MEDIR_JS);
+});
+
+// ---- Pôr o script nas páginas dos sites (chamado pelo uploadParaBunny) ----
+const RE_CAMINHO_SITE = /^sites\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_.-]{1,80})\/([A-Za-z0-9_.-]{1,80}\.html)$/;
+function injectarMedicao(html, k) {
+  if (/dia-medir\.js/.test(html)) return html;
+  const tag = `<script src="${SELF_URL}/dia-medir.js" data-k="${k}" defer></script>`;
+  return /<\/body>/i.test(html) ? html.replace(/<\/body>(?![\s\S]*<\/body>)/i, tag + '\n</body>') : html + '\n' + tag;
+}
+function comMedicao(caminho, buffer, contentType) {
+  try {
+    if (!/text\/html/i.test(String(contentType || ''))) return buffer;
+    const m = RE_CAMINHO_SITE.exec(String(caminho || '').replace(/^\/+/, ''));
+    if (!m || /^v\d+\.html$/.test(m[3])) return buffer;
+    const ehBuffer = Buffer.isBuffer(buffer);
+    const html = ehBuffer ? buffer.toString('utf8') : String(buffer);
+    if (/dia-medir\.js/.test(html)) return buffer;
+    const novo = injectarMedicao(html, m[1] + '/' + m[2]);
+    return ehBuffer ? Buffer.from(novo, 'utf8') : novo;
+  } catch (e) {
+    return buffer;
+  }
+}
+// 'sites/<owner>/<slug>/index.html' -> 'owner/slug'
+function chaveMedicaoDoSite(site) {
+  const m = /^\/?sites\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_.-]{1,80})\//.exec(String(site['Bunny Path'] || ''));
+  return m ? m[1] + '/' + m[2] : '';
+}
+
+// ---- Dia em Maputo (UTC+2, sem hora de Verão) ----
+function diaMaputo(t) { return new Date((t || Date.now()) + 2 * 3600 * 1000).toISOString().slice(0, 10); }
+function somarDias(dia, n) { const d = new Date(dia + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+
+// ---- De onde veio a visita ----
+function origemDaVisita(r, utm) {
+  const u = String(utm || '').toLowerCase();
+  const h = String(r || '').toLowerCase();
+  const teste = (x) => {
+    if (!x) return '';
+    if (/google|gclid/.test(x)) return 'Google';
+    if (/facebook|fb\.|fbclid|^fb$|messenger/.test(x)) return 'Facebook';
+    if (/instagram|^ig$/.test(x)) return 'Instagram';
+    if (/whatsapp|wa\.me|^wa$/.test(x)) return 'WhatsApp';
+    if (/tiktok/.test(x)) return 'TikTok';
+    if (/linkedin|lnkd/.test(x)) return 'LinkedIn';
+    if (/youtube|youtu\.be/.test(x)) return 'YouTube';
+    if (/^t\.co$|twitter|^x\.com$/.test(x)) return 'X (Twitter)';
+    if (/bing|yahoo|duckduckgo|ecosia|yandex|baidu/.test(x)) return 'Outras pesquisas';
+    return '';
+  };
+  return teste(u) || teste(h) || (u ? 'Outros sites' : (h ? 'Outros sites' : 'Directo'));
+}
+
+// ---- Documentos de um mês (em memória, gravados de minuto a minuto) ----
+const estDocs = new Map(); // `${k}|${mes}` -> { doc, sujo, usado, ids: Map(dia -> Set), pronto: Promise }
+function caminhoEst(k, mes) { return 'estatisticas/' + k + '/' + mes + '.json'; }
+function entradaEst(k, mes) {
+  const chave = k + '|' + mes;
+  let e = estDocs.get(chave);
+  if (!e) {
+    e = { k, mes, doc: { dias: {} }, sujo: false, usado: Date.now(), ids: new Map() };
+    e.pronto = descarregarDoBunny(caminhoEst(k, mes))
+      .then(b => {
+        const d = JSON.parse(b.toString('utf8'));
+        if (d && typeof d === 'object' && d.dias) {
+          // junta o que chegou enquanto se lia o ficheiro
+          const extra = e.doc;
+          e.doc = d;
+          if (d.ids_dia && Array.isArray(d.ids_dia.ids)) e.ids.set(d.ids_dia.dia, new Set(d.ids_dia.ids));
+          Object.keys(extra.dias).forEach(dia => somarDia(e.doc, dia, extra.dias[dia]));
+        }
+      })
+      .catch(() => {});
+    estDocs.set(chave, e);
+  }
+  e.usado = Date.now();
+  return e;
+}
+function diaVazio() { return { v: 0, u: 0, o: {}, d: {}, p: {}, pr: {}, w: 0, c: 0, ct: {} }; }
+function somarDia(doc, dia, x) {
+  const a = doc.dias[dia] || (doc.dias[dia] = diaVazio());
+  ['v', 'u', 'w', 'c'].forEach(k => { a[k] = (a[k] || 0) + (x[k] || 0); });
+  ['o', 'd', 'p', 'pr', 'ct'].forEach(k => {
+    a[k] = a[k] || {};
+    Object.keys(x[k] || {}).forEach(n => { a[k][n] = (a[k][n] || 0) + x[k][n]; });
+  });
+}
+function mais(obj, chave, n) {
+  if (Object.keys(obj).length >= 400 && !(chave in obj)) chave = 'outros';
+  obj[chave] = (obj[chave] || 0) + (n || 1);
+}
+async function registarMedicao(k, evento) {
+  const dia = diaMaputo();
+  const e = entradaEst(k, dia.slice(0, 7));
+  await e.pronto;
+  const a = e.doc.dias[dia] || (e.doc.dias[dia] = diaVazio());
+  if (evento.t === 'v') {
+    a.v++;
+    mais(a.p, evento.p || 'index.html');
+    mais(a.d, evento.d === 'm' ? 'm' : 'd');
+    if (evento.r !== '=') mais(a.o, origemDaVisita(evento.r, evento.u));
+    if (evento.v) {
+      let s = e.ids.get(dia);
+      if (!s) { s = new Set(); e.ids.set(dia, s); }
+      if (!s.has(evento.v) && s.size < 20000) { s.add(evento.v); a.u++; }
+    } else {
+      a.u++;
+    }
+  } else if (evento.t === 'p' && evento.x) {
+    mais(a.pr, evento.x);
+  } else if (evento.t === 'w') {
+    a.w++;
+  } else if (evento.t === 'c') {
+    a.c++;
+    mais(a.ct, ['tel', 'mail', 'form'].includes(evento.x) ? evento.x : 'outro');
+  }
+  e.sujo = true;
+}
+async function gravarEstatisticas() {
+  const hoje = diaMaputo();
+  for (const [chave, e] of estDocs) {
+    if (e.sujo) {
+      e.sujo = false;
+      const s = e.ids.get(hoje);
+      e.doc.ids_dia = s ? { dia: hoje, ids: Array.from(s).slice(0, 20000) } : undefined;
+      try {
+        await uploadParaBunny(caminhoEst(e.k, e.mes), Buffer.from(JSON.stringify(e.doc), 'utf8'), 'application/json; charset=utf-8');
+      } catch (erro) {
+        e.sujo = true;
+        console.error('Estatísticas: não gravou', chave, erro.message || erro);
+      }
+    } else if (Date.now() - e.usado > 2 * 3600 * 1000) {
+      estDocs.delete(chave);
+    }
+    for (const dia of e.ids.keys()) if (dia !== hoje) e.ids.delete(dia);
+  }
+}
+setInterval(() => { gravarEstatisticas().catch(() => {}); }, 60 * 1000).unref();
+let estAFechar = false;
+['SIGTERM', 'SIGINT'].forEach(sinal => process.on(sinal, () => {
+  if (estAFechar) return;
+  estAFechar = true;
+  const fim = setTimeout(() => process.exit(0), 5000);
+  gravarEstatisticas().catch(() => {}).finally(() => { clearTimeout(fim); process.exit(0); });
+}));
+
+// ---- Recolha: o beacon dos sites ----
+const RE_K = /^[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_.-]{1,80}$/;
+app.post('/m', express.text({ type: () => true, limit: '4kb' }), (req, res) => {
+  res.status(204).end();
+  try {
+    let b = req.body;
+    if (typeof b === 'string') { try { b = JSON.parse(b); } catch (e) { return; } }
+    if (!b || typeof b !== 'object') return;
+    const k = String(b.k || '');
+    if (!RE_K.test(k)) return;
+    if (/bot|crawl|spider|headless|lighthouse|preview|facebookexternalhit|whatsapp\//i.test(String(req.headers['user-agent'] || ''))) return;
+    const t = String(b.t || '');
+    if (!['v', 'p', 'w', 'c'].includes(t)) return;
+    const p = /^[A-Za-z0-9_.-]{1,60}\.html$/.test(String(b.p || '')) ? String(b.p) : 'index.html';
+    if (/^v\d+\.html$/.test(p)) return;
+    const evento = {
+      t, p,
+      x: /^[A-Za-z0-9_-]{1,40}$/.test(String(b.x || '')) ? String(b.x) : '',
+      v: /^[a-z0-9]{8,40}$/.test(String(b.v || '')) ? String(b.v) : '',
+      r: b.r === '=' ? '=' : String(b.r || '').toLowerCase().replace(/[^a-z0-9.-]/g, '').slice(0, 80),
+      u: String(b.u || '').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 40),
+      d: b.d === 'm' ? 'm' : 'd'
+    };
+    registarMedicao(k, evento).catch(() => {});
+  } catch (e) { /* nunca falha para o visitante */ }
+});
+// Mensagens do formulário de contacto contam no servidor (não dependem do script)
+function medirContactoFormulario(site) {
+  const k = chaveMedicaoDoSite(site || {});
+  if (k) registarMedicao(k, { t: 'c', x: 'form' }).catch(() => {});
+}
+
+// ---- Pôr o script nos sites que já existiam antes desta versão ----
+const estActivados = new Set();
+async function activarMedicaoSite(site) {
+  const k = chaveMedicaoDoSite(site);
+  if (!k || estActivados.has(site._id) || site['Status'] !== 'Pronto') return false;
+  estActivados.add(site._id);
+  const caminho = String(site['Bunny Path'] || '').replace(/^\/+/, '');
+  let ini;
+  try { ini = (await descarregarDoBunny(caminho)).toString('utf8'); } catch (e) { return false; }
+  if (/dia-medir\.js/.test(ini)) return false;
+  const pasta = caminho.replace(/[^/]+$/, '');
+  const cdnPasta = String(site['CDN URL'] || '').replace(/[^/]+$/, '');
+  const ficheiros = ['index.html'].concat(String(metaDoHtml(ini, 'daniel-ia-paginas') || '').split(/\s+/).filter(f => /^[A-Za-z0-9_.-]{1,60}\.html$/.test(f) && f !== 'index.html'));
+  for (const f of ficheiros) {
+    try {
+      const html = f === 'index.html' ? ini : (await descarregarDoBunny(pasta + f)).toString('utf8');
+      if (/dia-medir\.js/.test(html)) continue;
+      await uploadParaBunny(pasta + f, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+      if (cdnPasta) await purgeCacheBunny(cdnPasta + f);
+      if (site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo') {
+        await purgeCacheBunny('https://' + site['Dominio Personalizado'] + '/' + (f === 'index.html' ? '' : f));
+      }
+    } catch (e) { /* página que não existe: segue */ }
+  }
+  return true;
+}
+
+// ---- Painel: visitas + encomendas, prontas para os gráficos ----
+const estNomesProdutos = new Map();
+async function nomeProduto(id) {
+  if (estNomesProdutos.has(id)) return estNomesProdutos.get(id);
+  let nome = '';
+  try { const p = await bubbleGet('produto', id); nome = (p && p['Nome']) || ''; } catch (e) { nome = ''; }
+  estNomesProdutos.set(id, nome);
+  if (estNomesProdutos.size > 5000) estNomesProdutos.clear();
+  return nome;
+}
+async function lerMesEst(k, mes) {
+  const e = entradaEst(k, mes);
+  await e.pronto;
+  return e.doc;
+}
+function topLista(obj, n) {
+  return Object.keys(obj || {}).map(nome => ({ nome, n: obj[nome] })).sort((a, b) => b.n - a.n).slice(0, n);
+}
+app.post('/estatisticas', async (req, res) => {
+  try {
+    const owner = req.body.owner;
+    const dias = EST_DIAS_PERMITIDOS.includes(Number(req.body.dias)) ? Number(req.body.dias) : 30;
+    const resumo = req.body.resumo === true;
+    const todosSites = await bubbleListTodos('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }], 500);
+    const prontos = todosSites.filter(s => s['Status'] === 'Pronto');
+    const pedido = String(req.body.site_id || 'todos');
+    const escolhidos = pedido === 'todos' ? prontos : prontos.filter(s => s._id === pedido);
+    if (pedido !== 'todos' && !escolhidos.length) return res.json({ status: 'error', message: 'Site não encontrado.' });
+
+    // os sites antigos passam a medir a partir de agora (em fundo)
+    escolhidos.forEach(s => { activarMedicaoSite(s).catch(() => {}); });
+
+    const hoje = diaMaputo();
+    const inicio = somarDias(hoje, -(dias - 1));
+    const inicioAnt = somarDias(inicio, -dias);
+    const listaDias = [];
+    for (let d = inicio; d <= hoje; d = somarDias(d, 1)) listaDias.push(d);
+    const meses = new Set();
+    for (let d = inicioAnt; d <= hoje; d = somarDias(d, 1)) meses.add(d.slice(0, 7));
+
+    // visitas
+    const porDia = {};
+    const ant = { v: 0, u: 0, w: 0, c: 0 };
+    const tot = diaVazio();
+    let temDados = false;
+    for (const s of escolhidos) {
+      const k = chaveMedicaoDoSite(s);
+      if (!k) continue;
+      for (const mes of meses) {
+        const doc = await lerMesEst(k, mes);
+        Object.keys(doc.dias || {}).forEach(dia => {
+          const x = doc.dias[dia];
+          temDados = true;
+          if (dia >= inicio && dia <= hoje) {
+            const a = porDia[dia] || (porDia[dia] = { v: 0, u: 0 });
+            a.v += x.v || 0; a.u += x.u || 0;
+            somarDia({ dias: { t: tot } }, 't', x);
+          } else if (dia >= inicioAnt && dia < inicio) {
+            ant.v += x.v || 0; ant.u += x.u || 0; ant.w += x.w || 0; ant.c += x.c || 0;
+          }
+        });
+      }
+    }
+
+    // encomendas (lojas e páginas de venda)
+    const vendasDia = {};
+    const vendidos = {};
+    let encomendas = 0, valor = 0, pago = 0, pendentes = 0, encAnt = 0, valorAnt = 0;
+    const lojas = escolhidos.filter(s => s['Tipo'] === 'E-commerce' || s['Tipo'] === 'Checkout');
+    for (const s of lojas) {
+      const lista = await bubbleListTodos('encomenda', [{ key: 'Site', constraint_type: 'equals', value: s._id }], 3000).catch(() => []);
+      lista.forEach(enc => {
+        const dia = diaMaputo(new Date(enc['Created Date'] || 0).getTime());
+        const v = Number(enc['Valor Total']) || 0;
+        const estado = String(enc['Estado'] || '');
+        if (/cancel|falh|expir/i.test(estado)) return;
+        if (dia >= inicio && dia <= hoje) {
+          encomendas++; valor += v;
+          if (estado === 'Pago') pago += v;
+          if (estado === 'Pendente' || estado === 'Aguarda pagamento') pendentes++;
+          const a = vendasDia[dia] || (vendasDia[dia] = { valor: 0, n: 0 });
+          a.valor += v; a.n++;
+          if (!resumo) {
+            let itens = [];
+            try { itens = JSON.parse(enc['Produtos Json'] || '[]'); } catch (e) { itens = []; }
+            (Array.isArray(itens) ? itens : []).slice(0, 50).forEach(it => {
+              const nome = String(it.nome || 'Produto').slice(0, 80);
+              const x = vendidos[nome] || (vendidos[nome] = { nome, qtd: 0, valor: 0 });
+              x.qtd += Number(it.quantidade) || 1;
+              x.valor += (Number(it.preco_unitario) || 0) * (Number(it.quantidade) || 1);
+            });
+          }
+        } else if (dia >= inicioAnt && dia < inicio) {
+          encAnt++; valorAnt += v;
+        }
+      });
+    }
+
+    const serie = listaDias.map(dia => ({
+      dia,
+      visitas: (porDia[dia] && porDia[dia].v) || 0,
+      visitantes: (porDia[dia] && porDia[dia].u) || 0,
+      vendas: (vendasDia[dia] && vendasDia[dia].valor) || 0,
+      encomendas: (vendasDia[dia] && vendasDia[dia].n) || 0
+    }));
+    const resposta = {
+      dias, inicio, fim: hoje, a_comecar: !temDados,
+      tem_loja: lojas.length > 0,
+      sites: prontos.map(s => ({ id: s._id, nome: s['Nome'] || 'Site', tipo: s['Tipo'] || '' })),
+      totais: {
+        visitas: tot.v, visitantes: tot.u, whatsapp: tot.w, contactos: tot.c,
+        encomendas, valor, pago, pendentes,
+        conversao: tot.u ? Math.round((encomendas / tot.u) * 1000) / 10 : 0
+      },
+      anteriores: { visitas: ant.v, visitantes: ant.u, whatsapp: ant.w, contactos: ant.c, encomendas: encAnt, valor: valorAnt },
+      serie
+    };
+    if (!resumo) {
+      resposta.origens = topLista(tot.o, 12);
+      resposta.dispositivos = { telemovel: tot.d.m || 0, computador: tot.d.d || 0 };
+      resposta.paginas = topLista(tot.p, 10);
+      resposta.contactos = { whatsapp: tot.w, telefone: (tot.ct && tot.ct.tel) || 0, email: (tot.ct && tot.ct.mail) || 0, formulario: (tot.ct && tot.ct.form) || 0 };
+      const vistos = topLista(tot.pr, 8);
+      for (const x of vistos) x.nome = (await nomeProduto(x.nome)) || 'Produto removido';
+      resposta.produtos_vistos = vistos;
+      resposta.produtos_vendidos = Object.values(vendidos).sort((a, b) => b.valor - a.valor || b.qtd - a.qtd).slice(0, 8);
+    }
+    return res.json({ status: 'success', response: resposta });
+  } catch (erro) {
+    console.error('Erro em /estatisticas:', erro.message || erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler as estatísticas.' });
+  }
+});
+
+ROTAS_PRIVADAS.add('/estatisticas');
+Object.assign(LIMITES, {
+  '/m': [['ip', 300, MIN]],
+  '/estatisticas': [['owner', 120, 10 * MIN]]
 });
 
 app.listen(PORT, () => {
