@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.63.0'; // 27/10/2026 - MozPayment nova: M-Pesa/e-Mola por checkout (payprocess) e levantamentos (payout)
+const VERSION = '1.63.2'; // 27/10/2026 - recargas de tokens só nos planos pagos; Free sem tokens é levado a subir de plano
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -5990,7 +5990,7 @@ app.post('/generate', async (req, res) => {
     const tokensUsados = user['Tokens Usados Mes'] || 0;
     const tokensIncluidos = plano['Tokens Incluidos'] || 0;
     if (semTokens(user, plano)) {
-      return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+      return res.json(respSemTokens(plano));
     }
 
     // ---- 4. Registar já o Site e a Generation, com estado "A gerar" ----
@@ -6214,6 +6214,14 @@ const MSG_SO_PAGO = 'Mudar de layout faz parte dos planos pagos. Sobe de plano p
 // os recarregados.
 // ======================================================
 const MSG_SEM_TOKENS = 'Os tokens do teu plano acabaram. Recarrega tokens para continuar a criar e editar.';
+// 1.63.2: as recargas são só para planos pagos e não mudam o plano.
+const MSG_SEM_TOKENS_FREE = 'Os tokens do plano Free acabaram. Sobe para um plano pago para continuares a criar e editar - nos planos pagos podes recarregar tokens sempre que acabarem.';
+const MSG_RECARGA_SO_PAGO = 'As recargas de tokens são para quem tem um plano pago. Escolhe um plano primeiro - depois podes recarregar sempre que os tokens acabarem, sem mudar de plano.';
+function ehPlanoFreeObj(plano) { return !plano || String(plano['Name'] || '').trim().toLowerCase() === 'free'; }
+function respSemTokens(plano) {
+  const free = ehPlanoFreeObj(plano);
+  return { status: 'error', codigo: 'tokens', plano_pago: !free, message: free ? MSG_SEM_TOKENS_FREE : MSG_SEM_TOKENS };
+}
 function saldoTokens(user, plano) {
   const incluidos = Math.max(0, Number(plano && plano['Tokens Incluidos']) || 0);
   const usados = Math.max(0, Number(user && user['Tokens Usados Mes']) || 0);
@@ -6238,6 +6246,24 @@ async function cobrarTokens(owner, tokens) {
   if (!user) return;
   const plano = user['Plan'] ? await bubbleGet('plan', user['Plan']).catch(() => null) : null;
   await bubblePatch('user', owner, patchCobrarTokens(user, plano, tokens));
+}
+// 1.63.1: no plano Free, a criação do PRIMEIRO site não gasta tokens -
+// os tokens do mês ficam todos para editar. Nos planos pagos cobra-se
+// como sempre. (O Generation continua a guardar o custo real.)
+async function criacaoGratis(owner) {
+  const user = await bubbleGet('user', owner).catch(() => null);
+  if (!user || !user['Plan']) return false;
+  const plano = await bubbleGet('plan', user['Plan']).catch(() => null);
+  if (!plano || String(plano['Name'] || '').trim().toLowerCase() !== 'free') return false;
+  const sites = await bubbleCount('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]).catch(() => 99);
+  return sites <= 1;
+}
+async function cobrarTokensCriacao(owner, tokens) {
+  if (await criacaoGratis(owner)) {
+    console.log('[tokens] primeiro site no plano Free: criação sem custo para', owner, '(' + (Math.round(Number(tokens) || 0)) + ' tokens)');
+    return;
+  }
+  return cobrarTokens(owner, tokens);
 }
 function milhares(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
 
@@ -6268,7 +6294,7 @@ app.post('/novas-variantes', async (req, res) => {
     const plano = planId ? await bubbleGet('plan', planId) : null;
     if (!plano) return res.json({ status: 'error', message: 'A tua conta não tem nenhum plano atribuído.' });
     if (semTokens(user, plano)) {
-      return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+      return res.json(respSemTokens(plano));
     }
     const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
     if (mostrarMarcaDeAgua) return res.json({ status: 'error', codigo: 'plano', message: MSG_SO_PAGO });
@@ -6365,10 +6391,10 @@ app.post('/escolher-variante', async (req, res) => {
     if (e.generation_id) {
       await bubblePatch('generation', e.generation_id, { 'Status': 'Pronto', 'Tokens Usados': v.tokens || 0 }).catch(() => {});
     }
-    await cobrarTokens(owner, v.tokens || 0);
+    await cobrarTokensCriacao(owner, v.tokens || 0);
     await bubblePatch('site', site_id, { 'Status': 'Pronto', 'Bunny Path': caminhoSite, 'CDN URL': cdnUrl, 'Logo URL': e.logo || '' });
     // Sites com várias páginas: as outras páginas nascem agora, em fundo.
-    if (Array.isArray(e.plano_paginas) && e.plano_paginas.length > 1) construirPaginas(site_id, {});
+    if (Array.isArray(e.plano_paginas) && e.plano_paginas.length > 1) construirPaginas(site_id, { criacao: true });
     const outrasProntas = e.variantes.filter(x => x.n !== n && x.estado === 'pronto').length;
     return res.json({ status: 'success', response: { cdn_url: cdnUrl, tipo: site['Tipo'], plano_pago: await temPlanoPago(owner).catch(() => false), outras_prontas: outrasProntas } });
   } catch (erro) {
@@ -6450,7 +6476,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     });
 
     // ---- Actualizar os tokens usados do utilizador ----
-    await cobrarTokens(owner, tokens);
+    await cobrarTokensCriacao(owner, tokens);
 
     // ---- Só agora marcamos o Site como "Pronto" ----
     // Chegar aqui significa que a Generation e o User já foram actualizados
@@ -6464,7 +6490,7 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     if (planoPaginas.length) fimSite['Variantes Json'] = JSON.stringify({ plano_paginas: planoPaginas, fotos: planoR.fotos || [] });
     else if (umaPagina) fimSite['Variantes Json'] = JSON.stringify({ uma_pagina: true, fotos: planoR.fotos || [] });
     await bubblePatch('site', siteId, fimSite);
-    if (planoPaginas.length) construirPaginas(siteId, {});
+    if (planoPaginas.length) construirPaginas(siteId, { criacao: true });
 
   } catch (erro) {
     console.error('Erro em processarGeracao:', erro);
@@ -6522,7 +6548,7 @@ app.post('/editar', async (req, res) => {
     const tokensUsados = user['Tokens Usados Mes'] || 0;
     const tokensIncluidos = plano['Tokens Incluidos'] || 0;
     if (semTokens(user, plano)) {
-      return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+      return res.json(respSemTokens(plano));
     }
 
     // Esta vai ser a primeira edição deste site se só existir, até agora,
@@ -6595,12 +6621,9 @@ async function processarEdicao({ owner, site_id, site, prompt, imagens_data_url,
       'Tokens Usados': tokens
     });
 
-    // ---- Tokens: regra especial do plano Free ----
-    if (ehPlanoFree && ehPrimeiraEdicao) {
-      await bubblePatch('user', owner, { 'Tokens Usados Mes': Math.max(tokensIncluidos, tokensUsados) });
-    } else {
-      await cobrarTokens(owner, tokens);
-    }
+    // ---- Tokens: cada edição cobra só o que gastou (1.63.1 - no Free a
+    // primeira edição já não leva os tokens todos do mês) ----
+    await cobrarTokens(owner, tokens);
 
     // ---- Site volta a "Pronto", com o mesmo link ----
     await bubblePatch('site', site_id, {
@@ -6720,6 +6743,7 @@ app.post('/account', async (req, res) => {
       response: {
         nome: user['Full Name'] || '',
         plano: nomePlano,
+        plano_pago: !!nomePlano && nomePlano.trim().toLowerCase() !== 'free',
         tokens_usados: user['Tokens Usados Mes'] || 0,
         tokens_incluidos: tokensIncluidos,
         tokens_extra: Math.max(0, Number(user['Tokens Extra']) || 0)
@@ -10082,6 +10106,9 @@ app.post('/recarga-iniciar', async (req, res) => {
     if (!owner || !pacote_id) return res.json({ status: 'error', message: 'Escolhe um pacote de tokens.' });
     const user = await bubbleGet('user', owner);
     if (!user) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const planIdRecarga = await garantirPlano(owner, user);
+    const planoRecarga = planIdRecarga ? await bubbleGet('plan', planIdRecarga).catch(() => null) : null;
+    if (ehPlanoFreeObj(planoRecarga)) return res.json({ status: 'error', codigo: 'plano', message: MSG_RECARGA_SO_PAGO });
     const pacote = await bubbleGet('pacote', pacote_id).catch(() => null);
     const tokens = pacote ? Math.round(Number(pacote['Tokens']) || 0) : 0;
     const valor = pacote ? Math.round((Number(pacote['Price MZN']) || 0) * 100) / 100 : 0;
@@ -12159,7 +12186,7 @@ async function construirPaginasAgora(siteId, opcoes) {
     await mudarEstadoSite(siteId, e => { e.paginas = { estado: 'a construir', lista, inicio: (e.paginas && e.paginas.inicio) || '' }; return e; });
   });
   await guardarFragmentos(site, { versao: 1, idioma, fragmentos: frags, actualizado: new Date().toISOString() });
-  if (tokens && opcoes.cobrar !== false) await cobrarTokens(site['Owner'], tokens);
+  if (tokens && opcoes.cobrar !== false) await (opcoes.criacao ? cobrarTokensCriacao : cobrarTokens)(site['Owner'], tokens);
   await mudarEstadoSite(siteId, e => { e.paginas = { estado: falhas ? 'com erros' : 'pronto', lista, fim: new Date().toISOString() }; return e; });
   if (site['Dominio Pull Zone Id']) await regrasDominioPaginas(site).catch(erro => console.error('Regras do domínio:', erro.message || erro));
 }
@@ -12458,7 +12485,7 @@ app.post('/editar-bloco', async (req, res) => {
     const user = await bubbleGet('user', owner);
     const planId = await garantirPlano(owner, user);
     const plano = planId ? await bubbleGet('plan', planId) : null;
-    if (!plano || semTokens(user, plano)) return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+    if (!plano || semTokens(user, plano)) return res.json(respSemTokens(plano));
     const id = crypto.randomBytes(9).toString('hex');
     trabalhosBloco.set(id, { owner, estado: 'a trabalhar', criado: Date.now() });
     res.json({ status: 'success', response: { trabalho_id: id } });
@@ -12519,7 +12546,7 @@ app.post('/site-paginas-criar', async (req, res) => {
     const user = await bubbleGet('user', owner);
     const planId = await garantirPlano(owner, user);
     const plano = planId ? await bubbleGet('plan', planId) : null;
-    if (!plano || semTokens(user, plano)) return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+    if (!plano || semTokens(user, plano)) return res.json(respSemTokens(plano));
     const pago = String(plano['Name'] || '').trim().toLowerCase() !== 'free';
     await mudarEstadoSite(site_id, e => { e.paginas = { estado: 'a planear', lista: [] }; return e; });
     res.json({ status: 'success', response: { site_id } });
@@ -12700,7 +12727,7 @@ app.post('/quiz-gerar', async (req, res) => {
     const user = await bubbleGet('user', owner);
     const planId = await garantirPlano(owner, user);
     const plano = planId ? await bubbleGet('plan', planId) : null;
-    if (!plano || semTokens(user, plano)) return res.json({ status: 'error', codigo: 'tokens', message: MSG_SEM_TOKENS });
+    if (!plano || semTokens(user, plano)) return res.json(respSemTokens(plano));
     const produtos = (await produtosDaLoja(site._id).catch(() => [])).map(p => `${p['Nome']} (${Number(p['Preco MZN']) || 0} MZN)`);
     const html = site['Bunny Path'] ? (await descarregarDoBunny(site['Bunny Path']).catch(() => Buffer.from(''))).toString('utf8') : '';
     const r = await gerarQuizIA({ nome: site['Nome'] || '', tipo: site['Tipo'] || '', prompt: site['Prompt Original'] || '', descricao: textoCurto(req.body.descricao, 800), idioma: idiomaDoHtml(html) || 'pt', produtos });
@@ -13861,7 +13888,7 @@ async function processarTemplate({ owner, nome, tipo, prompt, logo_data_url, sit
     await uploadParaBunny(`sites/${owner}/${slug}/_paginas.json`, Buffer.from(JSON.stringify({ versao: 1, idioma: normalizarIdioma(idioma), fragmentos: m.fragmentos, template: t.id, actualizado: new Date().toISOString() }), 'utf8'), 'application/json; charset=utf-8');
     const tokens = (iaR ? iaR.tokens : 0) + (fts.tokens || 0) + (quizR ? quizR.tokens || 0 : 0);
     await bubblePatch('generation', generationId, { 'Status': 'Pronto', 'Tokens Usados': tokens });
-    await cobrarTokens(owner, tokens);
+    await cobrarTokensCriacao(owner, tokens);
     await bubblePatch('site', siteId, {
       'Status': 'Pronto', 'Bunny Path': caminhoSite, 'CDN URL': cdnUrl, 'Logo URL': logoUrl,
       'Variantes Json': JSON.stringify({ plano_paginas: m.plano, fotos: fts.fotos, template: { id: t.id, nome: t.nome }, paginas: { estado: 'a construir', lista: m.plano.filter(p => p.slug !== 'inicio').map(p => ({ slug: p.slug, estado: 'a construir' })) } })
