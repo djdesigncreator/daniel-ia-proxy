@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.63.2'; // 27/10/2026 - recargas de tokens só nos planos pagos; Free sem tokens é levado a subir de plano
+const VERSION = '1.63.3'; // 27/10/2026 - o servidor cria o plano Pro e as recargas de tokens se faltarem
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -8497,8 +8497,71 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
 // esta rota.
 
 // Lista os planos activos, para a pessoa escolher a quem quer mudar.
+// ======================================================
+// Catálogo por omissão (1.63.3)
+// ------------------------------------------------------
+// Se na base de dados faltar o plano Pro, ou não houver nenhuma recarga de
+// tokens, o servidor cria-os UMA vez (fica marcado em config/catalogo.json
+// no Storage). Depois disso manda o painel: se o admin desligar ou apagar o
+// Pro ou uma recarga, o servidor não volta a criar.
+// Recargas: só para planos pagos, não mudam o plano (ver 1.63.2).
+// ======================================================
+const PRO_PADRAO = { 'Name': 'Pro', 'Price MZN': 1200, 'Tokens Incluidos': 300000, 'Sites Limit': 10, 'Max Colaboradores': 1, 'Permite Dominio': true, 'Is Active': true, 'Storage Limit Bytes': 5120 * 1048576 };
+const RECARGAS_PADRAO = [
+  { 'Name': 'Recarga 50 mil', 'Tokens': 50000, 'Price MZN': 250, 'Is Active': true, 'Sort Order': 1 },
+  { 'Name': 'Recarga 150 mil', 'Tokens': 150000, 'Price MZN': 650, 'Is Active': true, 'Sort Order': 2 },
+  { 'Name': 'Recarga 400 mil', 'Tokens': 400000, 'Price MZN': 1600, 'Is Active': true, 'Sort Order': 3 }
+];
+let catalogoEmCurso = null, catalogoFeito = false, catalogoUltimaTentativa = 0;
+async function lerMarcasCatalogo() {
+  try { return JSON.parse((await descarregarDoBunny('config/catalogo.json')).toString('utf8')) || {}; } catch (e) { return {}; }
+}
+async function garantirCatalogo() {
+  if (catalogoFeito) return;
+  if (catalogoEmCurso) return catalogoEmCurso;
+  if (Date.now() - catalogoUltimaTentativa < 10 * 60 * 1000) return; // falhou há pouco: não insiste a cada pedido
+  catalogoUltimaTentativa = Date.now();
+  catalogoEmCurso = (async () => {
+    const marcas = await lerMarcasCatalogo();
+    let mudou = false;
+    // ---- plano Pro ----
+    if (!marcas.pro) {
+      try {
+        const planos = await bubbleListTodos('plan', []);
+        const pro = planos.find(p => String(p['Name'] || '').trim().toLowerCase() === 'pro');
+        if (!pro) {
+          await bubbleCreate('plan', Object.assign({}, PRO_PADRAO));
+          console.log('[catálogo] plano Pro criado (1 200 MZN, 300 000 tokens, 10 sites)');
+        } else if (!pro['Is Active']) {
+          await bubblePatch('plan', pro._id, { 'Is Active': true });
+          console.log('[catálogo] plano Pro estava desligado - activado');
+        }
+        marcas.pro = new Date().toISOString(); mudou = true;
+      } catch (e) { console.error('[catálogo] não consegui garantir o plano Pro:', e.message || e); }
+    }
+    // ---- recargas de tokens ----
+    if (!marcas.recargas) {
+      try {
+        const todas = await bubbleListTodos('pacote', []);
+        if (!todas.length) {
+          for (const p of RECARGAS_PADRAO) await bubbleCreate('pacote', Object.assign({}, p));
+          console.log('[catálogo] 3 recargas de tokens criadas');
+        }
+        marcas.recargas = new Date().toISOString(); mudou = true;
+      } catch (e) { console.error('[catálogo] não consegui criar as recargas (o tipo "pacote" existe no Bubble?):', e.message || e); }
+    }
+    if (mudou) {
+      await uploadParaBunny('config/catalogo.json', Buffer.from(JSON.stringify(marcas), 'utf8'), 'application/json; charset=utf-8').catch(() => {});
+      if (typeof limparCacheAdmin === 'function') limparCacheAdmin();
+    }
+    catalogoFeito = !!(marcas.pro && marcas.recargas);
+  })().catch(e => console.error('[catálogo]', e.message || e)).finally(() => { catalogoEmCurso = null; });
+  return catalogoEmCurso;
+}
+
 app.post('/planos', async (req, res) => {
   try {
+    await garantirCatalogo();
     const planos = await bubbleList('plan', [
       { key: 'Is Active', constraint_type: 'equals', value: true }
     ]);
@@ -10091,6 +10154,7 @@ function rotuloAssinatura(planos, a) {
 
 app.post('/pacotes', async (req, res) => {
   try {
+    await garantirCatalogo();
     const lista = (await bubbleList('pacote', [{ key: 'Is Active', constraint_type: 'equals', value: true }]).catch(() => []))
       .map(pacoteParaLista).filter(p => p.tokens > 0 && p.preco_mzn > 0).sort(ordenarPacotes);
     return res.json({ status: 'success', response: { pacotes: lista } });
