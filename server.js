@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.68.0'; // 28/10/2026 - emails para os utilizadores no painel; multiplicador de tokens; 1 versão por site; moderação da comunidade
+const VERSION = '1.69.0'; // 28/10/2026 - apps de agendamento; emails no painel; multiplicador de tokens
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2127,6 +2127,8 @@ function pontoDePartidaVisual() {
 }
 
 const GUIA_TIPO = {
+  'Agendamento': 'App de marcações de um negócio de serviços (salão, barbearia, clínica, consultório, spa, ginásio, explicações, oficina, estúdio...). O protagonista é MARCAR: um botão "Marcar horário" bem visível no cabeçalho e no hero. Desenha: hero com a promessa e o botão; os serviços em cartões (nome, duração e preço em MZN) só para apresentar; a equipa, se fizer sentido; como funciona em 3 passos (escolhe o serviço, escolhe o dia e a hora, confirma); testemunhos; horário de funcionamento e localização; perguntas frequentes; contacto. INSTRUÇÃO OBRIGATÓRIA: inclui uma secção de marcação com id="marcar", com um título curto (ex: "Marca o teu horário") e uma frase, e dentro dela, num contentor com a largura do conteúdo, exactamente esta div vazia: <div id="daniel-ia-agenda"></div> - é ali que o sistema de marcações a sério (serviços, profissionais, dias e horas livres, dados e pagamento) aparece sozinho. NUNCA desenhes tu calendários, horas, formulários de marcação nem botões de confirmar. Os botões "Marcar" do site levam a #marcar (ou a marcar.html, num site com várias páginas).',
+
   'E-commerce': 'Esta é uma loja online ao estilo dos grandes marketplaces (Amazon, Shein, Jumia): o protagonista são os PRODUTOS, com pouca informação à volta. Desenha só: (1) um cabeçalho compacto e elegante com o logótipo/nome da loja e um menu curto (ex: Início, Produtos, Contacto), que pode ficar fixo no topo; (2) logo a seguir ao cabeçalho, a div obrigatória da loja (ver instrução abaixo) - NÃO ponhas nenhum hero, banner ou capa antes dela, porque a capa em carrossel, a pesquisa, as categorias, os destaques e os produtos aparecem automaticamente dentro dessa div; (3) depois dela, uma faixa curta de confiança com 3 ou 4 pontos (ex: entrega rápida, pagamento seguro, apoio por WhatsApp), cada um com um ícone SVG; (4) um contacto curto e discreto junto ao rodapé (segue a instrução do contacto) e um rodapé compacto com contactos e redes sociais. Nada de textos longos, sobre nós extensos ou testemunhos - a loja vai directa aos produtos. NÃO desenhes produtos, preços, carrinho, pesquisa, categorias nem capa - é tudo tratado automaticamente.',
   'Checkout': 'Esta é uma página de venda directa de uma loja pequena, focada nos produtos. Desenha só: (1) um cabeçalho compacto com o logótipo/nome; (2) logo a seguir, a div obrigatória da loja (ver instrução abaixo) - sem hero nem capa antes dela, porque a capa, os produtos, o carrinho e o pagamento aparecem automaticamente lá dentro; (3) uma faixa curta com 3 razões para comprar (com ícones SVG); (4) um contacto curto e discreto junto ao rodapé (segue a instrução do contacto) e um rodapé compacto. Textos curtos e directos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - é tudo tratado automaticamente.',
   'Landing Page': 'Landing page para apresentar o negócio e levar a uma acção (contactar, comprar, reservar, inscrever-se). Secções possíveis - escolhe as que fazem sentido para a descrição, pela ordem que conta melhor a história: hero, benefícios, como funciona, sobre, serviços ou preços, depoimentos, perguntas frequentes, chamada para acção, contacto e rodapé. Se a pessoa pedir uma página simples ou curta, fica-te por 3 ou 4 secções muito bem feitas. Se não disser nada, desenvolve o suficiente para convencer, com textos com substância (explica cada benefício, não só títulos soltos).',
@@ -2301,6 +2303,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarQuizSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
+  html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = injectarContactoSeNecessario(html, siteId);
@@ -2455,6 +2458,21 @@ function injectarBlogSeNecessario(html, ehBlog, siteId) {
 // </body>. Mesmo princípio de injectarLojaSeNecessario, só que sem
 // nenhuma condição de tipo e para "daniel-ia-contacto" e
 // "contacto-form.js".
+// 1.69.0: sites de agendamento - a div das marcações e o widget (agenda.js).
+function injectarAgendaSeNecessario(html, ehAgenda, siteId) {
+  const temDiv = /id=["']daniel-ia-agenda["']/.test(html);
+  if (!ehAgenda && !temDiv) return html;
+  if (!temDiv) {
+    if (paginasMulti(html)) return html; // nas outras páginas fica na página "Marcar"
+    const div = '<section id="marcar" style="padding:56px 20px"><div id="daniel-ia-agenda" style="max-width:760px;margin:0 auto"></div></section>\n';
+    html = /<footer\b/i.test(html) ? html.replace(/<footer\b/i, div + '<footer') : html.replace(/<\/body>/i, div + '</body>');
+  }
+  if (!/agenda\.js/.test(html)) {
+    const sc = `\n<script src="${SELF_URL}/agenda.js" data-site="${escaparHtml(siteId || '')}" defer></script>\n`;
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, sc + '</body>') : html + sc;
+  }
+  return html;
+}
 function injectarContactoSeNecessario(html, siteId) {
   if (paginasMulti(html) && !/id=["']daniel-ia-contacto["']/.test(html)) return html;
   if (!/id=["']daniel-ia-contacto["']/.test(html)) {
@@ -2574,6 +2592,7 @@ ${htmlAtual}`;
 
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
+  html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = injectarContactoSeNecessario(html, siteId);
@@ -6015,6 +6034,7 @@ app.post('/generate', async (req, res) => {
     const plano = await bubbleGet('plan', planId);
     const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
 
+    if (tipo === 'Agendamento' && mostrarMarcaDeAgua) return res.json({ status: 'error', codigo: 'plano', message: MSG_AGENDA_SO_PAGO });
     // ---- 2. Verificar limite de projectos ----
     const sitesExistentes = await bubbleCount('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]);
     if (sitesExistentes >= (plano['Sites Limit'] || 0)) {
@@ -8521,6 +8541,11 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     console.log('Encomenda marcada como paga:', encomenda._id);
     entrada.resultado = 'aplicado: encomenda ' + encomenda._id; guardarRegistoWebhooks();
     await baixarStock(lerJsonSeguro(encomenda['Produtos Json'], []));
+    // 1.69.0: pagamento de uma marcação (sinal ou total) - confirma a marcação e avisa
+    if (String(encomenda['Notas'] || '').indexOf('agendamento:') === 0) {
+      await agendaPagamentoConfirmado(encomenda).catch(e => console.error('[agenda] pagamento confirmado, mas a marcação não actualizou:', e.message || e));
+      return;
+    }
 
     // Avisar o dono da loja (não bloqueia nada se falhar).
     try {
@@ -11605,6 +11630,8 @@ BIBLIOTECA DE PADRÕES PROFISSIONAIS (combina as peças que servem a esta direc�
 - Detalhes que dão acabamento: etiquetas pequenas em pílula por cima dos títulos de secção ("— Os nossos serviços"), títulos de secção com um traço ou estrela decorativa, botões com ícone de seta dentro de um círculo, cartões que sobem 2-4px no hover, sombras longas e suaves, uma segunda cor usada com parcimónia.`;
 
 const PADROES_TIPO = {
+  'Agendamento': `
+PADRÕES DE APP DE MARCAÇÕES DE TOPO: hero com uma foto forte do espaço ou do serviço, promessa curta e o botão "Marcar horário" grande, mais uma prova social (estrelas, clientes atendidos); faixa com o horário de hoje ("Aberto hoje até às 18:00"); serviços em cartões elegantes com duração e preço; equipa com fotos redondas e especialidade; secção de marcação limpa e espaçosa, com fundo suave, para o sistema de marcações brilhar; testemunhos; mapa e horário da semana numa tabela simples; perguntas frequentes (como cancelar, atrasos, formas de pagamento por M-Pesa e e-Mola).`,
   'Portefólio': `
 PADRÕES DE PORTEFÓLIO DE TOPO: hero centrado com "Olá, eu sou" + nome enorme (o apelido na cor de destaque, em itálico ou com rabisco), a profissão e a cidade; a foto da pessoa recortada sobre uma forma orgânica ou um círculo de cor (se houver foto), com selos flutuantes à volta ("150+ avaliações 4,9", "10 anos de experiência", "Disponível para projectos" com ponto verde a pulsar), pílulas com as competências, um botão circular com texto a rodar ("contrata-me • contrata-me •") e os ícones das redes; faixa preta com as competências em movimento; serviços em lista numerada em acordeão; números em cartões (anos, projectos, clientes, prémios) ou barras/anéis de percentagem; processo em passos numerados; ferramentas em grelha de ícones; testemunhos; chamada final "Vamos criar algo juntos".`,
   'Galeria': `
@@ -11663,7 +11690,7 @@ const PAGINAS_IA_MAX = 6;
 
 const PAGINAS_CATALOGO = {
   inicio: {}, loja: { modulo: 'loja' }, produto: { modulo: 'produto', menu: false },
-  trabalhos: { modulo: 'portfolio' }, albuns: { modulo: 'galeria' }, artigos: { modulo: 'blog' },
+  trabalhos: { modulo: 'portfolio' }, albuns: { modulo: 'galeria' }, artigos: { modulo: 'blog' }, marcar: { modulo: 'agenda' },
   sobre: {}, servicos: {}, precos: {}, menu: {}, reservas: {}, galeria: {}, equipa: {}, perguntas: {}, processo: {}, testemunhos: {},
   contacto: { modulo: 'contacto' }
 };
@@ -11684,6 +11711,7 @@ const NOMES_PAGINAS = {
   perguntas: { pt: ['Perguntas', 'Perguntas frequentes'], en: ['FAQ', 'Frequently asked questions'], fr: ['FAQ', 'Questions fréquentes'], es: ['Preguntas', 'Preguntas frecuentes'] },
   processo: { pt: ['Como funciona', 'Como funciona'], en: ['How it works', 'How it works'], fr: ['Comment ça marche', 'Comment ça marche'], es: ['Cómo funciona', 'Cómo funciona'] },
   testemunhos: { pt: ['Clientes', 'O que dizem os clientes'], en: ['Reviews', 'What our clients say'], fr: ['Avis', 'Ce que disent nos clients'], es: ['Opiniones', 'Lo que dicen los clientes'] },
+  marcar: { pt: ['Marcar', 'Marcar horário'], en: ['Book', 'Book an appointment'], fr: ['Réserver', 'Prendre rendez-vous'], es: ['Reservar', 'Reservar cita'] },
   contacto: { pt: ['Contacto', 'Contacto'], en: ['Contact', 'Contact'], fr: ['Contact', 'Contact'], es: ['Contacto', 'Contacto'] }
 };
 const RESUMOS_PAGINAS = {
@@ -11703,6 +11731,7 @@ const RESUMOS_PAGINAS = {
   perguntas: 'as perguntas frequentes em acordeão, agrupadas por tema',
   processo: 'como funciona passo a passo (do primeiro contacto à entrega), prazos, o que a pessoa recebe e garantias',
   testemunhos: 'depoimentos de clientes por tipo de serviço ou produto, resultados, números e uma chamada para acção',
+  marcar: 'marcar um horário: escolher o serviço, o profissional, o dia e a hora',
   contacto: 'os contactos (telefone, WhatsApp, email, morada, horário), um mapa desenhado e o formulário'
 };
 const PAGINAS_TIPO = {
@@ -11712,7 +11741,8 @@ const PAGINAS_TIPO = {
   'Landing Page': { fixas: ['inicio', 'sobre', 'contacto'], opcionais: ['servicos', 'processo', 'precos', 'menu', 'reservas', 'galeria', 'equipa', 'testemunhos', 'perguntas'] },
   'Portefólio': { fixas: ['inicio', 'trabalhos', 'sobre', 'contacto'], opcionais: ['servicos', 'processo', 'precos', 'testemunhos'] },
   'Galeria': { fixas: ['inicio', 'albuns', 'sobre', 'contacto'], opcionais: ['servicos', 'precos', 'processo', 'testemunhos'] },
-  'Blog': { fixas: ['inicio', 'artigos', 'sobre', 'contacto'], opcionais: ['servicos', 'perguntas'] }
+  'Blog': { fixas: ['inicio', 'artigos', 'sobre', 'contacto'], opcionais: ['servicos', 'perguntas'] },
+  'Agendamento': { fixas: ['inicio', 'servicos', 'marcar', 'contacto'], opcionais: ['equipa', 'sobre', 'precos', 'testemunhos', 'perguntas', 'galeria'] }
 };
 function ficheiroDaPagina(slug) { return slug === 'inicio' ? 'index.html' : slug + '.html'; }
 function paginaBase(slug, idioma) {
@@ -12120,7 +12150,7 @@ const CSS_PAGINA_MODULO = '.dia-pg-largura{max-width:1240px;margin:0 auto;paddin
   + '.dia-pg-corpo{padding-bottom:clamp(44px,6vw,90px)}.dia-pg-produto{padding-top:clamp(16px,3vw,32px);padding-bottom:clamp(44px,6vw,90px)}';
 function mainDePaginaModulo(p, idioma) {
   const casa = NOMES_PAGINAS.inicio[normalizarIdioma(idioma)][0];
-  const divs = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog' };
+  const divs = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda' };
   const div = `<div id="${divs[p.modulo] || 'daniel-ia-produtos'}"></div>`;
   if (p.modulo === 'produto') return `<main data-dia="conteudo"><div class="dia-pg-largura dia-pg-produto">${div}</div></main>`;
   return `<main data-dia="conteudo"><section class="dia-pg-topo"><div class="dia-pg-largura"><nav class="dia-pg-migalhas" aria-label="breadcrumb"><a href="index.html">${escaparHtml(casa)}</a><span>/</span><span>${escaparHtml(p.titulo)}</span></nav><h1 class="dia-pg-titulo">${escaparHtml(p.titulo)}</h1>${p.subtitulo ? `<p class="dia-pg-sub">${escaparHtml(p.subtitulo)}</p>` : ''}</div></section><div class="dia-pg-largura dia-pg-corpo">${div}</div></main>`;
@@ -12144,6 +12174,7 @@ function completarPagina(html, siteId, tipo) {
   const ehLoja = tipo === 'E-commerce' || tipo === 'Checkout';
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
+  html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
   html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
   html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
   html = injectarContactoSeNecessario(html, siteId);
@@ -13631,7 +13662,7 @@ const TPL_SECCOES = {
     return `<section class="s${x.fundo}" style="padding:clamp(40px,6vw,70px) 0"><div class="w"><div class="wa-faixa rv"><span class="icx">${tIc('message-circle')}</span><div><h3>${tEsc(k.titulo || c.d.marca.nome)}</h3><p>${tEsc(k.texto || '')}</p></div><a class="btn btn-p" href="${tEsc(tWa(c))}" target="_blank" rel="noopener">${tEsc(c.txt.whatsapp)}${tIc('arrow-up-right')}</a></div></div></section>`;
   },
   modulo(c, v, x) {
-    const ids = { loja: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog' };
+    const ids = { loja: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda' };
     const id = ids[v] || 'daniel-ia-produtos';
     const pg = { loja: 'loja', portfolio: 'trabalhos', galeria: 'albuns', blog: 'artigos' }[v];
     const titulo = { loja: c.d.textos.loja_titulo || c.txt.produtos, portfolio: c.d.textos.portfolio_titulo || c.txt.trabalhos, galeria: c.d.textos.galeria_titulo || c.txt.albuns, blog: c.d.textos.blog_titulo || c.txt.artigos }[v];
@@ -13854,7 +13885,7 @@ function tSeccoesInicio(c) {
   return lista;
 }
 function tMainModulo(c, p) {
-  const ids = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog' };
+  const ids = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda' };
   const div = `<div id="${ids[p.modulo] || 'daniel-ia-produtos'}"></div>`;
   if (p.modulo === 'produto') return `<main data-dia="conteudo"><section class="s" style="padding-top:clamp(20px,3vw,36px)"><div class="w">${div}</div></section></main>`;
   return `<main data-dia="conteudo">${TPL_SECCOES.topo(c, (c.t.variantes && c.t.variantes.topo) === 'foto' ? 'simples' : ((c.t.variantes && c.t.variantes.topo) || 'simples'), { pagina: p.slug })}<section class="s s-modulo" style="padding-top:clamp(28px,4vw,48px)"><div class="w">${div}</div></section></main>`;
@@ -14044,6 +14075,7 @@ async function processarTemplate({ owner, nome, tipo, prompt, logo_data_url, sit
     html = injectarLojaSeNecessario(html, ehLoja, siteId);
     html = injectarQuizSeNecessario(html, ehLoja, siteId);
     html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
+  html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
     html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
     html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
     html = injectarContactoSeNecessario(html, siteId);
@@ -16464,6 +16496,7 @@ async function aplicarTemplateAoSite({ owner, site, t, inicio }) {
     html = injectarLojaSeNecessario(html, ehLoja, siteId);
     html = injectarQuizSeNecessario(html, ehLoja, siteId);
     html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
+  html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
     html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
     html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
     html = injectarContactoSeNecessario(html, siteId);
@@ -16785,6 +16818,663 @@ app.post('/admin-email-estado', async (req, res) => {
 
 ['/admin-email-previa', '/admin-email-destinatarios', '/admin-email-enviar', '/admin-email-estado'].forEach(r => ROTAS_PRIVADAS.add(r));
 Object.assign(LIMITES, { '/admin-email-enviar': [['owner', 40, 60 * MIN]] });
+
+const AGENDA_JS = "/*\n  Daniel IA - widget de agendamento (1.69.0)\n  ------------------------------------------\n  Carregado por todos os sites do tipo \"Agendamento\". Desenha-se dentro de\n  <div id=\"daniel-ia-agenda\"></div>: serviço -> profissional -> dia e hora\n  -> dados -> (pagamento) -> confirmado. Usa as cores e letras do site\n  (variáveis --dia-*). Na pré-visualização mostra dados de exemplo.\n*/\n(function(){\n  'use strict';\n  var eu = document.currentScript;\n  var CONTAINER = (eu && eu.src) ? eu.src.replace(/\\/agenda\\.js.*$/, '') : '';\n  var SITE = (eu && eu.getAttribute('data-site')) || window.DANIEL_IA_SITE_ID || '';\n  if (/[?&]dia_previa=1/.test(location.search)) SITE = 'previa';\n  var LANG = (document.documentElement.lang || 'pt').slice(0, 2).toLowerCase();\n  if (['pt', 'en', 'fr', 'es'].indexOf(LANG) < 0) LANG = 'pt';\n  var LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' }[LANG];\n  var T = {\n    en: { 'Marcar horário': 'Book an appointment', 'Escolhe o serviço': 'Choose a service', 'Com quem?': 'With whom?', 'Qualquer pessoa disponível': 'Anyone available', 'Escolhe o dia': 'Choose a day', 'Escolhe a hora': 'Choose a time', 'Os teus dados': 'Your details', 'Nome': 'Name', 'Telefone': 'Phone', 'Email (opcional)': 'Email (optional)', 'Notas (opcional)': 'Notes (optional)', 'Confirmar marcação': 'Confirm booking', 'Voltar': 'Back', 'Não há horas livres neste dia.': 'No free times on this day.', 'Manhã': 'Morning', 'Tarde': 'Afternoon', 'Noite': 'Evening', 'A carregar...': 'Loading...', 'Marcação confirmada!': 'Booking confirmed!', 'Pedido enviado!': 'Request sent!', 'O negócio vai confirmar e recebes um email.': 'The business will confirm and you will get an email.', 'Enviar no WhatsApp': 'Send on WhatsApp', 'Adicionar ao calendário': 'Add to calendar', 'Fazer outra marcação': 'Make another booking', 'Escreve o teu nome.': 'Enter your name.', 'Escreve o teu número de telefone.': 'Enter your phone number.', 'Esse email não parece válido.': 'That email does not look valid.', 'Pagar': 'Pay', 'Sinal': 'Deposit', 'Total': 'Total', 'Paga o sinal para garantir a hora. O resto pagas no dia.': 'Pay the deposit to secure the time. You pay the rest on the day.', 'Paga agora para garantir a hora.': 'Pay now to secure the time.', 'Como queres pagar?': 'How do you want to pay?', 'Cartão': 'Card', 'Este número não é M-Pesa (84/85) nem e-Mola (86/87).': 'This number is not M-Pesa (84/85) or e-Mola (86/87).', 'Escolhe como queres pagar.': 'Choose how to pay.', 'A processar...': 'Processing...', 'Já paguei': \"I've paid\", 'Cancelar': 'Cancel', 'À espera da confirmação do pagamento...': 'Waiting for payment confirmation...', 'A hora fica reservada durante {n} minutos.': 'The time is held for {n} minutes.', 'Ainda não recebemos o pagamento. Se já pagaste, espera um pouco.': \"We haven't received the payment yet. If you've paid, wait a moment.\", 'A página não aparece? Abrir num separador novo': 'Page not showing? Open in a new tab', 'Algo correu mal. Tenta outra vez.': 'Something went wrong. Try again.', 'min': 'min', 'Grátis': 'Free', 'Pré-visualização: no teu site a marcação fica feita a sério.': 'Preview: on your site the booking is made for real.', 'Ver ou cancelar a marcação': 'View or cancel the booking', 'Resumo': 'Summary' },\n    fr: { 'Marcar horário': 'Prendre rendez-vous', 'Escolhe o serviço': 'Choisissez un service', 'Com quem?': 'Avec qui ?', 'Qualquer pessoa disponível': 'Toute personne disponible', 'Escolhe o dia': 'Choisissez un jour', 'Escolhe a hora': 'Choisissez une heure', 'Os teus dados': 'Vos coordonnées', 'Nome': 'Nom', 'Telefone': 'Téléphone', 'Email (opcional)': 'E-mail (facultatif)', 'Notas (opcional)': 'Notes (facultatif)', 'Confirmar marcação': 'Confirmer le rendez-vous', 'Voltar': 'Retour', 'Não há horas livres neste dia.': 'Aucun créneau libre ce jour.', 'Manhã': 'Matin', 'Tarde': 'Après-midi', 'Noite': 'Soir', 'A carregar...': 'Chargement...', 'Marcação confirmada!': 'Rendez-vous confirmé !', 'Pedido enviado!': 'Demande envoyée !', 'O negócio vai confirmar e recebes um email.': \"L'établissement va confirmer et vous recevrez un e-mail.\", 'Enviar no WhatsApp': 'Envoyer sur WhatsApp', 'Adicionar ao calendário': 'Ajouter au calendrier', 'Fazer outra marcação': 'Prendre un autre rendez-vous', 'Escreve o teu nome.': 'Indiquez votre nom.', 'Escreve o teu número de telefone.': 'Indiquez votre numéro de téléphone.', 'Esse email não parece válido.': \"Cet e-mail ne semble pas valide.\", 'Pagar': 'Payer', 'Sinal': 'Acompte', 'Total': 'Total', 'Paga o sinal para garantir a hora. O resto pagas no dia.': \"Payez l'acompte pour garantir l'heure. Le reste se paie le jour même.\", 'Paga agora para garantir a hora.': \"Payez maintenant pour garantir l'heure.\", 'Como queres pagar?': 'Comment voulez-vous payer ?', 'Cartão': 'Carte', 'Este número não é M-Pesa (84/85) nem e-Mola (86/87).': \"Ce numéro n'est ni M-Pesa (84/85) ni e-Mola (86/87).\", 'Escolhe como queres pagar.': 'Choisissez comment payer.', 'A processar...': 'Traitement...', 'Já paguei': \"J'ai payé\", 'Cancelar': 'Annuler', 'À espera da confirmação do pagamento...': 'En attente de la confirmation du paiement...', 'A hora fica reservada durante {n} minutos.': \"L'heure est réservée pendant {n} minutes.\", 'Ainda não recebemos o pagamento. Se já pagaste, espera um pouco.': \"Paiement pas encore reçu. Si vous avez payé, patientez un peu.\", 'A página não aparece? Abrir num separador novo': \"La page ne s'affiche pas ? Ouvrir dans un nouvel onglet\", 'Algo correu mal. Tenta outra vez.': \"Une erreur s'est produite. Réessayez.\", 'min': 'min', 'Grátis': 'Gratuit', 'Pré-visualização: no teu site a marcação fica feita a sério.': 'Aperçu : sur votre site, la réservation est réelle.', 'Ver ou cancelar a marcação': 'Voir ou annuler', 'Resumo': 'Récapitulatif' },\n    es: { 'Marcar horário': 'Reservar cita', 'Escolhe o serviço': 'Elige el servicio', 'Com quem?': '¿Con quién?', 'Qualquer pessoa disponível': 'Cualquier persona disponible', 'Escolhe o dia': 'Elige el día', 'Escolhe a hora': 'Elige la hora', 'Os teus dados': 'Tus datos', 'Nome': 'Nombre', 'Telefone': 'Teléfono', 'Email (opcional)': 'Email (opcional)', 'Notas (opcional)': 'Notas (opcional)', 'Confirmar marcação': 'Confirmar cita', 'Voltar': 'Volver', 'Não há horas livres neste dia.': 'No hay horas libres este día.', 'Manhã': 'Mañana', 'Tarde': 'Tarde', 'Noite': 'Noche', 'A carregar...': 'Cargando...', 'Marcação confirmada!': '¡Cita confirmada!', 'Pedido enviado!': '¡Solicitud enviada!', 'O negócio vai confirmar e recebes um email.': 'El negocio confirmará y recibirás un email.', 'Enviar no WhatsApp': 'Enviar por WhatsApp', 'Adicionar ao calendário': 'Añadir al calendario', 'Fazer outra marcação': 'Hacer otra reserva', 'Escreve o teu nome.': 'Escribe tu nombre.', 'Escreve o teu número de telefone.': 'Escribe tu número de teléfono.', 'Esse email não parece válido.': 'Ese email no parece válido.', 'Pagar': 'Pagar', 'Sinal': 'Señal', 'Total': 'Total', 'Paga o sinal para garantir a hora. O resto pagas no dia.': 'Paga la señal para asegurar la hora. El resto lo pagas el día.', 'Paga agora para garantir a hora.': 'Paga ahora para asegurar la hora.', 'Como queres pagar?': '¿Cómo quieres pagar?', 'Cartão': 'Tarjeta', 'Este número não é M-Pesa (84/85) nem e-Mola (86/87).': 'Este número no es M-Pesa (84/85) ni e-Mola (86/87).', 'Escolhe como queres pagar.': 'Elige cómo pagar.', 'A processar...': 'Procesando...', 'Já paguei': 'Ya pagué', 'Cancelar': 'Cancelar', 'À espera da confirmação do pagamento...': 'Esperando la confirmación del pago...', 'A hora fica reservada durante {n} minutos.': 'La hora queda reservada durante {n} minutos.', 'Ainda não recebemos o pagamento. Se já pagaste, espera um pouco.': 'Aún no recibimos el pago. Si ya pagaste, espera un poco.', 'A página não aparece? Abrir num separador novo': '¿No aparece la página? Abrir en una pestaña nueva', 'Algo correu mal. Tenta outra vez.': 'Algo salió mal. Inténtalo de nuevo.', 'min': 'min', 'Grátis': 'Gratis', 'Pré-visualização: no teu site a marcação fica feita a sério.': 'Vista previa: en tu sitio la reserva se hace de verdad.', 'Ver ou cancelar a marcação': 'Ver o cancelar la cita', 'Resumo': 'Resumen' }\n  };\n  function tx(s, v){ var r = (T[LANG] && T[LANG][s]) || s; if (v) Object.keys(v).forEach(function(k){ r = r.replace('{' + k + '}', v[k]); }); return r; }\n  function esc(t){ return String(t == null ? '' : t).replace(/[&<>\"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }\n  function post(rota, corpo){ return fetch(CONTAINER + rota, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo || {}) }).then(function(r){ return r.json(); }); }\n  function mzn(v){ return v > 0 ? Number(v).toLocaleString('pt-PT') + ' MZN' : tx('Grátis'); }\n  function dur(m){ return m >= 60 ? (Math.floor(m / 60) + 'h' + (m % 60 ? String(m % 60).padStart(2, '0') : '')) : m + ' ' + tx('min'); }\n  function soDigitos(t){ return String(t || '').replace(/[^0-9]/g, ''); }\n  function operadora(t){ var d = soDigitos(t); if (d.length === 12 && d.indexOf('258') === 0) d = d.slice(3); if (/^8[45][0-9]{7}$/.test(d)) return 'mpesa'; if (/^8[67][0-9]{7}$/.test(d)) return 'emola'; return ''; }\n  function hojeLocal(){ return new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10); }\n  function somarDias(d, n){ var x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }\n  function fmtData(d, op){ try { return new Intl.DateTimeFormat(LOCALE, Object.assign({ timeZone: 'UTC' }, op)).format(new Date(d + 'T12:00:00Z')); } catch (e) { return d; } }\n  var IC = {\n    relogio: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><polyline points=\"12 7 12 12 15 14\"/></svg>',\n    certo: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>',\n    esq: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"15 18 9 12 15 6\"/></svg>',\n    dir: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 18 15 12 9 6\"/></svg>',\n    pessoas: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M23 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/></svg>',\n    cal: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/></svg>',\n    wa: '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.08c-.24.68-1.43 1.32-1.97 1.37-.5.05-1.13.07-1.82-.11-.42-.13-.96-.31-1.65-.61-2.9-1.25-4.79-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3s.75-2.13 1.02-2.42c.26-.29.58-.36.77-.36h.55c.18 0 .42-.07.65.5.24.58.82 2 .89 2.15.07.14.12.31.02.5-.1.19-.14.31-.29.48-.14.17-.3.37-.43.5-.14.14-.29.3-.13.59.17.29.74 1.22 1.59 1.97 1.09.97 2.01 1.27 2.3 1.41.29.14.46.12.63-.07.17-.19.72-.84.92-1.13.19-.29.38-.24.65-.14.26.1 1.68.79 1.97.94.29.14.48.22.55.34.07.12.07.7-.17 1.38z\"/></svg>'\n  };\n  var CSS = '.dag{--p:var(--dia-primaria,#5A0F80);--pt:var(--dia-primaria-texto,#fff);--b:var(--dia-borda,rgba(20,10,30,.12));--t:var(--dia-texto,#1A0A27);--ts:var(--dia-texto-suave,#6F5E81);--s:var(--dia-superficie,#fff);--f:var(--dia-fundo,#F7F4FA);--r:var(--dia-raio,18px);font-family:var(--dia-fonte-texto,inherit);color:var(--t);max-width:760px;margin:0 auto;}'\n    + '.dag *{box-sizing:border-box;}'\n    + '.dag-caixa{background:var(--s);border:1px solid var(--b);border-radius:calc(var(--r) + 6px);box-shadow:0 30px 70px -40px rgba(20,10,40,.45);overflow:hidden;}'\n    + '.dag-topo{display:flex;align-items:center;gap:12px;padding:18px 22px;border-bottom:1px solid var(--b);}'\n    + '.dag-topo h3{margin:0;font-family:var(--dia-fonte-titulos,inherit);font-size:19px;letter-spacing:-.01em;flex:1;color:var(--t);}'\n    + '.dag-passos{display:flex;gap:6px;}.dag-passos i{width:22px;height:5px;border-radius:9px;background:var(--b);transition:background .3s,width .3s;}.dag-passos i.on{background:var(--p);width:34px;}'\n    + '.dag-voltar{width:36px;height:36px;border-radius:50%;border:1px solid var(--b);background:transparent;color:var(--t);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}.dag-voltar svg{width:17px;height:17px;}.dag-voltar[hidden]{display:none;}'\n    + '.dag-corpo{padding:20px 22px 24px;animation:dagEntra .3s ease-out;}@keyframes dagEntra{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}'\n    + '.dag-tit{font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ts);margin:0 0 12px;}'\n    + '.dag-servicos{display:grid;gap:10px;}'\n    + '.dag-servico{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:16px 18px;border-radius:var(--r);border:1.5px solid var(--b);background:var(--s);color:var(--t);cursor:pointer;font:inherit;transition:border-color .2s,transform .2s,box-shadow .2s;}'\n    + '.dag-servico:hover{border-color:var(--p);transform:translateY(-2px);box-shadow:0 14px 30px -18px rgba(20,10,40,.4);}'\n    + '.dag-servico b{display:block;font-size:16px;margin-bottom:3px;}.dag-servico small{display:block;color:var(--ts);font-size:13.5px;line-height:1.45;}'\n    + '.dag-servico .dag-meta{display:flex;gap:10px;align-items:center;margin-top:7px;font-size:13px;color:var(--ts);}.dag-servico .dag-meta svg{width:14px;height:14px;vertical-align:-2px;margin-right:3px;}'\n    + '.dag-preco{margin-left:auto;font-weight:800;font-size:15px;white-space:nowrap;color:var(--p);}'\n    + '.dag-equipa{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}'\n    + '.dag-pessoa{display:flex;flex-direction:column;align-items:center;gap:8px;padding:18px 12px;border-radius:var(--r);border:1.5px solid var(--b);background:var(--s);color:var(--t);cursor:pointer;font:inherit;text-align:center;transition:border-color .2s,transform .2s;}'\n    + '.dag-pessoa:hover{border-color:var(--p);transform:translateY(-2px);}.dag-pessoa small{color:var(--ts);font-size:12.5px;}'\n    + '.dag-av{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--p);color:var(--pt);font-weight:800;font-size:19px;}.dag-av svg{width:24px;height:24px;}'\n    + '.dag-dias-cab{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;}.dag-dias-cab b{display:inline-block;font-size:15px;}.dag-dias-cab b::first-letter{text-transform:uppercase;}'\n    + '.dag-setas{display:flex;gap:6px;}.dag-setas button{width:34px;height:34px;border-radius:50%;border:1px solid var(--b);background:var(--s);color:var(--t);cursor:pointer;display:flex;align-items:center;justify-content:center;}.dag-setas button:disabled{opacity:.35;cursor:default;}.dag-setas svg{width:16px;height:16px;}'\n    + '.dag-dias{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:18px;}'\n    + '.dag-dia{display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 2px;border-radius:14px;border:1.5px solid var(--b);background:var(--s);color:var(--t);cursor:pointer;font:inherit;transition:all .2s;}'\n    + '.dag-dia small{font-size:11px;color:var(--ts);text-transform:uppercase;letter-spacing:.04em;}.dag-dia b{font-size:18px;}.dag-dia i{width:5px;height:5px;border-radius:50%;background:var(--p);opacity:.8;}'\n    + '.dag-dia:disabled{opacity:.32;cursor:default;}.dag-dia:disabled i{visibility:hidden;}.dag-dia:not(:disabled):hover{border-color:var(--p);}'\n    + '.dag-dia.on{background:var(--p);border-color:var(--p);color:var(--pt);}.dag-dia.on small{color:var(--pt);opacity:.85;}.dag-dia.on i{background:var(--pt);}'\n    + '.dag-grupo{margin-bottom:14px;}.dag-grupo small{display:block;font-size:12px;font-weight:700;color:var(--ts);margin-bottom:8px;}'\n    + '.dag-horas{display:grid;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:8px;}'\n    + '.dag-hora{padding:11px 4px;border-radius:12px;border:1.5px solid var(--b);background:var(--s);color:var(--t);font:inherit;font-weight:700;font-size:15px;cursor:pointer;font-variant-numeric:tabular-nums;transition:all .15s;}'\n    + '.dag-hora:hover{border-color:var(--p);color:var(--p);}'\n    + '.dag-vazio{padding:22px;border-radius:var(--r);background:var(--f);color:var(--ts);text-align:center;font-size:14px;}'\n    + '.dag-resumo{display:flex;gap:14px;align-items:center;padding:14px 16px;border-radius:var(--r);background:var(--f);margin-bottom:16px;}'\n    + '.dag-resumo .dag-av{width:46px;height:46px;font-size:16px;flex-shrink:0;border-radius:14px;}.dag-resumo b{display:block;font-size:15px;}.dag-resumo small{display:block;color:var(--ts);font-size:13px;margin-top:2px;}.dag-resumo small::first-letter{text-transform:uppercase;}'\n    + '.dag-campos{display:grid;grid-template-columns:1fr 1fr;gap:10px;}.dag-campo{display:flex;flex-direction:column;gap:5px;}.dag-campo.largo{grid-column:1/-1;}'\n    + '.dag-campo label{font-size:12.5px;font-weight:700;color:var(--ts);}'\n    + '.dag input,.dag textarea{width:100%;padding:12px 14px;border-radius:12px;border:1.5px solid var(--b);background:var(--s);color:var(--t);font:inherit;font-size:15px;outline:none;}'\n    + '.dag input:focus,.dag textarea:focus{border-color:var(--p);}.dag textarea{min-height:70px;resize:vertical;}'\n    + '.dag-pag{margin-top:16px;padding:16px;border-radius:var(--r);border:1.5px dashed var(--b);}'\n    + '.dag-pag p{margin:0 0 12px;font-size:13.5px;color:var(--ts);line-height:1.5;}.dag-pag-valor{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}.dag-pag-valor b{font-size:20px;color:var(--p);}'\n    + '.dag-metodos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}'\n    + '.dag-metodo{padding:12px 6px;border-radius:12px;border:1.5px solid var(--b);background:var(--s);color:var(--t);font:inherit;font-weight:800;font-size:13.5px;cursor:pointer;}'\n    + '.dag-metodo.on{border-color:var(--p);box-shadow:0 0 0 3px color-mix(in srgb,var(--p) 18%,transparent);}'\n    + '.dag-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:16px;padding:16px;border-radius:14px;border:none;background:var(--p);color:var(--pt);font:inherit;font-weight:800;font-size:16px;cursor:pointer;transition:transform .15s,opacity .2s;}'\n    + '.dag-btn:hover:not(:disabled){transform:translateY(-1px);}.dag-btn:disabled{opacity:.6;cursor:default;}.dag-btn svg{width:18px;height:18px;}'\n    + '.dag-btn.sec{background:transparent;color:var(--t);border:1.5px solid var(--b);}.dag-btn.wa{background:#25D366;color:#fff;}'\n    + '.dag-erro{color:#C0392B;font-size:13.5px;margin-top:10px;min-height:1px;}'\n    + '.dag-nota{font-size:12.5px;color:var(--ts);margin-top:10px;text-align:center;}'\n    + '.dag-feito{text-align:center;padding:10px 4px 4px;}.dag-feito-ic{width:74px;height:74px;margin:0 auto 14px;border-radius:50%;background:var(--p);color:var(--pt);display:flex;align-items:center;justify-content:center;animation:dagPop .5s cubic-bezier(.2,1.4,.4,1);}.dag-feito-ic svg{width:34px;height:34px;}'\n    + '@keyframes dagPop{from{transform:scale(.3);opacity:0}to{transform:none;opacity:1}}'\n    + '.dag-feito h4{margin:0 0 6px;font-family:var(--dia-fonte-titulos,inherit);font-size:22px;}.dag-feito p{margin:0 0 16px;color:var(--ts);font-size:14.5px;}'\n    + '.dag-feito .dag-resumo{text-align:left;}'\n    + '.dag-palco{position:relative;width:100%;max-width:400px;margin:0 auto;border-radius:16px;border:1px solid var(--b);overflow:hidden;overflow:clip;background:#fff;}'\n    + '.dag-palco iframe{position:absolute;left:0;width:100%;border:0;}'\n    + '.dag-espera{display:flex;align-items:center;gap:10px;justify-content:center;font-size:13.5px;color:var(--ts);margin-top:12px;}.dag-espera i{width:9px;height:9px;border-radius:50%;background:#F5A623;animation:dagPisca 1.2s infinite;}@keyframes dagPisca{50%{opacity:.3}}'\n    + '.dag-link{display:block;text-align:center;margin-top:8px;font-size:12.5px;color:var(--ts);}'\n    + '.dag-previa{margin:0 0 12px;padding:10px 14px;border-radius:12px;background:var(--f);color:var(--ts);font-size:12.5px;text-align:center;}'\n    + '@media (max-width:560px){.dag-topo{padding:14px 16px;}.dag-corpo{padding:16px;}.dag-campos{grid-template-columns:1fr;}.dag-passos i{width:14px;}.dag-passos i.on{width:24px;}.dag-dias{gap:4px;}.dag-dia{padding:8px 0;border-radius:11px;}.dag-dia b{font-size:16px;}.dag-servico{padding:14px;}}';\n\n  var st = { info: null, passo: 0, servico: null, prof: null, inicio: hojeLocal(), dia: '', hora: '', dias: {}, metodo: '', marcacao: null, poll: null };\n  var raiz = null;\n\n  function iniciar(){\n    raiz = document.getElementById('daniel-ia-agenda');\n    if (!raiz || raiz.getAttribute('data-dag')) return;\n    raiz.setAttribute('data-dag', '1');\n    if (!document.getElementById('dag-css')) { var s = document.createElement('style'); s.id = 'dag-css'; s.textContent = CSS; document.head.appendChild(s); }\n    raiz.innerHTML = '<div class=\"dag\"><div class=\"dag-caixa\"><div class=\"dag-topo\"><button type=\"button\" class=\"dag-voltar\" hidden aria-label=\"' + esc(tx('Voltar')) + '\">' + IC.esq + '</button><h3>' + esc(tx('Marcar horário')) + '</h3><div class=\"dag-passos\"><i></i><i></i><i></i><i></i></div></div><div class=\"dag-corpo\"><div class=\"dag-vazio\">' + esc(tx('A carregar...')) + '</div></div></div></div>';\n    raiz.querySelector('.dag-voltar').addEventListener('click', voltar);\n    post('/agenda-info', { site_id: SITE }).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      st.info = r.response;\n      mostrar(0);\n    }).catch(function(e){ corpo('<div class=\"dag-vazio\">' + esc(e.message || tx('Algo correu mal. Tenta outra vez.')) + '</div>'); });\n  }\n  function corpo(html){ var c = raiz.querySelector('.dag-corpo'); c.innerHTML = (st.info && st.info.previa ? '<p class=\"dag-previa\">' + esc(tx('Pré-visualização: no teu site a marcação fica feita a sério.')) + '</p>' : '') + html; c.style.animation = 'none'; void c.offsetWidth; c.style.animation = ''; return c; }\n  function passos(n){ Array.prototype.forEach.call(raiz.querySelectorAll('.dag-passos i'), function(i, k){ i.classList.toggle('on', k <= n); }); raiz.querySelector('.dag-voltar').hidden = n === 0 || n >= 9; }\n  function equipaPara(s){ return (st.info.equipa || []).filter(function(p){ return p.todos || (p.servicos || []).indexOf(s.id) >= 0; }); }\n  function voltar(){\n    if (st.passo === 3) return mostrar(2);\n    if (st.passo === 2) return mostrar(st.info.tem_equipa && equipaPara(st.servico).length > 1 ? 1 : 0);\n    if (st.passo === 1) return mostrar(0);\n  }\n  function mostrar(n){\n    st.passo = n;\n    passos(n === 9 ? 3 : n);\n    if (n === 0) return passoServico();\n    if (n === 1) return passoEquipa();\n    if (n === 2) return passoDia();\n    if (n === 3) return passoDados();\n  }\n  function iniciais(nome){ return String(nome || '?').trim().split(/\\s+/).slice(0, 2).map(function(x){ return x.charAt(0).toUpperCase(); }).join(''); }\n\n  function passoServico(){\n    var l = st.info.servicos || [];\n    var c = corpo('<p class=\"dag-tit\">' + esc(tx('Escolhe o serviço')) + '</p><div class=\"dag-servicos\">' + l.map(function(s, i){\n      return '<button type=\"button\" class=\"dag-servico\" data-i=\"' + i + '\"><span style=\"min-width:0\"><b>' + esc(s.nome) + '</b>' + (s.descricao ? '<small>' + esc(s.descricao) + '</small>' : '') + '<span class=\"dag-meta\">' + IC.relogio + esc(dur(s.duracao)) + '</span></span><span class=\"dag-preco\">' + esc(mzn(s.preco)) + '</span></button>';\n    }).join('') + '</div>');\n    Array.prototype.forEach.call(c.querySelectorAll('.dag-servico'), function(b){\n      b.addEventListener('click', function(){\n        st.servico = l[Number(b.getAttribute('data-i'))];\n        var eq = equipaPara(st.servico);\n        st.prof = null;\n        if (st.info.tem_equipa && eq.length > 1) mostrar(1);\n        else { st.prof = eq.length === 1 ? eq[0] : null; mostrar(2); }\n      });\n    });\n  }\n  function passoEquipa(){\n    var eq = equipaPara(st.servico);\n    var c = corpo('<p class=\"dag-tit\">' + esc(tx('Com quem?')) + '</p><div class=\"dag-equipa\"><button type=\"button\" class=\"dag-pessoa\" data-p=\"qualquer\"><span class=\"dag-av\">' + IC.pessoas + '</span><b>' + esc(tx('Qualquer pessoa disponível')) + '</b></button>'\n      + eq.map(function(p, i){ return '<button type=\"button\" class=\"dag-pessoa\" data-p=\"' + i + '\"><span class=\"dag-av\">' + esc(iniciais(p.nome)) + '</span><b>' + esc(p.nome) + '</b>' + (p.cargo ? '<small>' + esc(p.cargo) + '</small>' : '') + '</button>'; }).join('') + '</div>');\n    Array.prototype.forEach.call(c.querySelectorAll('.dag-pessoa'), function(b){\n      b.addEventListener('click', function(){ var v = b.getAttribute('data-p'); st.prof = v === 'qualquer' ? null : eq[Number(v)]; mostrar(2); });\n    });\n  }\n  function profId(){ return st.prof ? st.prof.id : 'qualquer'; }\n  function passoDia(){\n    var maxDias = Math.max(7, st.info.dias_max || 30);\n    var limite = somarDias(hojeLocal(), maxDias);\n    var dias = []; for (var i = 0; i < 7; i++) dias.push(somarDias(st.inicio, i));\n    var c = corpo('<div class=\"dag-dias-cab\"><b>' + esc(fmtData(dias[3], { month: 'long', year: 'numeric' })) + '</b><div class=\"dag-setas\"><button type=\"button\" data-s=\"-1\" aria-label=\"-\" ' + (st.inicio <= hojeLocal() ? 'disabled' : '') + '>' + IC.esq + '</button><button type=\"button\" data-s=\"1\" aria-label=\"+\" ' + (somarDias(st.inicio, 7) > limite ? 'disabled' : '') + '>' + IC.dir + '</button></div></div>'\n      + '<div class=\"dag-dias\">' + dias.map(function(d){ var n = st.dias[d]; var ok = n === undefined ? true : n > 0; return '<button type=\"button\" class=\"dag-dia' + (d === st.dia ? ' on' : '') + '\" data-d=\"' + d + '\" ' + (ok && d <= limite ? '' : 'disabled') + '><small>' + esc(fmtData(d, { weekday: 'short' }).replace('.', '')) + '</small><b>' + Number(d.slice(8)) + '</b><i></i></button>'; }).join('') + '</div>'\n      + '<div id=\"dag-horas\"></div>');\n    Array.prototype.forEach.call(c.querySelectorAll('[data-s]'), function(b){ b.addEventListener('click', function(){ st.inicio = somarDias(st.inicio, 7 * Number(b.getAttribute('data-s'))); if (st.inicio < hojeLocal()) st.inicio = hojeLocal(); passoDia(); }); });\n    Array.prototype.forEach.call(c.querySelectorAll('.dag-dia'), function(b){ b.addEventListener('click', function(){ st.dia = b.getAttribute('data-d'); Array.prototype.forEach.call(c.querySelectorAll('.dag-dia'), function(x){ x.classList.toggle('on', x === b); }); horas(); }); });\n    // dias com horas livres (pinta os que não têm)\n    var chave = st.servico.id + ':' + profId() + ':' + st.inicio;\n    if (st.diasChave !== chave) {\n      st.diasChave = chave;\n      post('/agenda-dias', { site_id: SITE, servico_id: st.servico.id, profissional_id: profId(), de: st.inicio, dias: 7 }).then(function(r){\n        if (r.status !== 'success' || st.passo !== 2) return;\n        Object.keys(r.response.dias).forEach(function(d){ st.dias[d] = r.response.dias[d]; });\n        Array.prototype.forEach.call(c.querySelectorAll('.dag-dia'), function(b){ var d = b.getAttribute('data-d'); b.disabled = !(st.dias[d] > 0) || d > limite; });\n        if (!st.dia || !(st.dias[st.dia] > 0) || dias.indexOf(st.dia) < 0) {\n          var primeiro = dias.filter(function(d){ return st.dias[d] > 0; })[0];\n          if (primeiro) { st.dia = primeiro; var b = c.querySelector('[data-d=\"' + primeiro + '\"]'); if (b) b.click(); }\n          else c.querySelector('#dag-horas').innerHTML = '<div class=\"dag-vazio\">' + esc(tx('Não há horas livres neste dia.')) + '</div>';\n        }\n      });\n    } else if (st.dia && dias.indexOf(st.dia) >= 0) horas();\n  }\n  function horas(){\n    var el = raiz.querySelector('#dag-horas');\n    if (!el) return;\n    el.innerHTML = '<div class=\"dag-vazio\">' + esc(tx('A carregar...')) + '</div>';\n    var dia = st.dia;\n    post('/agenda-horas', { site_id: SITE, servico_id: st.servico.id, profissional_id: profId(), data: dia }).then(function(r){\n      if (st.dia !== dia || st.passo !== 2) return;\n      var hs = (r.status === 'success' && r.response.horas) || [];\n      if (!hs.length) { el.innerHTML = '<div class=\"dag-vazio\">' + esc(tx('Não há horas livres neste dia.')) + '</div>'; return; }\n      var grupos = [[tx('Manhã'), []], [tx('Tarde'), []], [tx('Noite'), []]];\n      hs.forEach(function(h){ var n = Number(h.slice(0, 2)); grupos[n < 12 ? 0 : (n < 18 ? 1 : 2)][1].push(h); });\n      el.innerHTML = '<p class=\"dag-tit\" style=\"text-transform:none;letter-spacing:0;font-size:14px;color:inherit\">' + esc(fmtData(dia, { weekday: 'long', day: 'numeric', month: 'long' })) + '</p>'\n        + grupos.filter(function(g){ return g[1].length; }).map(function(g){ return '<div class=\"dag-grupo\"><small>' + esc(g[0]) + '</small><div class=\"dag-horas\">' + g[1].map(function(h){ return '<button type=\"button\" class=\"dag-hora\" data-h=\"' + h + '\">' + h + '</button>'; }).join('') + '</div></div>'; }).join('');\n      Array.prototype.forEach.call(el.querySelectorAll('.dag-hora'), function(b){ b.addEventListener('click', function(){ st.hora = b.getAttribute('data-h'); mostrar(3); }); });\n    }).catch(function(){ el.innerHTML = '<div class=\"dag-vazio\">' + esc(tx('Algo correu mal. Tenta outra vez.')) + '</div>'; });\n  }\n  function valorPagar(){\n    var p = st.servico.preco || 0;\n    if (!p || st.info.pagamento === 'nenhum') return 0;\n    return st.info.pagamento === 'total' ? p : Math.max(1, Math.round(p * (st.info.sinal_pct || 30) / 100));\n  }\n  function resumoHtml(){\n    return '<div class=\"dag-resumo\"><span class=\"dag-av\">' + esc(iniciais(st.servico.nome)) + '</span><div><b>' + esc(st.servico.nome) + (st.prof ? ' · ' + esc(st.prof.nome) : '') + '</b><small>' + esc(fmtData(st.dia, { weekday: 'long', day: 'numeric', month: 'long' })) + ' · ' + esc(st.hora) + ' · ' + esc(dur(st.servico.duracao)) + '</small></div><span class=\"dag-preco\">' + esc(mzn(st.servico.preco)) + '</span></div>';\n  }\n  function passoDados(){\n    var pagar = valorPagar();\n    var c = corpo(resumoHtml() + '<p class=\"dag-tit\">' + esc(tx('Os teus dados')) + '</p>'\n      + '<div class=\"dag-campos\"><div class=\"dag-campo\"><label for=\"dag-nome\">' + esc(tx('Nome')) + '</label><input id=\"dag-nome\" autocomplete=\"name\"></div>'\n      + '<div class=\"dag-campo\"><label for=\"dag-tel\">' + esc(tx('Telefone')) + '</label><input id=\"dag-tel\" type=\"tel\" inputmode=\"tel\" autocomplete=\"tel\" placeholder=\"84 123 4567\"></div>'\n      + '<div class=\"dag-campo largo\"><label for=\"dag-email\">' + esc(tx('Email (opcional)')) + '</label><input id=\"dag-email\" type=\"email\" autocomplete=\"email\"></div>'\n      + '<div class=\"dag-campo largo\"><label for=\"dag-notas\">' + esc(tx('Notas (opcional)')) + '</label><textarea id=\"dag-notas\" maxlength=\"500\"></textarea></div></div>'\n      + (pagar ? '<div class=\"dag-pag\"><div class=\"dag-pag-valor\"><span>' + esc(st.info.pagamento === 'sinal' ? tx('Sinal') : tx('Total')) + '</span><b>' + esc(mzn(pagar)) + '</b></div><p>' + esc(st.info.pagamento === 'sinal' ? tx('Paga o sinal para garantir a hora. O resto pagas no dia.') : tx('Paga agora para garantir a hora.')) + '</p>'\n        + '<p class=\"dag-tit\" style=\"margin-bottom:8px\">' + esc(tx('Como queres pagar?')) + '</p><div class=\"dag-metodos\"><button type=\"button\" class=\"dag-metodo\" data-m=\"mpesa\">M-Pesa</button><button type=\"button\" class=\"dag-metodo\" data-m=\"emola\">e-Mola</button><button type=\"button\" class=\"dag-metodo\" data-m=\"cartao\">' + esc(tx('Cartão')) + '</button></div></div>' : '')\n      + '<div class=\"dag-erro\" id=\"dag-erro\"></div><button type=\"button\" class=\"dag-btn\" id=\"dag-ok\">' + IC.certo + '<span>' + esc(pagar ? tx('Pagar') + ' ' + mzn(pagar) : tx('Confirmar marcação')) + '</span></button>');\n    st.metodo = '';\n    Array.prototype.forEach.call(c.querySelectorAll('.dag-metodo'), function(b){ b.addEventListener('click', function(){ st.metodo = b.getAttribute('data-m'); Array.prototype.forEach.call(c.querySelectorAll('.dag-metodo'), function(x){ x.classList.toggle('on', x === b); }); }); });\n    var tel = c.querySelector('#dag-tel');\n    tel.addEventListener('input', function(){ var op = operadora(tel.value); if (op && pagar && st.metodo !== 'cartao') { var b = c.querySelector('[data-m=\"' + op + '\"]'); if (b) b.click(); } });\n    c.querySelector('#dag-ok').addEventListener('click', function(){ confirmar(pagar); });\n  }\n  function confirmar(pagar){\n    var nome = raiz.querySelector('#dag-nome').value.trim(), tel = raiz.querySelector('#dag-tel').value.trim(), email = raiz.querySelector('#dag-email').value.trim(), notas = raiz.querySelector('#dag-notas').value.trim();\n    var erro = raiz.querySelector('#dag-erro'); erro.textContent = '';\n    if (nome.length < 2) { erro.textContent = tx('Escreve o teu nome.'); return; }\n    if (soDigitos(tel).length < 9) { erro.textContent = tx('Escreve o teu número de telefone.'); return; }\n    if (email && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) { erro.textContent = tx('Esse email não parece válido.'); return; }\n    if (pagar && !st.metodo) { erro.textContent = tx('Escolhe como queres pagar.'); return; }\n    if (pagar && st.metodo !== 'cartao' && operadora(tel) !== st.metodo) { erro.textContent = tx('Este número não é M-Pesa (84/85) nem e-Mola (86/87).'); return; }\n    var btn = raiz.querySelector('#dag-ok'); btn.disabled = true; btn.querySelector('span').textContent = tx('A processar...');\n    post('/agenda-marcar', { site_id: SITE, servico_id: st.servico.id, profissional_id: profId(), data: st.dia, hora: st.hora, cliente_nome: nome, cliente_telefone: tel, cliente_email: email, notas: notas, idioma: LANG }).then(function(r){\n      if (r.status !== 'success') { var e = new Error(r.message || tx('Algo correu mal. Tenta outra vez.')); e.codigo = r.codigo; throw e; }\n      st.marcacao = r.response;\n      if (!r.response.encomenda_id) return feito();\n      return post('/loja-pagar', { encomenda_id: r.response.encomenda_id, metodo: st.metodo, telefone: tel }).then(function(rp){\n        if (rp.status !== 'success') throw new Error(rp.message || tx('Algo correu mal. Tenta outra vez.'));\n        pagamento(rp.response);\n      });\n    }).catch(function(e){\n      btn.disabled = false; btn.querySelector('span').textContent = pagar ? tx('Pagar') + ' ' + mzn(pagar) : tx('Confirmar marcação');\n      erro.textContent = e.message;\n      if (e.codigo === 'ocupado') { st.diasChave = ''; setTimeout(function(){ mostrar(2); }, 1600); }\n    });\n  }\n  function pagamento(resp){\n    passos(3);\n    raiz.querySelector('.dag-voltar').hidden = true;\n    var url = resp.checkout_url || '';\n    var alt = Number(resp.altura) || 450, corte = Math.max(0, Number(resp.corte) || 0);\n    var dentro = url && resp.embutivel !== false;\n    var c = corpo(resumoHtml()\n      + (dentro ? '<div class=\"dag-palco\" style=\"height:' + alt + 'px\"><iframe scrolling=\"no\" sandbox=\"allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox\" allow=\"payment\" style=\"top:' + (-corte) + 'px;height:' + (alt + corte) + 'px\" src=\"' + esc(url) + '\" title=\"' + esc(tx('Pagar')) + '\"></iframe></div>'\n        : (url ? '<a class=\"dag-btn\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(tx('Pagar')) + '</a>' : ''))\n      + (url && dentro ? '<a class=\"dag-link\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(tx('A página não aparece? Abrir num separador novo')) + '</a>' : '')\n      + '<div class=\"dag-espera\"><i></i><span id=\"dag-espera\">' + esc(tx('À espera da confirmação do pagamento...')) + '</span></div>'\n      + '<p class=\"dag-nota\">' + esc(tx('A hora fica reservada durante {n} minutos.', { n: st.marcacao.reserva_min || 20 })) + '</p>'\n      + '<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:8px\"><button type=\"button\" class=\"dag-btn\" id=\"dag-ja\">' + esc(tx('Já paguei')) + '</button><button type=\"button\" class=\"dag-btn sec\" id=\"dag-cancelar\">' + esc(tx('Cancelar')) + '</button></div>');\n    var palco = c.querySelector('.dag-palco');\n    if (palco) palco.addEventListener('scroll', function(){ palco.scrollTop = 0; palco.scrollLeft = 0; });\n    c.querySelector('#dag-ja').addEventListener('click', function(){ verificar(true); });\n    c.querySelector('#dag-cancelar').addEventListener('click', function(){ clearTimeout(st.poll); st.marcacao = null; st.diasChave = ''; mostrar(2); });\n    verificar(false);\n  }\n  function verificar(manual){\n    clearTimeout(st.poll);\n    if (!st.marcacao) return;\n    post('/agenda-estado', { agendamento_id: st.marcacao.agendamento_id, codigo: st.marcacao.codigo, idioma: LANG }).then(function(r){\n      if (!st.marcacao) return;\n      var e = r.status === 'success' && r.response.estado;\n      if (e === 'Confirmado' || e === 'Pendente') { st.marcacao.estado = e; st.marcacao.whatsapp_url = r.response.whatsapp_url || ''; return feito(); }\n      if (manual) { var s = raiz.querySelector('#dag-espera'); if (s) s.textContent = tx('Ainda não recebemos o pagamento. Se já pagaste, espera um pouco.'); }\n      st.poll = setTimeout(function(){ verificar(false); }, 4000);\n    }).catch(function(){ st.poll = setTimeout(function(){ verificar(false); }, 6000); });\n  }\n  window.addEventListener('message', function(e){ if (e.data && e.data.daniel === 'pagamento' && st.marcacao) verificar(false); });\n  function ics(){\n    var m = st.marcacao, f = function(iso){ return iso.replace(/[-:]/g, '').replace(/\\.\\d{3}/, ''); };\n    var txt = 'BEGIN:VCALENDAR\\r\\nVERSION:2.0\\r\\nPRODID:-//Daniel IA//Agenda//PT\\r\\nBEGIN:VEVENT\\r\\nUID:' + m.agendamento_id + '@daniel-ia.pro\\r\\nDTSTAMP:' + f(new Date().toISOString()) + '\\r\\nDTSTART:' + f(m.inicio) + '\\r\\nDTEND:' + f(m.fim) + '\\r\\nSUMMARY:' + (m.servico + ' - ' + (st.info.nome || '')).replace(/[,;\\n]/g, ' ') + '\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR';\n    return 'data:text/calendar;charset=utf-8,' + encodeURIComponent(txt);\n  }\n  function feito(){\n    clearTimeout(st.poll);\n    st.passo = 9; passos(9);\n    var m = st.marcacao, ok = m.estado === 'Confirmado';\n    var c = corpo('<div class=\"dag-feito\"><div class=\"dag-feito-ic\">' + IC.certo + '</div><h4>' + esc(ok ? tx('Marcação confirmada!') : tx('Pedido enviado!')) + '</h4><p>' + esc(ok ? (m.quando || '') : tx('O negócio vai confirmar e recebes um email.')) + '</p>' + resumoHtml()\n      + (m.whatsapp_url ? '<a class=\"dag-btn wa\" href=\"' + esc(m.whatsapp_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.wa + '<span>' + esc(tx('Enviar no WhatsApp')) + '</span></a>' : '')\n      + '<a class=\"dag-btn sec\" href=\"' + ics() + '\" download=\"marcacao.ics\">' + IC.cal + '<span>' + esc(tx('Adicionar ao calendário')) + '</span></a>'\n      + (m.gerir_url ? '<a class=\"dag-link\" href=\"' + esc(m.gerir_url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(tx('Ver ou cancelar a marcação')) + '</a>' : '')\n      + '<button type=\"button\" class=\"dag-btn sec\" id=\"dag-outra\">' + esc(tx('Fazer outra marcação')) + '</button></div>');\n    c.querySelector('#dag-outra').addEventListener('click', function(){ st.marcacao = null; st.dia = ''; st.hora = ''; st.diasChave = ''; st.dias = {}; mostrar(0); });\n    try { raiz.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}\n  }\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();\n})();\n";
+
+// ======================================================
+// Apps de agendamento (1.69.0)
+// ------------------------------------------------------
+// Tipo de site "Agendamento" (só planos pagos). O site mostra um widget
+// (agenda.js) onde o cliente escolhe o serviço, o profissional, o dia e a
+// hora, deixa os dados e - se o dono quiser - paga um sinal ou o valor
+// todo por M-Pesa/e-Mola/cartão.
+//
+//  - Configuração (serviços, equipa, horário, pagamento...) no Storage,
+//    em agenda/<siteId>.json. Na primeira vez, a IA tira os serviços da
+//    descrição do negócio.
+//  - Marcações no Bubble, tipo "agendamento" (ver PASSO no fim).
+//  - Pagamento: reaproveita a encomenda da loja (/loja-pagar, checkout,
+//    webhook, saldo para levantar). A encomenda leva nas Notas
+//    "agendamento:<id>"; quando o webhook a dá como paga, a marcação fica
+//    confirmada.
+//  - Avisos: email ao dono e ao cliente (nova, confirmada, remarcada,
+//    cancelada, lembrete na véspera) e botão de WhatsApp.
+//  - Hora de Moçambique (UTC+2, sem hora de Verão).
+// ======================================================
+const AGENDA_TZ = '+02:00';
+const AGENDA_RESERVA_MIN = 20; // uma marcação por pagar segura o horário 20 minutos
+const AGENDA_DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+const AGENDA_ESTADOS_OCUPAM = ['Confirmado', 'Pendente', 'Concluido'];
+const MSG_AGENDA_SO_PAGO = 'As apps de agendamento fazem parte dos planos pagos. Sobe de plano para criares a tua.';
+const agendaCache = new Map();
+const agendaSemeando = new Map();
+const agendaFilas = new Map();
+
+function agId() { return require('crypto').randomBytes(5).toString('hex'); }
+function agCodigo() { return require('crypto').randomBytes(12).toString('hex'); }
+function agHora(v) { const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(v || '').trim()); return m ? m[1] + ':' + m[2] : ''; }
+function agMin(h) { const [a, b] = String(h).split(':').map(Number); return a * 60 + b; }
+function agHHMM(min) { return String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0'); }
+function agData(v) { return /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(Date.parse(v + 'T00:00:00Z')) ? String(v) : ''; }
+function agISO(data, hora) { return new Date(data + 'T' + hora + ':00' + AGENDA_TZ); }
+function agDataLocal(d) { return new Date(new Date(d).getTime() + 2 * 3600000).toISOString().slice(0, 10); }
+function agHoraLocal(d) { return new Date(new Date(d).getTime() + 2 * 3600000).toISOString().slice(11, 16); }
+function agDiaSemana(data) { return AGENDA_DIAS[new Date(data + 'T12:00:00Z').getUTCDay()]; }
+function agSomarDias(data, n) { const d = new Date(data + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function agTexto(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, max); }
+
+const AGENDA_HORARIO_PADRAO = { seg: [['08:00', '17:00']], ter: [['08:00', '17:00']], qua: [['08:00', '17:00']], qui: [['08:00', '17:00']], sex: [['08:00', '17:00']], sab: [['08:00', '13:00']], dom: [] };
+function agLimparHorario(h) {
+  const r = {};
+  AGENDA_DIAS.forEach(d => {
+    const lista = Array.isArray(h && h[d]) ? h[d] : [];
+    const ok = lista.map(x => [agHora(x && x[0]), agHora(x && x[1])]).filter(x => x[0] && x[1] && agMin(x[1]) > agMin(x[0]))
+      .sort((a, b) => agMin(a[0]) - agMin(b[0])).slice(0, 3);
+    // sem sobreposições
+    r[d] = ok.filter((x, i) => i === 0 || agMin(x[0]) >= agMin(ok[i - 1][1]));
+  });
+  return r;
+}
+function agLimparConfig(c, anterior) {
+  c = c && typeof c === 'object' ? c : {};
+  const ant = anterior || {};
+  const servicos = (Array.isArray(c.servicos) ? c.servicos : []).slice(0, 60).map(s => ({
+    id: /^[a-z0-9]{4,16}$/.test(String(s && s.id)) ? String(s.id) : agId(),
+    nome: agTexto(s && s.nome, 80),
+    duracao: Math.max(5, Math.min(600, Math.round(Number(s && s.duracao) || 30))),
+    preco: Math.max(0, Math.min(10000000, Math.round(Number(s && s.preco) || 0))),
+    descricao: agTexto(s && s.descricao, 240),
+    activo: !(s && s.activo === false)
+  })).filter(s => s.nome);
+  const ids = new Set(servicos.map(s => s.id));
+  const equipa = (Array.isArray(c.equipa) ? c.equipa : []).slice(0, 40).map(p => ({
+    id: /^[a-z0-9]{4,16}$/.test(String(p && p.id)) ? String(p.id) : agId(),
+    nome: agTexto(p && p.nome, 60),
+    cargo: agTexto(p && p.cargo, 60),
+    servicos: (Array.isArray(p && p.servicos) ? p.servicos : []).map(String).filter(x => ids.has(x)),
+    todos: !(p && p.todos === false),
+    horario_proprio: !!(p && p.horario_proprio),
+    horario: agLimparHorario(p && p.horario ? p.horario : AGENDA_HORARIO_PADRAO),
+    activo: !(p && p.activo === false)
+  })).filter(p => p.nome);
+  return {
+    servicos, equipa,
+    horario: agLimparHorario(c.horario || ant.horario || AGENDA_HORARIO_PADRAO),
+    fechos: (Array.isArray(c.fechos) ? c.fechos : []).map(agData).filter(Boolean).slice(0, 120),
+    intervalo: [10, 15, 20, 30, 45, 60].includes(Number(c.intervalo)) ? Number(c.intervalo) : 30,
+    antecedencia_h: Math.max(0, Math.min(168, Math.round(Number(c.antecedencia_h != null ? c.antecedencia_h : 2)))),
+    dias_max: Math.max(1, Math.min(180, Math.round(Number(c.dias_max) || 30))),
+    pagamento: ['nenhum', 'sinal', 'total'].includes(c.pagamento) ? c.pagamento : 'nenhum',
+    sinal_pct: Math.max(5, Math.min(90, Math.round(Number(c.sinal_pct) || 30))),
+    confirmacao: c.confirmacao === 'manual' ? 'manual' : 'automatica',
+    whatsapp: numeroWhatsApp(c.whatsapp),
+    email: /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(String(c.email || '').trim()) ? String(c.email).trim().slice(0, 150) : '',
+    cancelar_h: Math.max(0, Math.min(168, Math.round(Number(c.cancelar_h != null ? c.cancelar_h : 2))))
+  };
+}
+const AGENDA_PADRAO = agLimparConfig({ servicos: [{ nome: 'Consulta', duracao: 30, preco: 0, descricao: '' }] });
+
+async function agSemear(site) {
+  // A IA tira os serviços (com duração e preço) e o horário da descrição do negócio.
+  let cfg = null;
+  try {
+    if (OPENAI_API_KEY) {
+      const pedido = 'Negócio: ' + (site['Nome'] || '') + '\nDescrição: ' + String(site['Prompt Original'] || '').slice(0, 2500)
+        + '\n\nDevolve só JSON: {"servicos":[{"nome":"...","duracao":minutos,"preco":MZN,"descricao":"frase curta"}],"horario":{"seg":[["08:00","17:00"]],...,"dom":[]}}. '
+        + 'Entre 3 e 8 serviços realistas para este negócio em Moçambique, com preços em meticais (MZN) plausíveis se a descrição não os disser, e durações realistas. '
+        + 'Se a descrição disser o horário, usa-o; senão um horário normal para o tipo de negócio (pausa de almoço = dois intervalos no mesmo dia). Nomes e descrições no idioma da descrição.';
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST', signal: AbortSignal.timeout(60000),
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: 'Organizas agendas de pequenos negócios. Respondes só com JSON válido.' }, { role: 'user', content: pedido }] })
+      });
+      const j = await r.json();
+      const t = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '');
+      const d = JSON.parse((t.match(/\{[\s\S]*\}/) || [t])[0]);
+      cfg = agLimparConfig({ servicos: d.servicos, horario: d.horario });
+      if (!cfg.servicos.length) cfg = null;
+    }
+  } catch (e) { console.error('[agenda] a IA não preparou os serviços - fica a agenda base:', e.message || e); }
+  return cfg || agLimparConfig(AGENDA_PADRAO);
+}
+async function agLer(site) {
+  const id = site._id;
+  const c = agendaCache.get(id);
+  if (c && Date.now() - c.t < 30000) return c.cfg;
+  let cfg = null;
+  try { cfg = agLimparConfig(JSON.parse((await descarregarDoBunny('agenda/' + id + '.json')).toString('utf8'))); } catch (e) { cfg = null; }
+  if (!cfg) {
+    if (!agendaSemeando.has(id)) agendaSemeando.set(id, agSemear(site).then(async n => { await agGuardar(id, n); return n; }).finally(() => agendaSemeando.delete(id)));
+    cfg = await agendaSemeando.get(id);
+  }
+  agendaCache.set(id, { t: Date.now(), cfg });
+  return cfg;
+}
+async function agGuardar(siteId, cfg) {
+  await uploadParaBunny('agenda/' + siteId + '.json', Buffer.from(JSON.stringify(cfg), 'utf8'), 'application/json; charset=utf-8');
+  agendaCache.set(siteId, { t: Date.now(), cfg });
+}
+// Pagamento que vale mesmo: só com o Daniel IA a receber (KYC aprovado).
+async function agPagamentoEfectivo(site, cfg) {
+  if (cfg.pagamento === 'nenhum') return 'nenhum';
+  const { modo } = await modoEfectivoLoja(site);
+  return modo === 'daniel' ? cfg.pagamento : 'nenhum';
+}
+function agValorAPagar(cfg, pagamento, preco) {
+  if (pagamento === 'total') return preco;
+  if (pagamento === 'sinal') return Math.max(1, Math.round(preco * cfg.sinal_pct / 100));
+  return 0;
+}
+// Uma marcação ocupa o horário? (as por pagar só durante 20 minutos)
+function agOcupa(m, agora) {
+  if (AGENDA_ESTADOS_OCUPAM.includes(m['Estado'])) return true;
+  if (m['Estado'] === 'Por pagar') return (agora - (Date.parse(m['Created Date']) || 0)) < AGENDA_RESERVA_MIN * 60000;
+  return false;
+}
+function agEstadoVisivel(m, agora) {
+  if (m['Estado'] === 'Por pagar' && !agOcupa(m, agora || Date.now())) return 'Expirado';
+  return m['Estado'] || 'Pendente';
+}
+async function agMarcacoes(siteId, de, ate) {
+  return bubbleListTodos('agendamento', [
+    { key: 'Site', constraint_type: 'equals', value: siteId },
+    { key: 'Inicio', constraint_type: 'greater than', value: new Date(de).toISOString() },
+    { key: 'Inicio', constraint_type: 'less than', value: new Date(ate).toISOString() }
+  ], 3000);
+}
+// Quem pode fazer este serviço? Sem equipa: uma agenda só ("_").
+function agProfissionais(cfg, servico, profId) {
+  const equipa = cfg.equipa.filter(p => p.activo && (p.todos || p.servicos.includes(servico.id)));
+  if (!cfg.equipa.some(p => p.activo)) return [{ id: '_', nome: '', horario_proprio: false }];
+  if (profId && profId !== 'qualquer') return equipa.filter(p => p.id === profId);
+  return equipa;
+}
+// Horas livres num dia: [{ hora, prof }]
+function agHorasLivres(cfg, servico, profId, data, marcacoes, agora) {
+  if (!servico || !data) return [];
+  if (cfg.fechos.includes(data)) return [];
+  const hoje = agDataLocal(agora);
+  if (data < hoje || data > agSomarDias(hoje, cfg.dias_max)) return [];
+  const limite = agora + cfg.antecedencia_h * 3600000;
+  const dia = agDiaSemana(data);
+  const porHora = new Map();
+  const ocupadas = marcacoes.filter(m => agOcupa(m, agora));
+  for (const p of agProfissionais(cfg, servico, profId)) {
+    const faixas = (p.horario_proprio ? p.horario : cfg.horario)[dia] || [];
+    const minhas = ocupadas.filter(m => p.id === '_' || m['Profissional'] === p.id);
+    for (const [ini, fim] of faixas) {
+      for (let t = agMin(ini); t + servico.duracao <= agMin(fim); t += cfg.intervalo) {
+        const h = agHHMM(t);
+        if (porHora.has(h)) continue;
+        const a = agISO(data, h).getTime(), b = a + servico.duracao * 60000;
+        if (a < limite) continue;
+        const choca = minhas.some(m => { const ma = Date.parse(m['Inicio']), mb = Date.parse(m['Fim']); return a < mb && b > ma; });
+        if (!choca) porHora.set(h, p.id);
+      }
+    }
+  }
+  return [...porHora.entries()].sort((x, y) => agMin(x[0]) - agMin(y[0])).map(([hora, prof]) => ({ hora, prof }));
+}
+function agEmFila(siteId, fn) {
+  const ant = agendaFilas.get(siteId) || Promise.resolve();
+  const prox = ant.then(fn);
+  const guardado = prox.catch(() => {});
+  agendaFilas.set(siteId, guardado);
+  guardado.then(() => { if (agendaFilas.get(siteId) === guardado) agendaFilas.delete(siteId); });
+  return prox;
+}
+function agPublico(m, agora) {
+  return {
+    id: m._id, servico: m['Servico Nome'] || '', servico_id: m['Servico'] || '', profissional: m['Profissional Nome'] || '', profissional_id: m['Profissional'] || '',
+    inicio: m['Inicio'], fim: m['Fim'], data: agDataLocal(m['Inicio']), hora: agHoraLocal(m['Inicio']), hora_fim: agHoraLocal(m['Fim']),
+    cliente_nome: m['Cliente Nome'] || '', cliente_telefone: m['Cliente Telefone'] || '', cliente_email: m['Cliente Email'] || '', notas: m['Notas'] || '',
+    estado: agEstadoVisivel(m, agora), valor: Number(m['Valor MZN']) || 0, pagar: Number(m['Pagar MZN']) || 0, pago: Number(m['Pago MZN']) || 0, criado: m['Created Date'] || ''
+  };
+}
+
+// ---- Emails ----
+const AG_LOCALE = { pt: 'pt-PT', en: 'en-GB', fr: 'fr-FR', es: 'es-ES' };
+function agQuando(inicio, idioma) {
+  try {
+    return new Intl.DateTimeFormat(AG_LOCALE[normalizarIdioma(idioma)] || 'pt-PT', { timeZone: 'Africa/Maputo', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }).format(new Date(inicio));
+  } catch (e) { return agDataLocal(inicio) + ' ' + agHoraLocal(inicio); }
+}
+function templateEmailAgenda({ negocio, titulo, nome, texto, linhas, botao, nota }) {
+  const tabela = (linhas || []).filter(l => l && l[1] !== '' && l[1] != null).map(l =>
+    `<tr><td style="padding:9px 0;color:#6F5E81;font-size:13px;border-bottom:1px solid #F1ECF6;width:38%;">${escaparHtml(l[0])}</td><td style="padding:9px 0;color:#1A0A27;font-size:14px;font-weight:700;border-bottom:1px solid #F1ECF6;">${escaparHtml(String(l[1]))}</td></tr>`).join('');
+  const btn = botao ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:20px 0 4px 0;">
+<a href="${escaparHtml(botao.url)}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:14.5px;padding:13px 28px;border-radius:12px;">${escaparHtml(botao.texto)}</a></td></tr></table>` : '';
+  return `<!DOCTYPE html><html lang="pt"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${escaparHtml(titulo)}</title></head>
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:30px 14px;"><tr><td align="center">
+<table role="presentation" width="100%" style="max-width:520px;background:#FFFFFF;border-radius:18px;overflow:hidden;border:1px solid #EAE2F2;">
+<tr><td style="background:#2E0644;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:26px 30px;border-bottom:4px solid #89C804;">
+<p style="margin:0;color:#C8F84A;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;">${escaparHtml(negocio || '')}</p>
+<p style="margin:8px 0 0 0;color:#FFFFFF;font-size:21px;line-height:1.3;font-weight:800;">${escaparHtml(titulo)}</p></td></tr>
+<tr><td style="padding:28px 30px 24px 30px;">
+${nome ? `<p style="margin:0 0 12px 0;color:#1A0A27;font-size:17px;font-weight:800;">Olá, ${escaparHtml(primeiroNome(nome))}!</p>` : ''}
+${texto ? `<p style="margin:0 0 16px 0;color:#4A3B5C;font-size:15px;line-height:1.6;">${escaparHtml(texto)}</p>` : ''}
+${tabela ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 6px 0;">${tabela}</table>` : ''}
+${nota ? `<p style="margin:14px 0 0 0;color:#6F5E81;font-size:13px;line-height:1.55;">${escaparHtml(nota)}</p>` : ''}
+${btn}
+</td></tr>
+<tr><td style="padding:14px 30px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;"><p style="margin:0;color:#B3A7C2;font-size:11.5px;">Marcação feita com Daniel IA · daniel-ia.pro</p></td></tr>
+</table></td></tr></table></body></html>`;
+}
+function agLinkGerir(m) { return `${SELF_URL}/agenda-gerir?id=${encodeURIComponent(m._id)}&c=${encodeURIComponent(m['Codigo'] || '')}`; }
+function agLinkPainel(siteId) { try { return new URL(APP_URL).origin + '/agenda/?site=' + encodeURIComponent(siteId); } catch (e) { return APP_URL; } }
+async function agEmailDono(site, cfg) { return cfg.email || await emailDonoLoja(site, configLoja(site)); }
+function agLinhas(m, extra) {
+  return [['Serviço', m['Servico Nome']], ['Quando', agQuando(m['Inicio'])], ['Com', m['Profissional Nome'] || ''],
+    ['Valor', Number(m['Valor MZN']) ? Number(m['Valor MZN']).toLocaleString('pt-PT') + ' MZN' : '']].concat(extra || []);
+}
+async function agAvisar(tipo, site, cfg, m) {
+  const negocio = site['Nome'] || 'A tua marcação';
+  const cliente = m['Cliente Email'];
+  const tarefas = [];
+  const paraCliente = (assunto, titulo, texto, nota, extra) => { if (cliente) tarefas.push(enviarEmail(cliente, assunto, templateEmailAgenda({ negocio, titulo, nome: m['Cliente Nome'], texto, linhas: agLinhas(m, extra), nota, botao: { texto: 'Ver ou cancelar a marcação', url: agLinkGerir(m) } }))); };
+  const paraDono = async (assunto, titulo, texto) => {
+    const e = await agEmailDono(site, cfg).catch(() => '');
+    if (e) tarefas.push(enviarEmail(e, assunto, templateEmailAgenda({ negocio, titulo, texto, linhas: agLinhas(m, [['Cliente', m['Cliente Nome']], ['Telefone', m['Cliente Telefone']], ['Email', m['Cliente Email']], ['Notas', m['Notas']], ['Pago', Number(m['Pago MZN']) ? Number(m['Pago MZN']).toLocaleString('pt-PT') + ' MZN' : '']]), botao: { texto: 'Abrir a agenda', url: agLinkPainel(site._id) } })));
+  };
+  const pago = Number(m['Pago MZN']) ? [['Pago', Number(m['Pago MZN']).toLocaleString('pt-PT') + ' MZN']] : [];
+  if (tipo === 'nova') {
+    if (m['Estado'] === 'Confirmado') paraCliente('Marcação confirmada - ' + negocio, 'A tua marcação está confirmada', 'Está tudo marcado. Até lá!', 'Se precisares de cancelar, usa o botão abaixo.', pago);
+    else paraCliente('Pedido de marcação recebido - ' + negocio, 'Recebemos o teu pedido', 'O ' + negocio + ' vai confirmar a tua marcação e recebes um email quando estiver confirmada.', '', pago);
+    await paraDono('Nova marcação: ' + (m['Cliente Nome'] || '') + ' - ' + agQuando(m['Inicio']), m['Estado'] === 'Confirmado' ? 'Nova marcação' : 'Nova marcação por confirmar', m['Estado'] === 'Confirmado' ? 'Tens uma marcação nova na agenda.' : 'Tens uma marcação nova à espera da tua confirmação.');
+  } else if (tipo === 'confirmada') paraCliente('Marcação confirmada - ' + negocio, 'A tua marcação está confirmada', 'Boa notícia: o ' + negocio + ' confirmou a tua marcação.', '', pago);
+  else if (tipo === 'remarcada') paraCliente('Marcação alterada - ' + negocio, 'A tua marcação mudou de hora', 'O ' + negocio + ' alterou a tua marcação. Vê o novo dia e hora:', 'Se não te der jeito, responde a este email ou fala com o negócio.', pago);
+  else if (tipo === 'cancelada') paraCliente('Marcação cancelada - ' + negocio, 'A tua marcação foi cancelada', 'O ' + negocio + ' cancelou esta marcação.', Number(m['Pago MZN']) ? 'Sobre o valor pago, fala directamente com o negócio.' : '', pago);
+  else if (tipo === 'cliente-cancelou') await paraDono('Marcação cancelada pelo cliente - ' + (m['Cliente Nome'] || ''), 'O cliente cancelou', (m['Cliente Nome'] || 'O cliente') + ' cancelou esta marcação. O horário ficou livre.');
+  else if (tipo === 'lembrete') paraCliente('Lembrete: a tua marcação amanhã - ' + negocio, 'Até amanhã!', 'Só para lembrar a tua marcação:', 'Se já não puderes ir, cancela para o horário ficar livre para outra pessoa.', pago);
+  await Promise.all(tarefas.map(p => p.catch(e => console.error('[agenda] email falhou:', e.message || e))));
+}
+function agWhatsapp(cfg, site, m, idioma) {
+  if (!cfg.whatsapp) return '';
+  const t = 'Olá! Acabei de marcar no site do ' + (site['Nome'] || '') + ':\n\n• ' + m['Servico Nome'] + '\n• ' + agQuando(m['Inicio'], idioma)
+    + (m['Profissional Nome'] ? '\n• Com ' + m['Profissional Nome'] : '') + '\n\nNome: ' + m['Cliente Nome'] + '\nTelefone: ' + m['Cliente Telefone'];
+  return 'https://wa.me/' + cfg.whatsapp + '?text=' + encodeURIComponent(t);
+}
+
+// ======================================================
+// Rotas públicas (o widget no site do cliente)
+// ======================================================
+const AGENDA_DEMO = agLimparConfig({ servicos: [
+  { id: 'demo0001', nome: 'Corte e brushing', duracao: 60, preco: 1200, descricao: 'Lavagem, corte à tua medida e brushing.' },
+  { id: 'demo0002', nome: 'Manicure', duracao: 45, preco: 700, descricao: 'Unhas tratadas e verniz à escolha.' },
+  { id: 'demo0003', nome: 'Tranças', duracao: 180, preco: 2500, descricao: 'Tranças com extensões, vários estilos.' }
+], equipa: [{ id: 'demo0p01', nome: 'Ana', cargo: 'Cabeleireira' }, { id: 'demo0p02', nome: 'Joana', cargo: 'Esteticista' }] });
+async function agSiteAgenda(siteId) {
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  if (!site || site['Tipo'] !== 'Agendamento') return null;
+  return site;
+}
+app.post('/agenda-info', async (req, res) => {
+  try {
+    if (req.body.site_id === 'previa' || !req.body.site_id) {
+      const c = AGENDA_DEMO;
+      return res.json({ status: 'success', response: { previa: true, nome: 'Exemplo', servicos: c.servicos, equipa: c.equipa.map(p => ({ id: p.id, nome: p.nome, cargo: p.cargo, servicos: p.servicos, todos: p.todos })), tem_equipa: true, pagamento: 'nenhum', sinal_pct: 30, dias_max: 30, whatsapp: false, confirmacao: 'automatica' } });
+    }
+    const site = await agSiteAgenda(req.body.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Agenda não encontrada.' });
+    const cfg = await agLer(site);
+    return res.json({ status: 'success', response: {
+      nome: site['Nome'] || '',
+      servicos: cfg.servicos.filter(s => s.activo).map(s => ({ id: s.id, nome: s.nome, duracao: s.duracao, preco: s.preco, descricao: s.descricao })),
+      equipa: cfg.equipa.filter(p => p.activo).map(p => ({ id: p.id, nome: p.nome, cargo: p.cargo, servicos: p.servicos, todos: p.todos })),
+      tem_equipa: cfg.equipa.some(p => p.activo),
+      pagamento: await agPagamentoEfectivo(site, cfg), sinal_pct: cfg.sinal_pct, dias_max: cfg.dias_max,
+      whatsapp: !!cfg.whatsapp, confirmacao: cfg.confirmacao
+    } });
+  } catch (erro) {
+    console.error('Erro em /agenda-info:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível abrir a agenda.' });
+  }
+});
+app.post('/agenda-dias', async (req, res) => {
+  try {
+    const de = agData(req.body.de) || agDataLocal(Date.now());
+    const n = Math.max(1, Math.min(42, parseInt(req.body.dias, 10) || 21));
+    const previa = req.body.site_id === 'previa';
+    const site = previa ? null : await agSiteAgenda(req.body.site_id);
+    if (!previa && !site) return res.json({ status: 'error', message: 'Agenda não encontrada.' });
+    const cfg = previa ? AGENDA_DEMO : await agLer(site);
+    const servico = cfg.servicos.find(s => s.id === req.body.servico_id && s.activo);
+    if (!servico) return res.json({ status: 'error', message: 'Escolhe um serviço.' });
+    const agora = Date.now();
+    const marc = previa ? [] : await agMarcacoes(site._id, agISO(de, '00:00').getTime() - 864e5, agISO(agSomarDias(de, n), '00:00').getTime() + 864e5);
+    const dias = {};
+    for (let i = 0; i < n; i++) { const d = agSomarDias(de, i); dias[d] = agHorasLivres(cfg, servico, req.body.profissional_id, d, marc, agora).length; }
+    return res.json({ status: 'success', response: { dias } });
+  } catch (erro) {
+    console.error('Erro em /agenda-dias:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ver os dias livres.' });
+  }
+});
+app.post('/agenda-horas', async (req, res) => {
+  try {
+    const data = agData(req.body.data);
+    if (!data) return res.json({ status: 'error', message: 'Escolhe um dia.' });
+    const previa = req.body.site_id === 'previa';
+    const site = previa ? null : await agSiteAgenda(req.body.site_id);
+    if (!previa && !site) return res.json({ status: 'error', message: 'Agenda não encontrada.' });
+    const cfg = previa ? AGENDA_DEMO : await agLer(site);
+    const servico = cfg.servicos.find(s => s.id === req.body.servico_id && s.activo);
+    if (!servico) return res.json({ status: 'error', message: 'Escolhe um serviço.' });
+    const marc = previa ? [] : await agMarcacoes(site._id, agISO(data, '00:00').getTime() - 864e5, agISO(data, '00:00').getTime() + 2 * 864e5);
+    return res.json({ status: 'success', response: { horas: agHorasLivres(cfg, servico, req.body.profissional_id, data, marc, Date.now()).map(x => x.hora) } });
+  } catch (erro) {
+    console.error('Erro em /agenda-horas:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ver as horas livres.' });
+  }
+});
+// Cria a marcação (verifica outra vez se a hora está livre, numa fila por site).
+async function agCriarMarcacao({ site, cfg, servicoId, profId, data, hora, cliente, origem, ignorarConflito }) {
+  const servico = cfg.servicos.find(s => s.id === servicoId && (s.activo || origem === 'dono'));
+  if (!servico) throw Object.assign(new Error('servico'), { publico: 'Este serviço já não está disponível.' });
+  return agEmFila(site._id, async () => {
+    const agora = Date.now();
+    let prof = null;
+    if (!ignorarConflito) {
+      const marc = await agMarcacoes(site._id, agISO(data, '00:00').getTime() - 864e5, agISO(data, '00:00').getTime() + 2 * 864e5);
+      const livres = agHorasLivres(origem === 'dono' ? Object.assign({}, cfg, { antecedencia_h: 0 }) : cfg, servico, profId, data, marc, agora);
+      const h = livres.find(x => x.hora === hora);
+      if (!h) throw Object.assign(new Error('ocupado'), { publico: 'Esta hora acabou de ficar ocupada. Escolhe outra.', codigo: 'ocupado' });
+      prof = h.prof;
+    } else prof = profId && profId !== 'qualquer' ? profId : '_';
+    const p = cfg.equipa.find(x => x.id === prof);
+    const inicio = agISO(data, hora);
+    const dados = {
+      'Site': site._id, 'Owner': site['Owner'], 'Servico': servico.id, 'Servico Nome': servico.nome,
+      'Profissional': p ? p.id : '', 'Profissional Nome': p ? p.nome : '',
+      'Inicio': inicio.toISOString(), 'Fim': new Date(inicio.getTime() + servico.duracao * 60000).toISOString(),
+      'Cliente Nome': agTexto(cliente.nome, 100), 'Cliente Telefone': agTexto(cliente.telefone, 20),
+      'Cliente Email': /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(String(cliente.email || '').trim()) ? String(cliente.email).trim().slice(0, 150) : '',
+      'Notas': agTexto(cliente.notas, 500), 'Valor MZN': servico.preco, 'Pagar MZN': 0, 'Pago MZN': 0,
+      'Estado': 'Pendente', 'Codigo': agCodigo(), 'Lembrete': false, 'Encomenda': ''
+    };
+    return { servico, dados };
+  });
+}
+app.post('/agenda-marcar', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.site_id === 'previa') return res.json({ status: 'error', message: 'Isto é só uma pré-visualização - no teu site a marcação fica feita.' });
+    const site = await agSiteAgenda(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Agenda não encontrada.' });
+    const data = agData(b.data), hora = agHora(b.hora);
+    if (!data || !hora) return res.json({ status: 'error', message: 'Escolhe o dia e a hora.' });
+    if (agTexto(b.cliente_nome, 100).length < 2) return res.json({ status: 'error', message: 'Escreve o teu nome.' });
+    if (soDigitos(b.cliente_telefone).length < 9) return res.json({ status: 'error', message: 'Escreve o teu número de telefone.' });
+    const cfg = await agLer(site);
+    const pagamento = await agPagamentoEfectivo(site, cfg);
+    const { servico, dados } = await agCriarMarcacao({ site, cfg, servicoId: b.servico_id, profId: b.profissional_id, data, hora, cliente: { nome: b.cliente_nome, telefone: b.cliente_telefone, email: b.cliente_email, notas: b.notas }, origem: 'cliente' });
+    const pagar = servico.preco > 0 ? agValorAPagar(cfg, pagamento, servico.preco) : 0;
+    if (pagar > 0) { dados['Estado'] = 'Por pagar'; dados['Pagar MZN'] = pagar; }
+    else dados['Estado'] = cfg.confirmacao === 'manual' ? 'Pendente' : 'Confirmado';
+    const id = await bubbleCreate('agendamento', dados);
+    const m = Object.assign({ _id: id, 'Created Date': new Date().toISOString() }, dados);
+    const resposta = { agendamento_id: id, codigo: dados['Codigo'], estado: dados['Estado'], pagar, valor: servico.preco, quando: agQuando(dados['Inicio'], b.idioma), inicio: dados['Inicio'], fim: dados['Fim'], servico: servico.nome, profissional: dados['Profissional Nome'], gerir_url: agLinkGerir(m) };
+    if (pagar > 0) {
+      const encomendaId = await bubbleCreate('encomenda', {
+        'Site': site._id, 'Produtos Json': JSON.stringify([{ nome: 'Marcação: ' + servico.nome + ' - ' + agDataLocal(dados['Inicio']) + ' ' + agHoraLocal(dados['Inicio']) + (pagamento === 'sinal' ? ' (sinal)' : ''), preco_unitario: pagar, quantidade: 1 }]),
+        'Cliente Nome': dados['Cliente Nome'], 'Cliente Telefone': dados['Cliente Telefone'], 'Cliente Email': dados['Cliente Email'],
+        'Valor Total': pagar, 'Metodo': '', 'ID Pagamento': '', 'Estado': 'Pendente', 'Transaction ID': '', 'Webhook Processado': false,
+        'Notas': 'agendamento:' + id
+      });
+      await bubblePatch('agendamento', id, { 'Encomenda': encomendaId });
+      resposta.encomenda_id = encomendaId;
+      resposta.reserva_min = AGENDA_RESERVA_MIN;
+    } else {
+      agAvisar('nova', site, cfg, m).catch(() => {});
+      resposta.whatsapp_url = agWhatsapp(cfg, site, m, b.idioma);
+    }
+    return res.json({ status: 'success', response: resposta });
+  } catch (erro) {
+    if (erro.publico) return res.json({ status: 'error', codigo: erro.codigo || '', message: erro.publico });
+    console.error('Erro em /agenda-marcar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível fazer a marcação. Tenta outra vez.' });
+  }
+});
+async function agMarcacaoComCodigo(id, codigo) {
+  if (!ID_VALIDO.test(String(id || '')) || !codigo) return null;
+  const m = await bubbleGet('agendamento', id).catch(() => null);
+  if (!m || !m['Codigo']) return null;
+  const a = Buffer.from(String(codigo)), b2 = Buffer.from(String(m['Codigo']));
+  return a.length === b2.length && require('crypto').timingSafeEqual(a, b2) ? m : null;
+}
+app.post('/agenda-estado', async (req, res) => {
+  try {
+    const m = await agMarcacaoComCodigo(req.body.agendamento_id, req.body.codigo);
+    if (!m) return res.json({ status: 'error', message: 'Marcação não encontrada.' });
+    const site = await bubbleGet('site', m['Site']).catch(() => null);
+    const cfg = site ? await agLer(site) : null;
+    const r = { estado: agEstadoVisivel(m), pago: Number(m['Pago MZN']) || 0 };
+    if (cfg && site && m['Estado'] === 'Confirmado') r.whatsapp_url = agWhatsapp(cfg, site, m, req.body.idioma);
+    return res.json({ status: 'success', response: r });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível ver o estado.' });
+  }
+});
+app.post('/agenda-cancelar', async (req, res) => {
+  try {
+    const m = await agMarcacaoComCodigo(req.body.agendamento_id, req.body.codigo);
+    if (!m) return res.json({ status: 'error', message: 'Marcação não encontrada.' });
+    if (['Cancelado', 'Concluido', 'Faltou'].includes(m['Estado'])) return res.json({ status: 'success', response: { estado: m['Estado'] } });
+    const site = await bubbleGet('site', m['Site']).catch(() => null);
+    const cfg = site ? await agLer(site) : AGENDA_PADRAO;
+    if (Date.parse(m['Inicio']) - Date.now() < cfg.cancelar_h * 3600000) {
+      return res.json({ status: 'error', message: cfg.cancelar_h ? 'Já não dá para cancelar por aqui (falta menos de ' + cfg.cancelar_h + 'h). Fala directamente com o negócio.' : 'Esta marcação já passou.' });
+    }
+    await bubblePatch('agendamento', m._id, { 'Estado': 'Cancelado' });
+    m['Estado'] = 'Cancelado';
+    if (site) agAvisar('cliente-cancelou', site, cfg, m).catch(() => {});
+    return res.json({ status: 'success', response: { estado: 'Cancelado' } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível cancelar.' });
+  }
+});
+// Página simples (link dos emails) para o cliente ver e cancelar a marcação.
+app.get('/agenda-gerir', async (req, res) => {
+  const m = await agMarcacaoComCodigo(req.query.id, req.query.c).catch(() => null);
+  const site = m ? await bubbleGet('site', m['Site']).catch(() => null) : null;
+  const estado = m ? agEstadoVisivel(m) : '';
+  const e = escaparHtml;
+  const corpo = !m ? '<h1>Marcação não encontrada</h1><p>O link pode estar incompleto. Fala directamente com o negócio.</p>'
+    : `<p class="eti">${e((site && site['Nome']) || '')}</p><h1>A tua marcação</h1>
+<dl><dt>Serviço</dt><dd>${e(m['Servico Nome'])}</dd><dt>Quando</dt><dd>${e(agQuando(m['Inicio']))}</dd>${m['Profissional Nome'] ? `<dt>Com</dt><dd>${e(m['Profissional Nome'])}</dd>` : ''}<dt>Estado</dt><dd><span class="est est-${e(estado.toLowerCase())}">${e({ Confirmado: 'Confirmada', Pendente: 'À espera de confirmação', 'Por pagar': 'À espera do pagamento', Cancelado: 'Cancelada', Concluido: 'Concluída', Faltou: 'Faltou', Expirado: 'Expirou (não foi paga)' }[estado] || estado)}</span></dd></dl>
+${['Confirmado', 'Pendente'].includes(estado) ? `<button id="cancelar">Cancelar a marcação</button><p id="msg"></p>` : ''}
+${site && site['CDN URL'] ? `<a class="voltar" href="${e(site['CDN URL'])}">Voltar ao site</a>` : ''}`;
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html><html lang="pt"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>A tua marcação</title><meta name="robots" content="noindex">
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1A0A27;padding:20px;box-sizing:border-box}
+main{width:100%;max-width:440px;background:#fff;border:1px solid #EAE2F2;border-radius:20px;padding:30px 26px;box-shadow:0 30px 70px -30px rgba(46,6,68,.35)}
+.eti{margin:0 0 6px;color:#5E9100;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}h1{margin:0 0 18px;font-size:23px}
+dl{display:grid;grid-template-columns:auto 1fr;gap:10px 16px;margin:0 0 22px}dt{color:#6F5E81;font-size:13px}dd{margin:0;font-weight:700;font-size:14.5px}
+.est{display:inline-block;padding:4px 10px;border-radius:99px;background:#F1E9F8;font-size:12.5px}.est-confirmado{background:#EAF6D6;color:#3B6A00}.est-cancelado,.est-expirado{background:#FDE7EC;color:#B0123A}
+button{width:100%;padding:14px;border-radius:12px;border:1px solid #E7B9C5;background:#fff;color:#B0123A;font:800 15px inherit;cursor:pointer}button.armado{background:#B0123A;color:#fff}
+#msg{font-size:13.5px;color:#6F5E81;min-height:1em}.voltar{display:block;text-align:center;margin-top:16px;color:#5A0F80;font-weight:700;text-decoration:none}</style></head>
+<body><main>${corpo}</main>
+<script>(function(){var b=document.getElementById('cancelar');if(!b)return;b.addEventListener('click',function(){
+if(!b.classList.contains('armado')){b.classList.add('armado');b.textContent='Toca outra vez para cancelar';return;}
+b.disabled=true;fetch(${JSON.stringify(SELF_URL + '/agenda-cancelar')},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agendamento_id:${JSON.stringify(m ? m._id : '')},codigo:${JSON.stringify(m ? String(req.query.c || '') : '')}})})
+.then(function(r){return r.json();}).then(function(r){if(r.status==='success'){location.reload();}else{b.disabled=false;document.getElementById('msg').textContent=r.message||'Não foi possível cancelar.';}})
+.catch(function(){b.disabled=false;document.getElementById('msg').textContent='Sem ligação.';});});})();</script></body></html>`);
+});
+
+// Pagamento confirmado pelo webhook da loja (encomenda com "agendamento:<id>").
+async function agendaPagamentoConfirmado(encomenda) {
+  const id = String(encomenda['Notas'] || '').slice('agendamento:'.length);
+  const m = await bubbleGet('agendamento', id).catch(() => null);
+  if (!m) return;
+  const site = await bubbleGet('site', m['Site']).catch(() => null);
+  const cfg = site ? await agLer(site) : AGENDA_PADRAO;
+  const novo = { 'Pago MZN': Number(encomenda['Valor Total']) || 0, 'Estado': cfg.confirmacao === 'manual' ? 'Pendente' : 'Confirmado' };
+  await bubblePatch('agendamento', m._id, novo);
+  Object.assign(m, novo);
+  if (site) await agAvisar('nova', site, cfg, m);
+}
+
+// ======================================================
+// Rotas do dono (página /agenda/ da app)
+// ======================================================
+async function agSiteDoDono(req, res) {
+  const site = req.body.site_id ? await bubbleGet('site', req.body.site_id).catch(() => null) : null;
+  if (!site || site['Owner'] !== req.body.owner) { res.json({ status: 'error', message: 'Não tens permissão para esta agenda.' }); return null; }
+  if (site['Tipo'] !== 'Agendamento') { res.json({ status: 'error', message: 'Este projecto não é uma app de agendamento.' }); return null; }
+  return site;
+}
+app.post('/agenda-config-ler', async (req, res) => {
+  try {
+    const site = await agSiteDoDono(req, res);
+    if (!site) return;
+    const cfg = await agLer(site);
+    const kyc = await kycAprovadoCache(site['Owner']).catch(() => false);
+    return res.json({ status: 'success', response: { config: cfg, kyc_aprovado: !!kyc, pagamento_efectivo: await agPagamentoEfectivo(site, cfg), site: { nome: site['Nome'] || '', cdn_url: site['CDN URL'] || '' } } });
+  } catch (erro) {
+    console.error('Erro em /agenda-config-ler:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível abrir a agenda.' });
+  }
+});
+app.post('/agenda-config-guardar', async (req, res) => {
+  try {
+    const site = await agSiteDoDono(req, res);
+    if (!site) return;
+    const anterior = await agLer(site);
+    const cfg = agLimparConfig(req.body.config, anterior);
+    if (!cfg.servicos.length) return res.json({ status: 'error', message: 'Tem de haver pelo menos um serviço.' });
+    await agGuardar(site._id, cfg);
+    return res.json({ status: 'success', response: { config: cfg, pagamento_efectivo: await agPagamentoEfectivo(site, cfg) } });
+  } catch (erro) {
+    console.error('Erro em /agenda-config-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar.' });
+  }
+});
+app.post('/agenda-marcacoes', async (req, res) => {
+  try {
+    const site = await agSiteDoDono(req, res);
+    if (!site) return;
+    const de = agData(req.body.de) || agDataLocal(Date.now());
+    const ate = agData(req.body.ate) || agSomarDias(de, 7);
+    const agora = Date.now();
+    const lista = (await agMarcacoes(site._id, agISO(de, '00:00').getTime(), agISO(agSomarDias(ate, 1), '00:00').getTime()))
+      .sort((a, b) => Date.parse(a['Inicio']) - Date.parse(b['Inicio'])).map(m => agPublico(m, agora));
+    // números: hoje, próximos 7 dias, por confirmar, recebido este mês
+    const hoje = agDataLocal(agora);
+    const proximas = await agMarcacoes(site._id, agISO(hoje, '00:00').getTime(), agISO(agSomarDias(hoje, 30), '00:00').getTime()).catch(() => []);
+    const vivas = proximas.filter(m => AGENDA_ESTADOS_OCUPAM.includes(m['Estado']));
+    const mes = hoje.slice(0, 7);
+    const doMes = await agMarcacoes(site._id, agISO(mes + '-01', '00:00').getTime(), agISO(agSomarDias(mes + '-01', 32), '00:00').getTime()).catch(() => []);
+    return res.json({ status: 'success', response: {
+      marcacoes: lista,
+      resumo: {
+        hoje: vivas.filter(m => agDataLocal(m['Inicio']) === hoje).length,
+        semana: vivas.filter(m => agDataLocal(m['Inicio']) < agSomarDias(hoje, 7)).length,
+        por_confirmar: proximas.filter(m => m['Estado'] === 'Pendente').length,
+        recebido_mes: doMes.reduce((t, m) => t + (Number(m['Pago MZN']) || 0), 0)
+      }
+    } });
+  } catch (erro) {
+    console.error('Erro em /agenda-marcacoes:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível ler as marcações. O tipo "agendamento" existe no Bubble?' });
+  }
+});
+app.post('/agenda-marcacao-accao', async (req, res) => {
+  try {
+    const site = await agSiteDoDono(req, res);
+    if (!site) return;
+    const m = await bubbleGet('agendamento', req.body.id).catch(() => null);
+    if (!m || m['Site'] !== site._id) return res.json({ status: 'error', message: 'Marcação não encontrada.' });
+    const cfg = await agLer(site);
+    const accao = req.body.accao;
+    const estados = { confirmar: 'Confirmado', cancelar: 'Cancelado', concluir: 'Concluido', faltou: 'Faltou' };
+    if (estados[accao]) {
+      await bubblePatch('agendamento', m._id, { 'Estado': estados[accao] });
+      m['Estado'] = estados[accao];
+      if (accao === 'confirmar') agAvisar('confirmada', site, cfg, m).catch(() => {});
+      if (accao === 'cancelar') agAvisar('cancelada', site, cfg, m).catch(() => {});
+      return res.json({ status: 'success', response: agPublico(m) });
+    }
+    if (accao === 'remarcar') {
+      const data = agData(req.body.data), hora = agHora(req.body.hora);
+      if (!data || !hora) return res.json({ status: 'error', message: 'Escolhe o novo dia e a nova hora.' });
+      const servico = cfg.servicos.find(s => s.id === m['Servico']) || { duracao: Math.round((Date.parse(m['Fim']) - Date.parse(m['Inicio'])) / 60000) || 30 };
+      const inicio = agISO(data, hora), fim = new Date(inicio.getTime() + servico.duracao * 60000);
+      if (!req.body.ignorar_conflito) {
+        const marc = (await agMarcacoes(site._id, inicio.getTime() - 864e5, inicio.getTime() + 864e5)).filter(x => x._id !== m._id && agOcupa(x, Date.now()) && (!m['Profissional'] || !x['Profissional'] || x['Profissional'] === m['Profissional']));
+        if (marc.some(x => inicio.getTime() < Date.parse(x['Fim']) && fim.getTime() > Date.parse(x['Inicio']))) {
+          return res.json({ status: 'error', codigo: 'conflito', message: 'Já há outra marcação a essa hora. Escolhe outra hora ou confirma para marcar na mesma.' });
+        }
+      }
+      const novo = { 'Inicio': inicio.toISOString(), 'Fim': fim.toISOString(), 'Lembrete': false };
+      if (m['Estado'] === 'Pendente') novo['Estado'] = 'Confirmado';
+      await bubblePatch('agendamento', m._id, novo);
+      Object.assign(m, novo);
+      agAvisar('remarcada', site, cfg, m).catch(() => {});
+      return res.json({ status: 'success', response: agPublico(m) });
+    }
+    return res.json({ status: 'error', message: 'Acção inválida.' });
+  } catch (erro) {
+    console.error('Erro em /agenda-marcacao-accao:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível aplicar.' });
+  }
+});
+app.post('/agenda-marcacao-nova', async (req, res) => {
+  try {
+    const site = await agSiteDoDono(req, res);
+    if (!site) return;
+    const b = req.body;
+    const data = agData(b.data), hora = agHora(b.hora);
+    if (!data || !hora) return res.json({ status: 'error', message: 'Escolhe o dia e a hora.' });
+    if (agTexto(b.cliente_nome, 100).length < 2) return res.json({ status: 'error', message: 'Escreve o nome do cliente.' });
+    const cfg = await agLer(site);
+    const { dados } = await agCriarMarcacao({ site, cfg, servicoId: b.servico_id, profId: b.profissional_id, data, hora, cliente: { nome: b.cliente_nome, telefone: b.cliente_telefone, email: b.cliente_email, notas: b.notas }, origem: 'dono', ignorarConflito: !!b.ignorar_conflito });
+    dados['Estado'] = 'Confirmado';
+    const id = await bubbleCreate('agendamento', dados);
+    const m = Object.assign({ _id: id, 'Created Date': new Date().toISOString() }, dados);
+    if (dados['Cliente Email']) agAvisar('confirmada', site, cfg, m).catch(() => {});
+    return res.json({ status: 'success', response: agPublico(m) });
+  } catch (erro) {
+    if (erro.publico) return res.json({ status: 'error', codigo: erro.codigo || '', message: erro.codigo === 'ocupado' ? 'Essa hora já está ocupada. Escolhe outra ou marca na mesma.' : erro.publico });
+    console.error('Erro em /agenda-marcacao-nova:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível criar a marcação.' });
+  }
+});
+['/agenda-config-ler', '/agenda-config-guardar', '/agenda-marcacoes', '/agenda-marcacao-accao', '/agenda-marcacao-nova'].forEach(r => ROTAS_PRIVADAS.add(r));
+Object.assign(LIMITES, {
+  '/agenda-marcar': [['ip', 12, 10 * MIN], ['site', 300, 60 * MIN]],
+  '/agenda-horas': [['ip', 240, 10 * MIN]],
+  '/agenda-dias': [['ip', 120, 10 * MIN]],
+  '/agenda-cancelar': [['ip', 20, 10 * MIN]]
+});
+
+// ---- Lembretes na véspera (de 30 em 30 minutos) ----
+async function agLembretes() {
+  try {
+    const agora = Date.now();
+    const lista = await bubbleListTodos('agendamento', [
+      { key: 'Estado', constraint_type: 'equals', value: 'Confirmado' },
+      { key: 'Inicio', constraint_type: 'greater than', value: new Date(agora + 18 * 3600000).toISOString() },
+      { key: 'Inicio', constraint_type: 'less than', value: new Date(agora + 30 * 3600000).toISOString() }
+    ], 2000);
+    for (const m of lista) {
+      if (m['Lembrete'] || !m['Cliente Email']) continue;
+      const site = await bubbleGet('site', m['Site']).catch(() => null);
+      if (!site) continue;
+      await bubblePatch('agendamento', m._id, { 'Lembrete': true });
+      await agAvisar('lembrete', site, await agLer(site), m);
+    }
+  } catch (e) { if (!/agendamento/.test(String(e.message))) console.error('[agenda] lembretes:', e.message || e); }
+}
+setTimeout(agLembretes, 2 * 60 * 1000).unref();
+setInterval(agLembretes, 30 * 60 * 1000).unref();
+
+// ---- O widget ----
+app.get('/agenda.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.send(AGENDA_JS);
+});
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
