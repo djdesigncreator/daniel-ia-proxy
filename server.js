@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.64.5'; // 28/10/2026 - segurança dos pagamentos: origem verificada, registo de webhooks, WEBHOOK_CHAVE, teste à base de dados
+const VERSION = '1.66.1'; // 28/10/2026 - Free cria e não edita; templates em sites já criados; fotos IA para todos
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -3838,6 +3838,10 @@ const LOJA_CART_JS = `/*
         var alt = Number(resp.altura) || 450, corte = Math.max(0, Number(resp.corte) || 0);
         palco.style.height = alt + 'px'; palco.style.minHeight = alt + 'px';
         fr.style.top = (-corte) + 'px'; fr.style.bottom = 'auto'; fr.style.height = (alt + corte) + 'px';
+        // 1.66.1: janela fixa - a página de pagamento não faz scroll lá dentro (o rodapé nunca aparece)
+        fr.setAttribute('scrolling', 'no');
+        palco.style.overflow = 'hidden'; palco.style.overflow = 'clip';
+        palco.onscroll = function(){ if (palco.scrollTop || palco.scrollLeft) { palco.scrollTop = 0; palco.scrollLeft = 0; } };
       }
       fr.src = resp.checkout_url;
       palco.appendChild(fr);
@@ -6045,7 +6049,7 @@ app.post('/generate', async (req, res) => {
       'Created Date': new Date().toISOString()
     });
 
-    const variantes = tplEscolhido ? 1 : (Number(req.body.variantes) === 3 ? 3 : 1);
+    const variantes = tplEscolhido ? 1 : (Number(req.body.variantes) === 3 && (!mostrarMarcaDeAgua || FREE_VERSOES === 3) ? 3 : 1);
     res.json({
       status: 'success',
       response: { site_id: siteId, generation_id: generationId, variantes }
@@ -6289,7 +6293,23 @@ async function criacaoGratis(owner) {
   const sites = await bubbleCount('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]).catch(() => 99);
   return sites <= 1;
 }
+// 1.66.1: no Free, criar o site gasta os tokens todos do mês - o Free cria
+// e não edita (FREE_EDITAR=sim volta ao comportamento antigo).
+const FREE_EDITAR = (clean(process.env.FREE_EDITAR) || 'nao').toLowerCase() === 'sim';
+const MSG_EDITAR_SO_PAGO = 'Editar o site faz parte dos planos pagos. No plano Free o site fica como foi criado - sobe de plano para editares com a IA ou no editor visual.';
 async function cobrarTokensCriacao(owner, tokens) {
+  if (!FREE_EDITAR) {
+    const user = await bubbleGet('user', owner).catch(() => null);
+    const plano = user && user['Plan'] ? await bubbleGet('plan', user['Plan']).catch(() => null) : null;
+    if (user && plano && ehPlanoFreeObj(plano)) {
+      const s = saldoTokens(user, plano);
+      const t = Math.max(0, Math.round(Number(tokens) || 0));
+      await bubblePatch('user', owner, { 'Tokens Usados Mes': Math.max(s.incluidos, s.usados + t) });
+      console.log('[tokens] plano Free: site criado, tokens do mês esgotados para', owner, '(' + t + ' tokens reais)');
+      return;
+    }
+    return cobrarTokens(owner, tokens);
+  }
   if (await criacaoGratis(owner)) {
     console.log('[tokens] primeiro site no plano Free: criação sem custo para', owner, '(' + (Math.round(Number(tokens) || 0)) + ' tokens)');
     return;
@@ -6370,6 +6390,7 @@ app.post('/trocar-variante', async (req, res) => {
       e.cobrado = true;
     }
     e.escolhida = n;
+    if (e.template) { e.plano_paginas = Array.isArray(e.plano_ia) ? e.plano_ia : []; delete e.plano_ia; delete e.template; } // 1.66.0: estava com um template
     await bubblePatch('site', site_id, { 'Variantes Json': JSON.stringify(e) });
     // As outras páginas são escritas outra vez com o visual novo.
     if (Array.isArray(e.plano_paginas) && e.plano_paginas.length > 1) construirPaginas(site_id, { regenerar: true });
@@ -6544,6 +6565,15 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
 // mesmo que a IA tenha gastado menos do que isso - não há segunda edição
 // grátis. Nos planos pagos, cada edição soma só o que foi gasto a sério,
 // tal como a criação.
+// 1.66.1: editar é dos planos pagos (IA, editor visual, imagens e páginas novas).
+app.post(['/editar', '/editar-bloco', '/editor-imagem', '/site-pagina-guardar', '/site-paginas-criar'], async (req, res, next) => {
+  if (FREE_EDITAR) return next();
+  try {
+    const owner = req.body && req.body.owner;
+    if (owner && !(await temPlanoPago(owner))) return res.json({ status: 'error', codigo: 'plano', plano_pago: false, message: MSG_EDITAR_SO_PAGO });
+  } catch (e) { /* em caso de dúvida segue: as próprias rotas verificam tokens */ }
+  return next();
+});
 app.post('/editar', async (req, res) => {
   try {
     const { owner, site_id, prompt, imagens_data_url } = req.body;
@@ -11606,6 +11636,10 @@ const PEXELS_API_KEY = clean(process.env.PEXELS_API_KEY);
 // Pixabay: alternativa grátis ao Pexels (o Pexels pausou as chaves novas).
 const PIXABAY_API_KEY = clean(process.env.PIXABAY_API_KEY);
 const FOTOS_IA = (clean(process.env.FOTOS_IA) || 'sim').toLowerCase() !== 'nao';
+// 1.66.0: fotos geradas por IA em TODOS os planos (FOTOS_IA_FREE=nao tira-as ao Free)
+const FOTOS_IA_FREE = (clean(process.env.FOTOS_IA_FREE) || 'sim').toLowerCase() !== 'nao';
+// 1.65.0: quantas versões o plano Free recebe ao criar um site (1 ou 3). Os pagos recebem sempre 3.
+const FREE_VERSOES = parseInt(clean(process.env.FREE_VERSOES), 10) === 3 ? 3 : 1;
 const OPENAI_IMAGE_MODEL = clean(process.env.OPENAI_IMAGE_MODEL) || 'gpt-image-1';
 const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 3);
 const TOKENS_POR_FOTO_IA = Math.max(0, parseInt(clean(process.env.TOKENS_POR_FOTO_IA), 10) || 3000);
@@ -11858,6 +11892,7 @@ async function prepararFotos({ owner, slug, pedidos }) {
   const usados = new Set();
   const prontas = [];
   let iaUsadas = 0, tokens = 0;
+  const iaPermitida = FOTOS_IA_FREE || await temPlanoPago(owner).catch(() => false); // FOTOS_IA_FREE=nao: o Free usa só fotos de banco
   const trabalho = Promise.all(pedidos.map(async (p, i) => {
     try {
       let dados = null, fonte = '', credito = '';
@@ -11877,7 +11912,7 @@ async function prepararFotos({ owner, slug, pedidos }) {
           }
         } catch (e) { console.error('Pixabay:', e.message || e); }
       }
-      if (!dados && iaUsadas < FOTOS_IA_MAX) {
+      if (!dados && iaPermitida && iaUsadas < FOTOS_IA_MAX) {
         iaUsadas++;
         dados = await gerarFotoIA(p.descricao || p.consulta, p.orientacao);
         if (dados) { fonte = 'ia'; tokens += TOKENS_POR_FOTO_IA; }
@@ -15318,6 +15353,7 @@ async function saldoLevantamentos(owner, cfg) {
     l.forEach(e => {
       if (e['Estado'] !== 'Pago' || !['mpesa', 'emola', 'cartao'].includes(e['Metodo'])) return;
       if (String(e['Transaction ID'] || '').indexOf('admin:') === 0) return; // marcadas à mão no painel: o dinheiro não passou por nós
+      if (!e['Webhook Processado'] || !e['ID Pagamento']) return; // 1.65.0: só vendas confirmadas pelo aviso da MozPayment
       vendido += Number(e['Valor Total']) || 0; encomendas++;
     });
   }
@@ -16162,6 +16198,306 @@ app.post('/admin-seguranca', async (req, res) => {
 Object.assign(LIMITES, {
   '/wh-assinatura-dk7x2mq9pw': [['ip', 120, 10 * MIN]],
   '/wh-loja-mz9k3f7xq2': [['ip', 240, 10 * MIN]]
+});
+
+
+// ======================================================
+// Custo de IA (1.65.0)
+// ------------------------------------------------------
+// Conta, por dia, tudo o que vai à OpenAI: pedidos, tokens de entrada
+// (e quantos vieram da cache, que custam muito menos), tokens de saída,
+// imagens e erros. Se a OpenAI responder "sem saldo", avisa os admins por
+// email (no máximo 1 vez por hora) e o painel mostra um alerta vermelho.
+// Os preços por 1 milhão de tokens / por imagem são postos no painel
+// (mudam com o tempo), para estimar o custo e o saldo mínimo recomendado.
+// Guardado em config/uso-ia.json no Storage.
+// ======================================================
+const usoIA = { dias: {}, precos: null, sem_saldo: null, carregado: false };
+let usoIATimer = null, usoIAUltimoAviso = 0;
+async function carregarUsoIA() {
+  if (usoIA.carregado) return;
+  usoIA.carregado = true;
+  try {
+    const g = JSON.parse((await descarregarDoBunny('config/uso-ia.json')).toString('utf8'));
+    if (g && g.dias) {
+      Object.keys(g.dias).forEach(d => {
+        const a = usoIA.dias[d], b = g.dias[d];
+        if (!a) { usoIA.dias[d] = b; return; }
+        ['pedidos', 'erros', 'entrada', 'cache', 'saida', 'imagens'].forEach(k => { a[k] = (a[k] || 0) + (b[k] || 0); });
+        Object.keys(b.modelos || {}).forEach(m => { a.modelos[m] = (a.modelos[m] || 0) + b.modelos[m]; });
+      });
+    }
+    if (g && g.precos) usoIA.precos = g.precos;
+    if (g && g.sem_saldo && !usoIA.sem_saldo) usoIA.sem_saldo = g.sem_saldo;
+  } catch (e) { /* ainda não existe */ }
+}
+function guardarUsoIA() {
+  clearTimeout(usoIATimer);
+  usoIATimer = setTimeout(async () => {
+    try {
+      await carregarUsoIA();
+      const dias = Object.keys(usoIA.dias).sort().slice(-60);
+      const limpo = {}; dias.forEach(d => { limpo[d] = usoIA.dias[d]; });
+      usoIA.dias = limpo;
+      await uploadParaBunny('config/uso-ia.json', Buffer.from(JSON.stringify({ dias: limpo, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo }), 'utf8'), 'application/json; charset=utf-8');
+    } catch (e) { console.error('[custo IA] não guardou:', e.message || e); }
+  }, 5000);
+}
+function diaUsoIA() {
+  const dia = new Date().toISOString().slice(0, 10);
+  return usoIA.dias[dia] || (usoIA.dias[dia] = { pedidos: 0, erros: 0, entrada: 0, cache: 0, saida: 0, imagens: 0, modelos: {} });
+}
+async function avisarSemSaldoIA(texto) {
+  usoIA.sem_saldo = { quando: new Date().toISOString(), mensagem: String(texto || '').slice(0, 300) };
+  guardarUsoIA();
+  if (Date.now() - usoIAUltimoAviso < 60 * 60 * 1000) return;
+  usoIAUltimoAviso = Date.now();
+  console.error('[custo IA] A OPENAI FICOU SEM SALDO:', String(texto).slice(0, 200));
+  const destinos = Array.from(new Set([ADMIN_EMAIL].concat(ADMIN_EMAILS).filter(Boolean)));
+  for (const d of destinos) {
+    await enviarEmail(d, 'URGENTE: a OpenAI ficou sem saldo - Daniel IA', templateEmailKyc('A OpenAI ficou sem saldo', 'Atenção!',
+      ['A OpenAI recusou um pedido por falta de saldo. Enquanto não carregares a conta, os clientes não conseguem criar nem editar sites.',
+        'Carrega o saldo em platform.openai.com → Billing, e liga o carregamento automático.',
+        '<em>' + escaparHtml(String(texto || '').slice(0, 200)) + '</em>'],
+      { texto: 'Abrir o painel', url: (function(){ try { return new URL(APP_URL).origin + '/admin/#sistema'; } catch (e) { return APP_URL; } })() })).catch(() => {});
+  }
+}
+async function registarUsoIA(url, r) {
+  await carregarUsoIA();
+  const d = diaUsoIA();
+  d.pedidos++;
+  let j = null;
+  try { j = await r.json(); } catch (e) { j = null; }
+  if (!r.ok) {
+    d.erros++;
+    const t = JSON.stringify(j || {});
+    if (r.status === 429 || r.status === 402) {
+      if (/insufficient_quota|exceeded your current quota|billing|credit balance/i.test(t)) await avisarSemSaldoIA(t);
+    }
+  } else {
+    if (usoIA.sem_saldo) usoIA.sem_saldo = null; // voltou a funcionar
+    if (url.indexOf('/images/') >= 0) d.imagens += (j && Array.isArray(j.data) && j.data.length) || 1;
+    else if (j && j.usage) {
+      const u = j.usage;
+      const entrada = u.prompt_tokens || u.input_tokens || 0;
+      const cache = (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || (u.input_tokens_details && u.input_tokens_details.cached_tokens) || 0;
+      const saida = u.completion_tokens || u.output_tokens || 0;
+      d.entrada += entrada; d.cache += cache; d.saida += saida;
+      const m = String(j.model || '?').slice(0, 60);
+      d.modelos[m] = (d.modelos[m] || 0) + entrada + saida;
+    }
+  }
+  guardarUsoIA();
+}
+// Todas as chamadas à OpenAI passam por aqui (sem mexer em cada uma).
+(function(){
+  const original = globalThis.fetch;
+  globalThis.fetch = async function(url, opts) {
+    const r = await original(url, opts);
+    try {
+      const u = String((url && url.url) || url || '');
+      if (u.indexOf('https://api.openai.com/') === 0) registarUsoIA(u, r.clone()).catch(() => {});
+    } catch (e) { /* nunca estraga o pedido */ }
+    return r;
+  };
+})();
+function custoDia(d, p) {
+  if (!p) return null;
+  const naoCache = Math.max(0, (d.entrada || 0) - (d.cache || 0));
+  return (naoCache * (Number(p.entrada) || 0) + (d.cache || 0) * (Number(p.cache) || 0) + (d.saida || 0) * (Number(p.saida) || 0)) / 1e6 + (d.imagens || 0) * (Number(p.imagem) || 0);
+}
+app.post('/admin-uso-ia', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    await carregarUsoIA();
+    if (req.body.precos) {
+      const p = req.body.precos, num = v => Math.max(0, Math.min(1000, Number(v) || 0));
+      usoIA.precos = { entrada: num(p.entrada), cache: num(p.cache), saida: num(p.saida), imagem: num(p.imagem), mudado: new Date().toISOString() };
+      guardarUsoIA();
+      registar(admin, 'custo-ia-precos', JSON.stringify(usoIA.precos));
+    }
+    const dias = Object.keys(usoIA.dias).sort().reverse().slice(0, 30).map(dia => {
+      const d = usoIA.dias[dia];
+      return Object.assign({ dia }, d, { custo: custoDia(d, usoIA.precos) });
+    });
+    const ult7 = dias.slice(0, 7);
+    const comCusto = ult7.filter(d => d.custo != null);
+    const media = comCusto.length ? comCusto.reduce((t, d) => t + d.custo, 0) / comCusto.length : null;
+    const maximo = comCusto.length ? Math.max.apply(null, comCusto.map(d => d.custo)) : null;
+    return res.json({ status: 'success', response: {
+      dias, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo,
+      media_dia: media, maximo_dia: maximo,
+      saldo_minimo: media == null ? null : Math.ceil(Math.max(media * 7, (maximo || 0) * 5)),
+      recarga_quando: media == null ? null : Math.ceil(media * 3),
+      config: { modelo: OPENAI_MODEL, modelo_rapido: OPENAI_MODEL_RAPIDO || '', fotos_ia: FOTOS_IA, fotos_ia_free: FOTOS_IA_FREE, fotos_ia_max: FOTOS_IA_MAX, versoes_free: FREE_VERSOES }
+    } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível ler o custo de IA.' });
+  }
+});
+ROTAS_PRIVADAS.add('/admin-uso-ia');
+
+
+// ======================================================
+// Aplicar um template a um site já criado (1.66.0)
+// ------------------------------------------------------
+// VER os templates é grátis em qualquer plano: as pré-visualizações
+// (/template/:id) são montadas com o conteúdo de exemplo e não usam a IA.
+// APLICAR ao site é só nos planos pagos: a IA escreve os textos do
+// template para o negócio da pessoa e junta fotos (gasta tokens, como
+// criar com template). O resultado vai para o MESMO ficheiro, por isso o
+// link, o domínio, os produtos, os pagamentos e o contacto não mudam.
+// As 3 versões da IA (se existirem) ficam guardadas: dá para voltar.
+// ======================================================
+const MSG_TEMPLATE_SO_PAGO = 'Podes ver todos os templates à vontade. Para aplicares um template ao teu site precisas de um plano pago.';
+const TEMPLATE_TEMPO_MAX = 10 * 60 * 1000;
+const aplicacoesTemplate = new Set();
+
+function estadoAplicarTemplate(e) {
+  const a = e && e.aplicar_template;
+  if (!a) return null;
+  const r = { estado: a.estado, id: a.id || '', nome: a.nome || '', inicio: a.inicio || '', fim: a.fim || '', mensagem: a.mensagem || '' };
+  if (r.estado === 'a aplicar' && Date.now() - Date.parse(r.inicio || 0) > TEMPLATE_TEMPO_MAX) {
+    r.estado = 'erro';
+    r.mensagem = 'Demorou demasiado. O teu site ficou como estava - tenta outra vez.';
+  }
+  return r;
+}
+
+app.post('/aplicar-template', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const t = TEMPLATES_POR_ID.get(String(req.body.template_id || ''));
+    if (!t) return res.json({ status: 'error', message: 'Este template já não existe. Escolhe outro.' });
+    const site = await bubbleGet('site', site_id).catch(() => null);
+    if (!site || site['Owner'] !== owner) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    if (site['Status'] !== 'Pronto' || !site['Bunny Path'] || !site['CDN URL']) return res.json({ status: 'error', message: 'Este projecto ainda não está pronto.' });
+    if (t.tipo !== (site['Tipo'] || 'Landing Page')) return res.json({ status: 'error', message: 'Este template é de outro tipo de site. Escolhe um template deste tipo.' });
+
+    const user = await bubbleGet('user', owner);
+    if (!user) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const planId = await garantirPlano(owner, user);
+    const plano = planId ? await bubbleGet('plan', planId).catch(() => null) : null;
+    if (ehPlanoFreeObj(plano)) return res.json({ status: 'error', codigo: 'plano', message: MSG_TEMPLATE_SO_PAGO });
+    if (semTokens(user, plano)) return res.json(respSemTokens(plano));
+
+    const e = lerJsonSeguro(site['Variantes Json'], {}) || {};
+    const a = estadoAplicarTemplate(e);
+    if (aplicacoesTemplate.has(site_id) || (a && a.estado === 'a aplicar')) {
+      return res.json({ status: 'error', message: 'Já estamos a aplicar um template a este site. Espera cerca de 1 minuto.' });
+    }
+    if (Array.isArray(e.variantes) && e.variantes.some(v => v.estado === 'a gerar') && e.inicio && Date.now() - Date.parse(e.inicio) < 15 * 60 * 1000) {
+      return res.json({ status: 'error', message: 'Estamos a desenhar versões novas para este site. Espera que terminem.' });
+    }
+
+    aplicacoesTemplate.add(site_id);
+    const inicio = new Date().toISOString();
+    await mudarEstadoSite(site_id, x => { x.aplicar_template = { estado: 'a aplicar', id: t.id, nome: t.nome, inicio }; return x; });
+    res.json({ status: 'success', response: { estado: 'a aplicar', id: t.id, nome: t.nome, inicio } });
+
+    aplicarTemplateAoSite({ owner, site, t, inicio })
+      .catch(erro => console.error('Erro em aplicarTemplateAoSite:', erro))
+      .finally(() => aplicacoesTemplate.delete(site_id));
+  } catch (erro) {
+    console.error('Erro em /aplicar-template:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível aplicar o template. Tenta novamente.' });
+  }
+});
+
+async function aplicarTemplateAoSite({ owner, site, t, inicio }) {
+  const siteId = site._id;
+  const tipo = site['Tipo'] || 'Landing Page';
+  const nome = site['Nome'] || '';
+  const prompt = site['Prompt Original'] || nome;
+  const generationId = await bubbleCreate('generation', {
+    'Site': siteId, 'Prompt': 'Aplicar o template ' + t.nome + ': ' + prompt, 'Status': 'A gerar', 'Tentativas': 1, 'Created Date': new Date().toISOString()
+  }).catch(() => '');
+  try {
+    // Idioma: o do site que está no ar.
+    let idioma = 'pt';
+    try { idioma = idiomaDoHtml((await descarregarDoBunny(site['Bunny Path'])).toString('utf8')) || 'pt'; } catch (e) {}
+    const ehLoja = tipo === 'E-commerce' || tipo === 'Checkout';
+    const blocos = lerJsonSeguro(site['Loja Blocos Json'], {}) || {};
+    const temQuiz = ehLoja && !!(blocos.quiz && Array.isArray(blocos.quiz.perguntas) && blocos.quiz.perguntas.length);
+    // As fotos novas vão para uma pasta nova (a CDN não mostra fotos antigas com o mesmo nome).
+    const pasta = pastaDoSite(site);
+    const slugFotos = pasta.replace(/^sites\/[^/]+\//, '').replace(/\/$/, '') + '/tpl-' + Date.now().toString(36);
+
+    const usos = montarTemplate({ t, conteudo: t.demo, fotos: [], idioma, nome }).usos.filter(u => /^(capa|sobre|servico-\d|galeria-\d|equipa-\d)$/.test(u));
+    const iaR = await preencherTemplateIA({ t, nome, tipo, prompt, idioma, usos })
+      .catch(erro => { console.error('Conteúdo do template (IA) falhou - sigo com o exemplo:', erro.message || erro); return null; });
+    const conteudo = tFundirConteudo(t.demo || {}, iaR ? iaR.conteudo : {});
+    delete conteudo.fotos;
+    conteudo.marca = Object.assign({}, conteudo.marca, { nome });
+    const fts = await prepararFotos({ owner, slug: slugFotos, pedidos: tPedidosFotos(t, usos, iaR && iaR.conteudo) });
+    const logoUrl = site['Logo URL'] || '';
+    const m = montarTemplate({ t, conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: temQuiz, nome });
+
+    let html = prepararCasca(m.casca, m.plano);
+    html = aplicarRedeResponsiva(html);
+    if (ehLoja) html = marcarEstiloLoja(html, t.loja_cartao || 'suave', t.loja_tema || '');
+    html = injectarLojaSeNecessario(html, ehLoja, siteId);
+    html = injectarQuizSeNecessario(html, ehLoja, siteId);
+    html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
+    html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
+    html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
+    html = injectarContactoSeNecessario(html, siteId);
+    html = aplicarMarcaDeAgua(html, false); // só planos pagos chegam aqui
+
+    // Mesmo ficheiro: o link e o domínio não mudam.
+    await uploadParaBunny(site['Bunny Path'], Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+    await purgeCacheBunny(site['CDN URL']).catch(() => {});
+    await guardarFragmentos(site, { versao: 1, idioma: normalizarIdioma(idioma), fragmentos: m.fragmentos, template: t.id, actualizado: new Date().toISOString() });
+
+    const tokens = (iaR ? iaR.tokens : 0) + (fts.tokens || 0);
+    await cobrarTokens(owner, tokens);
+    if (generationId) await bubblePatch('generation', generationId, { 'Status': 'Pronto', 'Tokens Usados': tokens }).catch(() => {});
+
+    const outras = m.plano.filter(p => p.slug !== 'inicio');
+    await mudarEstadoSite(siteId, e => {
+      // Guarda as páginas das versões da IA, para se poder voltar a uma delas.
+      if (Array.isArray(e.variantes) && e.variantes.length && !e.template) e.plano_ia = Array.isArray(e.plano_paginas) ? e.plano_paginas : [];
+      if (Array.isArray(e.variantes) && e.variantes.length) e.escolhida = 'template';
+      e.plano_paginas = m.plano;
+      e.fotos = fts.fotos;
+      e.template = { id: t.id, nome: t.nome };
+      e.paginas = { estado: outras.length ? 'a construir' : 'pronto', lista: outras.map(p => ({ slug: p.slug, estado: 'a construir' })) };
+      e.aplicar_template = { estado: 'pronto', id: t.id, nome: t.nome, inicio, fim: new Date().toISOString() };
+      return e;
+    });
+    console.log('[template] ' + t.id + ' aplicado ao site ' + siteId + ' (' + tokens + ' tokens)');
+    // As outras páginas montam-se com os textos já escritos (sem IA).
+    if (outras.length) await construirPaginas(siteId, { soMontar: true });
+  } catch (erro) {
+    console.error('Erro ao aplicar o template ' + t.id + ' ao site ' + siteId + ':', erro);
+    if (generationId) await bubblePatch('generation', generationId, { 'Status': 'Erro' }).catch(() => {});
+    await mudarEstadoSite(siteId, e => {
+      e.aplicar_template = { estado: 'erro', id: t.id, nome: t.nome, inicio, fim: new Date().toISOString(), mensagem: 'Não foi possível aplicar o template. O teu site ficou como estava - tenta outra vez.' };
+      return e;
+    }).catch(() => {});
+  }
+}
+
+app.post('/template-estado', async (req, res) => {
+  try {
+    const { owner, site_id } = req.body;
+    const site = await bubbleGet('site', site_id).catch(() => null);
+    if (!site || site['Owner'] !== owner) return res.json({ status: 'error', message: 'Este projecto não te pertence.' });
+    const e = lerJsonSeguro(site['Variantes Json'], {}) || {};
+    return res.json({ status: 'success', response: {
+      aplicar: estadoAplicarTemplate(e),
+      template: e.template ? { id: e.template.id, nome: e.template.nome } : null,
+      paginas: e.paginas ? e.paginas.estado || '' : '',
+      cdn_url: site['CDN URL'] || '',
+      plano_pago: await temPlanoPago(owner).catch(() => false)
+    } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível ler o estado.' });
+  }
+});
+Object.assign(LIMITES, {
+  '/aplicar-template': [['owner', 12, 60 * MIN]]
 });
 
 app.listen(PORT, () => {
