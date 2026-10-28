@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.67.0'; // 28/10/2026 - 1 versão por site em todos os planos; moderação da comunidade; Free cria e não edita; checkout fixo
+const VERSION = '1.68.0'; // 28/10/2026 - emails para os utilizadores no painel; multiplicador de tokens; 1 versão por site; moderação da comunidade
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -6274,8 +6274,18 @@ function patchCobrarTokens(user, plano, tokens) {
   if (doExtra > 0) dados['Tokens Extra'] = s.extra - doExtra;
   return dados;
 }
+// 1.68.0: multiplicador - cada token gasto na OpenAI desconta X tokens do plano
+// (1 = igual ao custo real). Muda-se no painel (Sistema -> Custo de IA);
+// por omissão vem de TOKENS_MULTIPLICADOR no Bunny, ou 1,5.
+const TOKENS_MULT_PADRAO = (function(){ const v = Number(clean(process.env.TOKENS_MULTIPLICADOR)); return v >= 1 && v <= 5 ? v : 1.5; })();
+async function multiplicadorTokens() {
+  try { await carregarUsoIA(); } catch (e) {}
+  const v = Number(usoIA.multiplicador);
+  return v >= 1 && v <= 5 ? v : TOKENS_MULT_PADRAO;
+}
 async function cobrarTokens(owner, tokens) {
   tokens = Math.max(0, Math.round(Number(tokens) || 0));
+  if (tokens) tokens = Math.round(tokens * await multiplicadorTokens());
   if (!tokens) return;
   const user = await bubbleGet('user', owner);
   if (!user) return;
@@ -16234,6 +16244,7 @@ async function carregarUsoIA() {
       });
     }
     if (g && g.precos) usoIA.precos = g.precos;
+    if (g && g.multiplicador != null && usoIA.multiplicador == null) usoIA.multiplicador = g.multiplicador;
     if (g && g.sem_saldo && !usoIA.sem_saldo) usoIA.sem_saldo = g.sem_saldo;
   } catch (e) { /* ainda não existe */ }
 }
@@ -16245,7 +16256,7 @@ function guardarUsoIA() {
       const dias = Object.keys(usoIA.dias).sort().slice(-60);
       const limpo = {}; dias.forEach(d => { limpo[d] = usoIA.dias[d]; });
       usoIA.dias = limpo;
-      await uploadParaBunny('config/uso-ia.json', Buffer.from(JSON.stringify({ dias: limpo, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo }), 'utf8'), 'application/json; charset=utf-8');
+      await uploadParaBunny('config/uso-ia.json', Buffer.from(JSON.stringify({ dias: limpo, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo, multiplicador: usoIA.multiplicador == null ? null : usoIA.multiplicador }), 'utf8'), 'application/json; charset=utf-8');
     } catch (e) { console.error('[custo IA] não guardou:', e.message || e); }
   }, 5000);
 }
@@ -16317,6 +16328,13 @@ app.post('/admin-uso-ia', async (req, res) => {
     const admin = await exigirAdmin(req, res);
     if (!admin) return;
     await carregarUsoIA();
+    if (req.body.multiplicador != null && req.body.multiplicador !== '') {
+      const m = Number(req.body.multiplicador);
+      if (!(m >= 1 && m <= 5)) return res.json({ status: 'error', message: 'O multiplicador tem de estar entre 1 e 5.' });
+      usoIA.multiplicador = Math.round(m * 100) / 100;
+      guardarUsoIA();
+      registar(admin, 'tokens-multiplicador', String(usoIA.multiplicador));
+    }
     if (req.body.precos) {
       const p = req.body.precos, num = v => Math.max(0, Math.min(1000, Number(v) || 0));
       usoIA.precos = { entrada: num(p.entrada), cache: num(p.cache), saida: num(p.saida), imagem: num(p.imagem), mudado: new Date().toISOString() };
@@ -16336,7 +16354,7 @@ app.post('/admin-uso-ia', async (req, res) => {
       media_dia: media, maximo_dia: maximo,
       saldo_minimo: media == null ? null : Math.ceil(Math.max(media * 7, (maximo || 0) * 5)),
       recarga_quando: media == null ? null : Math.ceil(media * 3),
-      config: { modelo: OPENAI_MODEL, modelo_rapido: OPENAI_MODEL_RAPIDO || '', fotos_ia: FOTOS_IA, fotos_ia_free: FOTOS_IA_FREE, fotos_ia_max: FOTOS_IA_MAX, versoes_free: FREE_VERSOES, versoes: VERSOES_IA }
+      config: { modelo: OPENAI_MODEL, modelo_rapido: OPENAI_MODEL_RAPIDO || '', fotos_ia: FOTOS_IA, fotos_ia_free: FOTOS_IA_FREE, fotos_ia_max: FOTOS_IA_MAX, versoes_free: FREE_VERSOES, versoes: VERSOES_IA, multiplicador: await multiplicadorTokens() }
     } });
   } catch (erro) {
     return res.json({ status: 'error', message: 'Não foi possível ler o custo de IA.' });
@@ -16505,6 +16523,268 @@ app.post('/template-estado', async (req, res) => {
 Object.assign(LIMITES, {
   '/aplicar-template': [['owner', 12, 60 * MIN]]
 });
+
+
+// ======================================================
+// Emails para os utilizadores (1.68.0)
+// ------------------------------------------------------
+// No painel, a equipa escreve só o texto. Aqui o texto ganha o layout do
+// Daniel IA (cabeçalho, saudação com o nome, parágrafos, listas, negrito,
+// links, botão opcional, assinatura e rodapé) e vai pelo Resend:
+//   - "teste": para o email de quem está no painel;
+//   - "um": para um utilizador escolhido;
+//   - "todos" / "free" / "pagos": em fundo, em lotes de 100 (API batch do
+//     Resend), com o progresso e o histórico no painel.
+// Histórico em config/emails-enviados.json no Storage.
+// ======================================================
+const EMAIL_LOTE = 100;
+// As respostas dos utilizadores vão para aqui (EMAIL_RESPOSTA no Bunny, ou o ADMIN_EMAIL).
+const EMAIL_RESPOSTA = clean(process.env.EMAIL_RESPOSTA) || ADMIN_EMAIL || '';
+const enviosEmail = new Map();
+let historicoEmails = null;
+
+function primeiroNome(n) { return String(n || '').trim().split(/\s+/)[0] || ''; }
+function emailValido(e) { return /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(String(e || '')); }
+function comunicadoInline(t) {
+  return t
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b style="color:#1A0A27;">$1</b>')
+    .replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)])/g, '<a href="$1" style="color:#5A0F80;font-weight:700;text-decoration:underline;">$1</a>')
+    .replace(/\n/g, '<br>');
+}
+// Texto simples -> HTML do email (tudo escapado primeiro).
+function formatarComunicado(texto, nome) {
+  const t = escaparHtml(String(texto || '').replace(/\r\n?/g, '\n').trim()).replace(/\{nome\}/gi, escaparHtml(primeiroNome(nome)));
+  return t.split(/\n\s*\n/).map(bloco => {
+    const linhas = bloco.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!linhas.length) return '';
+    if (linhas.every(l => /^([-•*])\s+/.test(l))) {
+      return '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px 0;">' + linhas.map(l =>
+        '<tr><td valign="top" style="padding:3px 10px 3px 0;color:#89C804;font-size:16px;line-height:1.5;">&#10003;</td><td style="padding:3px 0;color:#4A3B5C;font-size:15px;line-height:1.6;">' + comunicadoInline(l.replace(/^([-•*])\s+/, '')) + '</td></tr>').join('') + '</table>';
+    }
+    if (linhas.every(l => /^\d+[.)]\s+/.test(l))) {
+      return '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px 0;">' + linhas.map((l, i) =>
+        '<tr><td valign="top" style="padding:3px 10px 3px 0;"><span style="display:inline-block;min-width:22px;height:22px;border-radius:11px;background:#F1E9F8;color:#5A0F80;font-size:12px;font-weight:800;text-align:center;line-height:22px;">' + (i + 1) + '</span></td><td style="padding:3px 0;color:#4A3B5C;font-size:15px;line-height:1.6;">' + comunicadoInline(l.replace(/^\d+[.)]\s+/, '')) + '</td></tr>').join('') + '</table>';
+    }
+    if (linhas.length === 1 && /^#{1,3}\s+/.test(linhas[0])) {
+      return '<h2 style="margin:22px 0 10px 0;color:#1A0A27;font-size:18px;line-height:1.35;font-weight:800;">' + comunicadoInline(linhas[0].replace(/^#{1,3}\s+/, '')) + '</h2>';
+    }
+    return '<p style="margin:0 0 16px 0;color:#4A3B5C;font-size:15px;line-height:1.65;">' + comunicadoInline(linhas.join('\n')) + '</p>';
+  }).join('\n');
+}
+function templateEmailComunicado({ assunto, titulo, texto, nome, botao_texto, botao_url }) {
+  const n = primeiroNome(nome);
+  const corpo = formatarComunicado(texto, nome);
+  // Se o texto já começa com "Olá", não repetimos a saudação.
+  const comecaComOla = /^\s*(ol[áa]|bom dia|boa tarde|boa noite|caro|cara|hello|hi)\b/i.test(String(texto || ''));
+  const btn = botao_texto && botao_url
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:8px 0 6px 0;">
+<a href="${escaparHtml(botao_url)}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:15px;padding:14px 30px;border-radius:12px;">${escaparHtml(botao_texto)}</a>
+</td></tr></table>` : '';
+  const preheader = escaparHtml(String(texto || '').replace(/\{nome\}/gi, n).replace(/[*#\-•]/g, '').replace(/\s+/g, ' ').trim().slice(0, 120));
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escaparHtml(assunto || titulo || 'Daniel IA')}</title>
+</head>
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#F4F0F8;">${preheader}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:32px 14px;">
+<tr><td align="center">
+<table role="presentation" width="100%" style="max-width:560px;background:#FFFFFF;border-radius:18px;overflow:hidden;border:1px solid #EAE2F2;">
+<tr>
+<td bgcolor="#430960" style="background:#430960;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:28px 32px 24px 32px;text-align:center;border-bottom:4px solid #89C804;">
+<img src="https://app.daniel-ia.pro/marca/daniel-ia-logo-email.png" width="168" alt="Daniel IA" style="display:inline-block;width:168px;max-width:100%;height:auto;border:0;outline:none;color:#FFFFFF;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;">
+${titulo ? `<p style="margin:18px 0 0 0;color:#FFFFFF;font-size:22px;line-height:1.3;font-weight:800;letter-spacing:-.01em;">${escaparHtml(titulo)}</p>` : ''}
+</td>
+</tr>
+<tr>
+<td style="padding:34px 34px 26px 34px;">
+${comecaComOla ? '' : `<p style="margin:0 0 14px 0;color:#1A0A27;font-size:18px;font-weight:800;">Olá${n ? ', ' + escaparHtml(n) : ''}!</p>`}
+${corpo}
+${btn}
+<p style="margin:22px 0 0 0;color:#4A3B5C;font-size:15px;line-height:1.6;">Um abraço,<br><b style="color:#1A0A27;">Equipa Daniel IA</b></p>
+</td>
+</tr>
+<tr>
+<td style="padding:18px 32px 20px 32px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;">
+<p style="margin:0 0 6px 0;color:#6F5E81;font-size:12.5px;">Precisas de ajuda? <a href="https://wa.me/258851711177" style="color:#5A0F80;font-weight:700;text-decoration:none;">Fala connosco no WhatsApp</a></p>
+<p style="margin:0;color:#B3A7C2;font-size:11.5px;line-height:1.5;">Recebes este email porque tens uma conta na Daniel IA.<br>Daniel IA · daniel-ia.pro</p>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// Valida o que vem do painel. Devolve { erro } ou os campos limpos.
+function lerComunicado(b) {
+  const assunto = String(b.assunto || '').replace(/\s+/g, ' ').trim().slice(0, 150);
+  const titulo = String(b.titulo || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  const texto = String(b.texto || '').replace(/\r\n?/g, '\n').trim().slice(0, 8000);
+  const botao_texto = String(b.botao_texto || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const botao_url = String(b.botao_url || '').trim().slice(0, 500);
+  if (!assunto) return { erro: 'Escreve o assunto.' };
+  if (texto.length < 5) return { erro: 'Escreve a mensagem.' };
+  if (botao_texto && !/^https:\/\/[^\s"<>]+$/.test(botao_url)) return { erro: 'O link do botão tem de começar por https://' };
+  return { assunto, titulo, texto, botao_texto: botao_url ? botao_texto : '', botao_url: botao_texto ? botao_url : '' };
+}
+
+async function utilizadoresParaEmail(destino) {
+  const [users, planos] = await Promise.all([listaAdmin('user', true), listaAdmin('plan')]);
+  const nomePlano = {};
+  (planos || []).forEach(p => { nomePlano[p._id] = String(p['Name'] || ''); });
+  const vistos = new Set();
+  return (users || []).map(u => {
+    const email = String(emailDoUsuario(u)).trim().toLowerCase();
+    const plano = nomePlano[u['Plan']] || 'Free';
+    return { id: u._id, email, nome: u['Full Name'] || '', plano, pago: plano.trim().toLowerCase() !== 'free' };
+  }).filter(u => {
+    if (!emailValido(u.email) || vistos.has(u.email)) return false;
+    vistos.add(u.email);
+    if (destino === 'free') return !u.pago;
+    if (destino === 'pagos') return u.pago;
+    return true;
+  });
+}
+
+async function carregarHistoricoEmails() {
+  if (historicoEmails) return historicoEmails;
+  try { historicoEmails = JSON.parse((await descarregarDoBunny('config/emails-enviados.json')).toString('utf8')); } catch (e) { historicoEmails = []; }
+  if (!Array.isArray(historicoEmails)) historicoEmails = [];
+  return historicoEmails;
+}
+async function guardarEnvioNoHistorico(env) {
+  const h = await carregarHistoricoEmails();
+  const linha = { id: env.id, quando: env.inicio, fim: env.fim || '', assunto: env.assunto, destino: env.destino, para: env.para || '', total: env.total, enviados: env.enviados, falhados: env.falhados, estado: env.estado, por: env.por };
+  const i = h.findIndex(x => x.id === env.id);
+  if (i >= 0) h[i] = linha; else h.unshift(linha);
+  historicoEmails = h.slice(0, 60);
+  await uploadParaBunny('config/emails-enviados.json', Buffer.from(JSON.stringify(historicoEmails), 'utf8'), 'application/json; charset=utf-8').catch(e => console.error('[emails] histórico não guardou:', e.message || e));
+}
+
+async function enviarLoteResend(itens) {
+  if (!RESEND_KEY) throw new Error('Falta a variável RESEND_KEY no container.');
+  for (let tentativa = 0; tentativa < 4; tentativa++) {
+    const r = await fetch('https://api.resend.com/emails/batch', {
+      method: 'POST', headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(itens)
+    });
+    if (r.status === 429) { await new Promise(ok => setTimeout(ok, 2000 * (tentativa + 1))); continue; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error('Resend respondeu ' + r.status + ': ' + JSON.stringify(j).slice(0, 200));
+    return j;
+  }
+  throw new Error('Resend: demasiados pedidos seguidos.');
+}
+
+async function correrEnvioEmails(env, pessoas, c) {
+  const remetente = MAIL_FROM.includes('<') ? MAIL_FROM : `Daniel IA <${MAIL_FROM}>`;
+  for (let i = 0; i < pessoas.length; i += EMAIL_LOTE) {
+    if (env.cancelar) { env.estado = 'cancelado'; break; }
+    const lote = pessoas.slice(i, i + EMAIL_LOTE);
+    const itens = lote.map(p => ({ from: remetente, to: [p.email], subject: c.assunto.replace(/\{nome\}/gi, primeiroNome(p.nome)), html: templateEmailComunicado(Object.assign({}, c, { nome: p.nome })), reply_to: EMAIL_RESPOSTA || undefined }));
+    try {
+      await enviarLoteResend(itens);
+      env.enviados += lote.length;
+    } catch (e) {
+      env.falhados += lote.length;
+      env.ultimo_erro = String(e.message || e).slice(0, 200);
+      console.error('[emails] lote falhou:', env.ultimo_erro);
+    }
+    if (i + EMAIL_LOTE < pessoas.length) await new Promise(ok => setTimeout(ok, 1100));
+  }
+  if (env.estado === 'a enviar') env.estado = env.falhados && !env.enviados ? 'falhou' : 'enviado';
+  env.fim = new Date().toISOString();
+  await guardarEnvioNoHistorico(env);
+}
+
+app.post('/admin-email-previa', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const c = lerComunicado(Object.assign({ assunto: 'Pré-visualização', texto: 'A tua mensagem aparece aqui.' }, req.body, { assunto: req.body.assunto || 'Pré-visualização', texto: req.body.texto || 'A tua mensagem aparece aqui.' }));
+    if (c.erro) return res.json({ status: 'error', message: c.erro });
+    return res.json({ status: 'success', response: { html: templateEmailComunicado(Object.assign({}, c, { nome: req.body.nome_exemplo || admin['Full Name'] || 'Ana' })) } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível preparar a pré-visualização.' });
+  }
+});
+
+app.post('/admin-email-destinatarios', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const todos = await utilizadoresParaEmail('todos');
+    const q = String(req.body.pesquisa || '').trim().toLowerCase().slice(0, 80);
+    const resultados = q ? todos.filter(u => (u.nome + ' ' + u.email).toLowerCase().includes(q)).slice(0, 12) : [];
+    return res.json({ status: 'success', response: {
+      contagens: { todos: todos.length, free: todos.filter(u => !u.pago).length, pagos: todos.filter(u => u.pago).length },
+      resultados
+    } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível ler os utilizadores.' });
+  }
+});
+
+app.post('/admin-email-enviar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const c = lerComunicado(req.body);
+    if (c.erro) return res.json({ status: 'error', message: c.erro });
+    const destino = ['teste', 'um', 'todos', 'free', 'pagos'].includes(req.body.destino) ? req.body.destino : '';
+    if (!destino) return res.json({ status: 'error', message: 'Escolhe para quem é o email.' });
+
+    // Um só email (teste ou um utilizador): envia já e responde.
+    if (destino === 'teste' || destino === 'um') {
+      let p;
+      if (destino === 'teste') p = { email: String(emailDoUsuario(admin)).trim().toLowerCase(), nome: admin['Full Name'] || '' };
+      else p = (await utilizadoresParaEmail('todos')).find(u => u.id === req.body.user_id);
+      if (!p || !emailValido(p.email)) return res.json({ status: 'error', message: destino === 'teste' ? 'A tua conta não tem um email válido.' : 'Utilizador não encontrado ou sem email.' });
+      await enviarEmail(p.email, c.assunto.replace(/\{nome\}/gi, primeiroNome(p.nome)), templateEmailComunicado(Object.assign({}, c, { nome: p.nome })), EMAIL_RESPOSTA || undefined);
+      const env = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), inicio: new Date().toISOString(), fim: new Date().toISOString(), assunto: c.assunto, destino, para: p.email, total: 1, enviados: 1, falhados: 0, estado: 'enviado', por: emailDoUsuario(admin) || admin._id };
+      if (destino === 'um') { await guardarEnvioNoHistorico(env); registar(admin, 'email-um', p.email + ' · ' + c.assunto); }
+      return res.json({ status: 'success', response: { estado: 'enviado', total: 1, enviados: 1, para: p.email } });
+    }
+
+    // Grupo: confirma o número e envia em fundo.
+    if ([...enviosEmail.values()].some(e => e.estado === 'a enviar')) return res.json({ status: 'error', message: 'Já há um envio a decorrer. Espera que termine.' });
+    const pessoas = await utilizadoresParaEmail(destino);
+    if (!pessoas.length) return res.json({ status: 'error', message: 'Não há ninguém com email neste grupo.' });
+    if (Number(req.body.confirmar_total) !== pessoas.length) {
+      return res.json({ status: 'error', codigo: 'confirmar', total: pessoas.length, message: 'Confirma o envio para ' + pessoas.length + ' pessoas.' });
+    }
+    const env = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), inicio: new Date().toISOString(), assunto: c.assunto, destino, total: pessoas.length, enviados: 0, falhados: 0, estado: 'a enviar', por: emailDoUsuario(admin) || admin._id };
+    enviosEmail.set(env.id, env);
+    registar(admin, 'email-' + destino, pessoas.length + ' pessoas · ' + c.assunto);
+    res.json({ status: 'success', response: { envio_id: env.id, estado: env.estado, total: env.total } });
+    correrEnvioEmails(env, pessoas, c).catch(e => { env.estado = 'falhou'; env.ultimo_erro = String(e.message || e); console.error('[emails] envio parou:', e); });
+  } catch (erro) {
+    console.error('Erro em /admin-email-enviar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível enviar: ' + String(erro.message || erro).slice(0, 160) });
+  }
+});
+
+app.post('/admin-email-estado', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    const env = req.body.envio_id ? enviosEmail.get(String(req.body.envio_id)) : null;
+    const historico = await carregarHistoricoEmails();
+    return res.json({ status: 'success', response: {
+      envio: env ? { id: env.id, estado: env.estado, total: env.total, enviados: env.enviados, falhados: env.falhados, erro: env.ultimo_erro || '' } : null,
+      historico: historico.slice(0, 30)
+    } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível ler o estado.' });
+  }
+});
+
+['/admin-email-previa', '/admin-email-destinatarios', '/admin-email-enviar', '/admin-email-estado'].forEach(r => ROTAS_PRIVADAS.add(r));
+Object.assign(LIMITES, { '/admin-email-enviar': [['owner', 40, 60 * MIN]] });
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
