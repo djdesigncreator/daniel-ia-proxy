@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.66.1'; // 28/10/2026 - Free cria e não edita; templates em sites já criados; fotos IA para todos
+const VERSION = '1.67.0'; // 28/10/2026 - 1 versão por site em todos os planos; moderação da comunidade; Free cria e não edita; checkout fixo
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -6049,7 +6049,7 @@ app.post('/generate', async (req, res) => {
       'Created Date': new Date().toISOString()
     });
 
-    const variantes = tplEscolhido ? 1 : (Number(req.body.variantes) === 3 && (!mostrarMarcaDeAgua || FREE_VERSOES === 3) ? 3 : 1);
+    const variantes = tplEscolhido ? 1 : (VERSOES_IA === 3 && Number(req.body.variantes) === 3 && (!mostrarMarcaDeAgua || FREE_VERSOES === 3) ? 3 : 1);
     res.json({
       status: 'success',
       response: { site_id: siteId, generation_id: generationId, variantes }
@@ -6349,6 +6349,7 @@ app.post('/novas-variantes', async (req, res) => {
     }
     const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
     if (mostrarMarcaDeAgua) return res.json({ status: 'error', codigo: 'plano', message: MSG_SO_PAGO });
+    if (VERSOES_IA !== 3) return res.json({ status: 'error', codigo: 'templates', message: MSG_SO_TEMPLATES });
     // O idioma do site está no HTML publicado.
     let idioma = 'pt';
     try { const r = await fetch(site['CDN URL']); if (r.ok) idioma = idiomaDoHtml(await r.text()) || 'pt'; } catch (e) {}
@@ -11640,6 +11641,10 @@ const FOTOS_IA = (clean(process.env.FOTOS_IA) || 'sim').toLowerCase() !== 'nao';
 const FOTOS_IA_FREE = (clean(process.env.FOTOS_IA_FREE) || 'sim').toLowerCase() !== 'nao';
 // 1.65.0: quantas versões o plano Free recebe ao criar um site (1 ou 3). Os pagos recebem sempre 3.
 const FREE_VERSOES = parseInt(clean(process.env.FREE_VERSOES), 10) === 3 ? 3 : 1;
+// 1.67.0: 1 versão por site em TODOS os planos - quem quer outro visual escolhe um template.
+// VERSOES_IA=3 no Bunny volta às 3 versões (pagos; o Free segue FREE_VERSOES).
+const VERSOES_IA = parseInt(clean(process.env.VERSOES_IA), 10) === 3 ? 3 : 1;
+const MSG_SO_TEMPLATES = 'Agora cada site é criado numa versão só. Para um visual novo, escolhe um dos templates profissionais.';
 const OPENAI_IMAGE_MODEL = clean(process.env.OPENAI_IMAGE_MODEL) || 'gpt-image-1';
 const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 3);
 const TOKENS_POR_FOTO_IA = Math.max(0, parseInt(clean(process.env.TOKENS_POR_FOTO_IA), 10) || 3000);
@@ -15747,9 +15752,9 @@ app.post('/comunidade', async (req, res) => {
     const adm = ehAdmin(user);
     const todos = await comTodos();
     const nResp = comContarRespostas(todos);
-    let posts = todos.filter(x => x['Tipo'] === 'post' && comVisivel(x));
+    let posts = todos.filter(x => x['Tipo'] === 'post' && (comVisivel(x) || (adm && x['Estado'] === 'Oculto')));
     const contagem = {};
-    posts.forEach(p => { const c = p['Categoria'] || 'geral'; contagem[c] = (contagem[c] || 0) + 1; });
+    posts.filter(comVisivel).forEach(p => { const c = p['Categoria'] || 'geral'; contagem[c] = (contagem[c] || 0) + 1; });
     const membros = new Set(todos.filter(comVisivel).map(x => x['Owner'])).size;
     const cat = COM_IDS.includes(req.body.categoria) ? req.body.categoria : '';
     if (cat) posts = posts.filter(p => (p['Categoria'] || 'geral') === cat);
@@ -15991,6 +15996,7 @@ app.post('/admin-comunidade', async (req, res) => {
     if (filtro === 'denunciados') lista = lista.filter(x => comExtra(x).denuncias.length > 0);
     if (filtro === 'ocultos') lista = lista.filter(x => x['Estado'] === 'Oculto');
     if (filtro === 'publicacoes') lista = lista.filter(x => x['Tipo'] === 'post');
+    if (filtro === 'respostas') lista = lista.filter(x => x['Tipo'] === 'resposta');
     lista.sort((a, b) => (Date.parse(b['Created Date']) || 0) - (Date.parse(a['Created Date']) || 0));
     const vivos = todos.filter(x => x['Estado'] !== 'Apagado');
     return res.json({ status: 'success', response: {
@@ -16330,7 +16336,7 @@ app.post('/admin-uso-ia', async (req, res) => {
       media_dia: media, maximo_dia: maximo,
       saldo_minimo: media == null ? null : Math.ceil(Math.max(media * 7, (maximo || 0) * 5)),
       recarga_quando: media == null ? null : Math.ceil(media * 3),
-      config: { modelo: OPENAI_MODEL, modelo_rapido: OPENAI_MODEL_RAPIDO || '', fotos_ia: FOTOS_IA, fotos_ia_free: FOTOS_IA_FREE, fotos_ia_max: FOTOS_IA_MAX, versoes_free: FREE_VERSOES }
+      config: { modelo: OPENAI_MODEL, modelo_rapido: OPENAI_MODEL_RAPIDO || '', fotos_ia: FOTOS_IA, fotos_ia_free: FOTOS_IA_FREE, fotos_ia_max: FOTOS_IA_MAX, versoes_free: FREE_VERSOES, versoes: VERSOES_IA }
     } });
   } catch (erro) {
     return res.json({ status: 'error', message: 'Não foi possível ler o custo de IA.' });
