@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.69.0'; // 28/10/2026 - apps de agendamento; emails no painel; multiplicador de tokens
+const VERSION = '1.70.0'; // 28/10/2026 - privacidade, termos e cookies da Daniel IA e dos sites criados (opcional)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -14970,10 +14970,17 @@ const MEDIR_JS = `(function(){
     if (/bot|crawl|spider|headless|lighthouse/i.test(navigator.userAgent || '')) return;
     var U = ${JSON.stringify(SELF_URL + '/m')};
     var vid = '';
-    try {
-      vid = localStorage.getItem('dia_v') || '';
-      if (!/^[a-z0-9]{8,40}$/.test(vid)) { vid = (Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24); localStorage.setItem('dia_v', vid); }
-    } catch (e) { vid = ''; }
+    // 1.70.0: com a privacidade do site ligada, o número do visitante só existe se ele aceitar as estatísticas
+    function prepararVid(legal){
+      var c = null;
+      try { c = JSON.parse(localStorage.getItem('dia_consent_site') || 'null'); } catch (e) { c = null; }
+      var semId = c && c.v === 1 ? c.estatisticas !== true : !!(legal && legal.activo);
+      try {
+        if (semId) { vid = ''; return; }
+        vid = localStorage.getItem('dia_v') || '';
+        if (!/^[a-z0-9]{8,40}$/.test(vid)) { vid = (Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24); localStorage.setItem('dia_v', vid); }
+      } catch (e) { vid = ''; }
+    }
     var rh = '';
     try { rh = document.referrer ? new URL(document.referrer).hostname : ''; } catch (e) { rh = ''; }
     if (rh && rh === location.hostname) rh = '=';
@@ -14986,7 +14993,12 @@ const MEDIR_JS = `(function(){
       } catch (e) {}
       try { fetch(U, { method: 'POST', body: corpo, keepalive: true, mode: 'no-cors', headers: { 'Content-Type': 'text/plain' } }); } catch (e) {}
     }
-    env('v');
+    var iniciado = false;
+    function iniciar(legal){ if (iniciado) return; iniciado = true; prepararVid(legal); env('v'); }
+    if (window.__diaLegalP && window.__diaLegalP.then) {
+      window.__diaLegalP.then(iniciar, function(){ iniciar(null); });
+      setTimeout(function(){ iniciar({ activo: true }); }, 3000); // sem resposta: conta a visita, sem número
+    } else iniciar(null);
     window.addEventListener('dia-produto-visto', function(e){ if (e && e.detail) env('p', String(e.detail)); });
     document.addEventListener('click', function(e){
       var a = e.target && e.target.closest ? e.target.closest('a') : null;
@@ -15007,7 +15019,7 @@ const MEDIR_JS = `(function(){
 app.get('/dia-medir.js', (req, res) => {
   res.set('Content-Type', 'application/javascript; charset=utf-8');
   res.set('Cache-Control', 'public, max-age=3600');
-  res.send(MEDIR_JS);
+  res.send(LEGAL_SITE_JS + '\n' + MEDIR_JS);
 });
 
 // ---- Pôr o script nas páginas dos sites (chamado pelo uploadParaBunny) ----
@@ -16692,42 +16704,79 @@ async function carregarHistoricoEmails() {
 }
 async function guardarEnvioNoHistorico(env) {
   const h = await carregarHistoricoEmails();
-  const linha = { id: env.id, quando: env.inicio, fim: env.fim || '', assunto: env.assunto, destino: env.destino, para: env.para || '', total: env.total, enviados: env.enviados, falhados: env.falhados, estado: env.estado, por: env.por };
+  const linha = { id: env.id, quando: env.inicio, fim: env.fim || '', assunto: env.assunto, destino: env.destino, para: env.para || '', total: env.total, enviados: env.enviados, falhados: env.falhados, estado: env.estado, por: env.por, erro: env.ultimo_erro || '' };
   const i = h.findIndex(x => x.id === env.id);
   if (i >= 0) h[i] = linha; else h.unshift(linha);
   historicoEmails = h.slice(0, 60);
   await uploadParaBunny('config/emails-enviados.json', Buffer.from(JSON.stringify(historicoEmails), 'utf8'), 'application/json; charset=utf-8').catch(e => console.error('[emails] histórico não guardou:', e.message || e));
 }
 
-async function enviarLoteResend(itens) {
+// Erros do Resend: o limite do plano (diário/mensal) pára o envio todo.
+function erroResend(status, j) {
+  const nome = String((j && (j.name || j.type)) || '');
+  const texto = String((j && j.message) || JSON.stringify(j || {})).slice(0, 200);
+  const e = new Error('Resend respondeu ' + status + (nome ? ' (' + nome + ')' : '') + ': ' + texto);
+  if (/quota|daily|monthly/i.test(nome + ' ' + texto)) {
+    e.quota = true;
+    e.message = 'O Resend chegou ao limite de emails do teu plano (' + texto + '). Os restantes ficaram por enviar - sobe o plano no Resend ou tenta amanhã.';
+  }
+  return e;
+}
+async function pedidoResend(caminho, corpo) {
   if (!RESEND_KEY) throw new Error('Falta a variável RESEND_KEY no container.');
   for (let tentativa = 0; tentativa < 4; tentativa++) {
-    const r = await fetch('https://api.resend.com/emails/batch', {
-      method: 'POST', headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(itens)
+    const r = await fetch('https://api.resend.com' + caminho, {
+      method: 'POST', headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(corpo)
     });
-    if (r.status === 429) { await new Promise(ok => setTimeout(ok, 2000 * (tentativa + 1))); continue; }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error('Resend respondeu ' + r.status + ': ' + JSON.stringify(j).slice(0, 200));
+    if (r.status === 429) {
+      const e = erroResend(429, j);
+      if (e.quota) throw e;
+      await new Promise(ok => setTimeout(ok, 1500 * (tentativa + 1)));
+      continue;
+    }
+    if (!r.ok) throw erroResend(r.status, j);
     return j;
   }
   throw new Error('Resend: demasiados pedidos seguidos.');
 }
+async function enviarLoteResend(itens) { return pedidoResend('/emails/batch', itens); }
 
 async function correrEnvioEmails(env, pessoas, c) {
   const remetente = MAIL_FROM.includes('<') ? MAIL_FROM : `Daniel IA <${MAIL_FROM}>`;
+  const espera = ms => new Promise(ok => setTimeout(ok, ms));
+  await guardarEnvioNoHistorico(env).catch(() => {});
   for (let i = 0; i < pessoas.length; i += EMAIL_LOTE) {
     if (env.cancelar) { env.estado = 'cancelado'; break; }
     const lote = pessoas.slice(i, i + EMAIL_LOTE);
-    const itens = lote.map(p => ({ from: remetente, to: [p.email], subject: c.assunto.replace(/\{nome\}/gi, primeiroNome(p.nome)), html: templateEmailComunicado(Object.assign({}, c, { nome: p.nome })), reply_to: EMAIL_RESPOSTA || undefined }));
+    const itens = lote.map(p => {
+      const it = { from: remetente, to: [p.email], subject: c.assunto.replace(/\{nome\}/gi, primeiroNome(p.nome)), html: templateEmailComunicado(Object.assign({}, c, { nome: p.nome })) };
+      if (EMAIL_RESPOSTA) it.reply_to = EMAIL_RESPOSTA;
+      return it;
+    });
     try {
       await enviarLoteResend(itens);
       env.enviados += lote.length;
     } catch (e) {
-      env.falhados += lote.length;
-      env.ultimo_erro = String(e.message || e).slice(0, 200);
+      env.ultimo_erro = String(e.message || e).slice(0, 300);
       console.error('[emails] lote falhou:', env.ultimo_erro);
+      if (e.quota) { env.falhados += pessoas.length - i; env.estado = 'parado'; break; }
+      // O lote todo é recusado se um só endereço for inválido: tenta um a um.
+      let parar = false;
+      for (const it of itens) {
+        try { await pedidoResend('/emails', it); env.enviados++; }
+        catch (e2) {
+          env.falhados++;
+          env.ultimo_erro = String(e2.message || e2).slice(0, 300);
+          console.error('[emails] falhou para', it.to[0], '-', env.ultimo_erro);
+          if (e2.quota) { env.falhados += itens.length - itens.indexOf(it) - 1 + Math.max(0, pessoas.length - i - lote.length); env.estado = 'parado'; parar = true; break; }
+        }
+        await espera(550); // o Resend aceita cerca de 2 pedidos por segundo
+      }
+      if (parar) break;
     }
-    if (i + EMAIL_LOTE < pessoas.length) await new Promise(ok => setTimeout(ok, 1100));
+    await guardarEnvioNoHistorico(env).catch(() => {});
+    if (i + EMAIL_LOTE < pessoas.length) await espera(1100);
   }
   if (env.estado === 'a enviar') env.estado = env.falhados && !env.enviados ? 'falhou' : 'enviado';
   env.fim = new Date().toISOString();
@@ -16805,8 +16854,13 @@ app.post('/admin-email-estado', async (req, res) => {
   try {
     const admin = await exigirAdmin(req, res);
     if (!admin) return;
-    const env = req.body.envio_id ? enviosEmail.get(String(req.body.envio_id)) : null;
+    let env = req.body.envio_id ? enviosEmail.get(String(req.body.envio_id)) : null;
+    if (req.body.envio_id && !env) historicoEmails = null; // pode ter sido outra instância do servidor: lê do Storage
     const historico = await carregarHistoricoEmails();
+    if (req.body.envio_id && !env) {
+      const h = historico.find(x => x.id === String(req.body.envio_id));
+      if (h) env = { id: h.id, estado: h.estado, total: h.total, enviados: h.enviados, falhados: h.falhados, ultimo_erro: h.erro || '' };
+    }
     return res.json({ status: 'success', response: {
       envio: env ? { id: env.id, estado: env.estado, total: env.total, enviados: env.enviados, falhados: env.falhados, erro: env.ultimo_erro || '' } : null,
       historico: historico.slice(0, 30)
@@ -17475,6 +17529,383 @@ app.get('/agenda.js', (req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
   return res.send(AGENDA_JS);
 });
+
+const LEGAL_SITE_JS = "/* Daniel IA - privacidade e cookies dos sites criados (1.70.0).\n   Só aparece se o dono do site ligar em \"Privacidade do site\". Acrescenta os\n   links legais ao rodapé e o aviso de cookies, com as cores do site.\n   Vem antes das estatísticas no /dia-medir.js: deixa a resposta em\n   window.__diaLegalP para as estatísticas saberem se podem contar o visitante. */\n(function(){\n  try {\n    var s = document.currentScript || document.querySelector('script[src*=\"dia-medir.js\"]');\n    var k = s && s.getAttribute('data-k');\n    if (!k || /dia_previa/.test(location.search) || /^v\\d+\\.html$/.test(location.pathname.split('/').pop() || '')) return;\n    var BASE = (s.src || '').replace(/\\/dia-medir\\.js.*$/, '');\n    if (!BASE || !window.fetch) return;\n    var CHAVE = 'dia_consent_site';\n    var L = (document.documentElement.lang || 'pt').slice(0, 2).toLowerCase();\n    var TX = {\n      pt: ['Privacidade', 'Termos', 'Cookies', 'Preferências de cookies', 'Usamos cookies', 'Usamos o essencial para o site funcionar (por exemplo, o carrinho) e, se aceitares, estatísticas anónimas de visitas para o melhorar.', 'Aceitar', 'Só essenciais', 'Saber mais'],\n      en: ['Privacy', 'Terms', 'Cookies', 'Cookie preferences', 'We use cookies', 'We use what is essential for the site to work (such as the cart) and, if you agree, anonymous visit statistics to improve it.', 'Accept', 'Essential only', 'Learn more'],\n      fr: ['Confidentialité', 'Conditions', 'Cookies', 'Préférences cookies', 'Nous utilisons des cookies', \"Nous utilisons l'essentiel au fonctionnement du site (comme le panier) et, si vous acceptez, des statistiques de visites anonymes pour l'améliorer.\", 'Accepter', 'Essentiels seulement', 'En savoir plus'],\n      es: ['Privacidad', 'Términos', 'Cookies', 'Preferencias de cookies', 'Usamos cookies', 'Usamos lo esencial para que el sitio funcione (como el carrito) y, si aceptas, estadísticas anónimas de visitas para mejorarlo.', 'Aceptar', 'Solo esenciales', 'Saber más']\n    };\n    var t = TX[L] || TX.pt;\n    var QS = L === 'pt' ? '' : '?l=en';\n    function esc(x){ return String(x == null ? '' : x).replace(/[&<>\"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }\n    function lerC(){ try { var c = JSON.parse(localStorage.getItem(CHAVE) || 'null'); return c && c.v === 1 && Date.now() - c.t < 365 * 864e5 ? c : null; } catch (e) { return null; } }\n    function gravarC(est){ try { localStorage.setItem(CHAVE, JSON.stringify({ v: 1, t: Date.now(), estatisticas: !!est })); if (!est) localStorage.removeItem('dia_v'); } catch (e) {} }\n    var P = fetch(BASE + '/site-legal?k=' + encodeURIComponent(k)).then(function(r){ return r.json(); }).catch(function(){ return null; });\n    window.__diaLegalP = P;\n    P.then(function(r){\n      if (!r || !r.activo || !r.links || document.querySelector('.dls-links')) return;\n      var ln = { privacidade: esc(r.links.privacidade + QS), termos: esc(r.links.termos + QS), cookies: esc(r.links.cookies + QS) };\n      var css = document.createElement('style');\n      css.setAttribute('data-daniel-ia', 'legal');\n      css.textContent = '.dls-links{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;padding:14px 16px;font-size:13px;font-family:inherit;clear:both}'\n        + '.dls-links a,.dls-links button{color:inherit;opacity:.75;text-decoration:none;background:none;border:none;padding:0;font:inherit;cursor:pointer}.dls-links a:hover,.dls-links button:hover{opacity:1;text-decoration:underline}'\n        + '.dls-aviso{position:fixed;left:16px;bottom:16px;z-index:2147480000;width:min(400px,calc(100vw - 32px));padding:18px;border-radius:var(--dia-raio,16px);background:var(--dia-superficie,var(--dia-fundo,#fff));color:var(--dia-texto,#1a1a1a);border:1px solid var(--dia-borda,rgba(0,0,0,.12));box-shadow:0 24px 60px -24px rgba(0,0,0,.45);font-family:var(--dia-fonte-texto,inherit);text-align:left;animation:dlsE .35s ease-out}'\n        + '@keyframes dlsE{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}'\n        + '.dls-aviso b{display:block;font-family:var(--dia-fonte-titulos,inherit);font-size:16px;margin-bottom:6px}.dls-aviso p{margin:0 0 14px;font-size:13.5px;line-height:1.55;color:var(--dia-texto-suave,#555)}.dls-aviso p a{color:var(--dia-primaria,#333);font-weight:700}'\n        + '.dls-btns{display:flex;gap:8px;flex-wrap:wrap}.dls-btns button{flex:1;min-width:120px;padding:11px 12px;border-radius:12px;font:inherit;font-weight:700;font-size:13.5px;cursor:pointer;border:1px solid var(--dia-borda,rgba(0,0,0,.15));background:transparent;color:inherit}'\n        + '.dls-btns .dls-sim{background:var(--dia-primaria,#222);color:var(--dia-primaria-texto,#fff);border-color:transparent}'\n        + '@media (max-width:480px){.dls-aviso{left:10px;right:10px;bottom:10px;width:auto}}@media (prefers-reduced-motion:reduce){.dls-aviso{animation:none}}';\n      document.head.appendChild(css);\n      // links no rodapé (o último <footer> da página; sem rodapé, no fim do corpo)\n      var rods = document.querySelectorAll('footer'), rod = rods[rods.length - 1];\n      var nav = document.createElement('nav');\n      nav.className = 'dls-links';\n      nav.setAttribute('aria-label', t[0]);\n      nav.innerHTML = '<a href=\"' + ln.privacidade + '\" target=\"_blank\" rel=\"noopener\">' + t[0] + '</a><a href=\"' + ln.termos + '\" target=\"_blank\" rel=\"noopener\">' + t[1] + '</a><a href=\"' + ln.cookies + '\" target=\"_blank\" rel=\"noopener\">' + t[2] + '</a><button type=\"button\" data-dls-pref>' + t[3] + '</button>';\n      (rod || document.body).appendChild(nav);\n      var aviso = null;\n      function fechar(){ if (aviso) { aviso.remove(); aviso = null; } }\n      function mostrar(){\n        if (aviso) return;\n        aviso = document.createElement('div');\n        aviso.className = 'dls-aviso';\n        aviso.setAttribute('role', 'region');\n        aviso.setAttribute('aria-label', t[4]);\n        aviso.innerHTML = '<b>' + t[4] + '</b><p>' + t[5] + ' <a href=\"' + ln.cookies + '\" target=\"_blank\" rel=\"noopener\">' + t[8] + '</a></p><div class=\"dls-btns\"><button type=\"button\" data-n>' + t[7] + '</button><button type=\"button\" class=\"dls-sim\" data-s>' + t[6] + '</button></div>';\n        document.body.appendChild(aviso);\n        aviso.querySelector('[data-s]').addEventListener('click', function(){ gravarC(true); fechar(); });\n        aviso.querySelector('[data-n]').addEventListener('click', function(){ gravarC(false); fechar(); });\n      }\n      nav.querySelector('[data-dls-pref]').addEventListener('click', mostrar);\n      window.danielSiteCookies = { abrir: mostrar, consentimento: lerC };\n      if (!lerC()) setTimeout(mostrar, 700);\n    });\n  } catch (e) {}\n})();\n";
+
+// ======================================================
+// Privacidade, termos e cookies dos sites criados (1.70.0)
+// ------------------------------------------------------
+// Só quando o dono liga em "Privacidade do site" (app /legal-site/).
+//  - Configuração no Storage: legal-sites/<siteId>.json (dados do negócio,
+//    entregas, devoluções, outras condições).
+//  - GET /site-legal?k=owner/slug -> { activo, links } (lido pelo script
+//    dos sites, que vem junto com o /dia-medir.js).
+//  - GET /legal-site/<siteId>/<privacidade|termos|cookies>?l=pt|en ->
+//    a página com o texto, montado com os dados do negócio e o tipo do site
+//    (loja: venda, entregas e devoluções; agendamento: marcações, sinal e
+//    cancelamento, tirados da configuração da agenda).
+//  - O responsável pelos dados é o negócio; a Daniel IA aparece como
+//    prestador técnico (aloja o site e guarda os dados por conta dele).
+// ======================================================
+const LS_DOCS = ['privacidade', 'termos', 'cookies'];
+const LS_TIPOS_LOJA = ['E-commerce', 'Checkout'];
+const lsCache = new Map();      // siteId -> { t, cfg }
+const lsChaves = new Map();     // owner/slug -> { t, site }
+const lsCores = new Map();      // siteId -> { t, cor }
+
+function lsTexto(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').replace(/[ \t]+/g, ' ').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, max); }
+function lsLimpar(c, site) {
+  c = c && typeof c === 'object' ? c : {};
+  const email = lsTexto(c.email, 120).toLowerCase();
+  return {
+    activo: c.activo === true,
+    nome_legal: lsTexto(c.nome_legal, 120).replace(/\n/g, ' '),
+    nuit: String(c.nuit || '').replace(/\D/g, '').slice(0, 9),
+    morada: lsTexto(c.morada, 200).replace(/\n/g, ' '),
+    email: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) ? email : '',
+    telefone: lsTexto(c.telefone, 30).replace(/[^\d+ ()-]/g, ''),
+    vende: typeof c.vende === 'boolean' ? c.vende : LS_TIPOS_LOJA.includes(site && site['Tipo']),
+    entregas: lsTexto(c.entregas, 600),
+    devolucoes_dias: Math.max(0, Math.min(90, Math.round(Number(c.devolucoes_dias != null && c.devolucoes_dias !== '' ? c.devolucoes_dias : 7)))),
+    notas: lsTexto(c.notas, 1500),
+    actualizado: /^\d{4}-\d{2}-\d{2}$/.test(String(c.actualizado || '')) ? c.actualizado : ''
+  };
+}
+async function lsLer(site) {
+  const id = site._id;
+  const c = lsCache.get(id);
+  if (c && Date.now() - c.t < 60000) return c.cfg;
+  let cfg;
+  try { cfg = lsLimpar(JSON.parse((await descarregarDoBunny('legal-sites/' + id + '.json')).toString('utf8')), site); }
+  catch (e) { cfg = lsLimpar({ nome_legal: site['Nome'] || '' }, site); }
+  lsCache.set(id, { t: Date.now(), cfg });
+  return cfg;
+}
+async function lsGuardar(site, cfg) {
+  await uploadParaBunny('legal-sites/' + site._id + '.json', Buffer.from(JSON.stringify(cfg), 'utf8'), 'application/json; charset=utf-8');
+  lsCache.set(site._id, { t: Date.now(), cfg });
+}
+// 'owner/slug' (o data-k do dia-medir.js) -> site
+async function lsSitePorChave(k) {
+  if (!/^[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_.-]{1,80}$/.test(k)) return null;
+  const c = lsChaves.get(k);
+  if (c && Date.now() - c.t < (c.site ? 300000 : 60000)) return c.site;
+  let site = null;
+  try {
+    const l = await bubbleList('site', [{ key: 'Bunny Path', constraint_type: 'equals', value: 'sites/' + k + '/index.html' }]);
+    site = l.find(s => s['Owner'] === k.split('/')[0]) || null;
+  } catch (e) { site = null; }
+  if (lsChaves.size > 5000) lsChaves.clear();
+  lsChaves.set(k, { t: Date.now(), site });
+  return site;
+}
+function lsUrlSite(site) {
+  if (site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo') return 'https://' + site['Dominio Personalizado'] + '/';
+  return String(site['CDN URL'] || '');
+}
+function lsLinks(site) {
+  const b = SELF_URL + '/legal-site/' + encodeURIComponent(site._id) + '/';
+  return { privacidade: b + 'privacidade', termos: b + 'termos', cookies: b + 'cookies' };
+}
+// A cor principal do site (--dia-primaria), para a página legal combinar com ele.
+async function lsCor(site) {
+  const c = lsCores.get(site._id);
+  if (c && Date.now() - c.t < 600000) return c.cor;
+  let cor = '';
+  try {
+    const html = (await descarregarDoBunny(String(site['Bunny Path'] || '').replace(/^\/+/, ''))).toString('utf8');
+    const m = /--dia-primaria\s*:\s*(#[0-9a-fA-F]{3,8})\b/.exec(html);
+    cor = m ? m[1] : '';
+  } catch (e) { cor = ''; }
+  lsCores.set(site._id, { t: Date.now(), cor });
+  return cor;
+}
+function lsDataLonga(iso, l) {
+  const d = iso && !isNaN(Date.parse(iso + 'T12:00:00Z')) ? new Date(iso + 'T12:00:00Z') : new Date();
+  try { return new Intl.DateTimeFormat(l === 'en' ? 'en-GB' : 'pt-PT', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(d); }
+  catch (e) { return d.toISOString().slice(0, 10); }
+}
+
+// ---------- os textos ----------
+// d: { nome, nuit, morada, email, telefone, url, vende, agenda, entregas, devolucoes_dias, notas }
+function lsContactoHtml(d, l) {
+  const e = escaparHtml;
+  const partes = [];
+  if (d.email) partes.push('<a href="mailto:' + e(d.email) + '">' + e(d.email) + '</a>');
+  if (d.telefone) partes.push('<a href="tel:' + e(d.telefone.replace(/[^\d+]/g, '')) + '">' + e(d.telefone) + '</a>');
+  return partes.join(l === 'en' ? ' or ' : ' ou ');
+}
+function lsParagrafos(t) { return String(t || '').split(/\n+/).filter(Boolean).map(p => '<p>' + escaparHtml(p) + '</p>').join(''); }
+function lsQuem(d, l) {
+  const e = escaparHtml;
+  const extra = [d.nuit ? 'NUIT ' + e(d.nuit) : '', d.morada ? e(d.morada) : ''].filter(Boolean).join(', ');
+  return '<strong>' + e(d.nome) + '</strong>' + (extra ? ' (' + extra + ')' : '');
+}
+function lsPagAgenda(a, l) {
+  if (!a) return '';
+  if (l === 'en') return a.pagamento === 'total' ? 'The booking is only confirmed once the full price has been paid online.' : (a.pagamento === 'sinal' ? 'To secure the time slot, a deposit of ' + a.sinal_pct + '% of the service price is paid online when booking; the rest is paid at the appointment.' : 'No payment is required to book; the service is paid at the appointment.');
+  return a.pagamento === 'total' ? 'A marcação só fica confirmada depois de pago o valor total, online.' : (a.pagamento === 'sinal' ? 'Para garantir o horário, paga-se online um sinal de ' + a.sinal_pct + '% do preço do serviço no momento da marcação; o restante paga-se no atendimento.' : 'Não é preciso pagar nada para marcar; o serviço paga-se no atendimento.');
+}
+
+function lsDocPrivacidade(d, l) {
+  const e = escaparHtml, C = lsContactoHtml(d, l);
+  if (l === 'en') return { titulo: 'Privacy Policy', intro: 'How ' + e(d.nome) + ' collects, uses and protects your personal data when you use this website.', seccoes: [
+    ['Who is responsible', '<p>' + lsQuem(d, l) + ' is responsible for the personal data collected through this website (<a href="' + e(d.url) + '">' + e(d.url.replace(/^https?:\/\//, '').replace(/\/$/, '')) + '</a>).</p><p>For any question about your data, contact us at ' + C + '.</p>'],
+    ['What data we collect', '<ul><li><b>Contacts you send us</b> - name, phone, email and your message, when you write to us through a form, WhatsApp or email.</li>'
+      + (d.vende ? '<li><b>Orders</b> - name, phone, email, delivery address, products, quantities and amounts. Payments by M-Pesa, e-Mola or card are processed by the payment provider: we never see your PIN or full card details.</li>' : '')
+      + (d.agenda ? '<li><b>Bookings</b> - name, phone, email, the service, the professional, the date and time, and any note you leave.</li>' : '')
+      + '<li><b>Visit statistics</b> - page viewed, where the visit came from and whether it was a phone or computer. They are anonymous; a random number is only stored in your browser to count unique visitors if you accept statistics.</li></ul>'],
+    ['Why we use it', '<ul><li>To answer your messages and requests.</li>' + (d.vende ? '<li>To process, deliver and support your orders, and to issue the documents required by law.</li>' : '') + (d.agenda ? '<li>To manage your bookings and send confirmations, reminders and changes by email or WhatsApp.</li>' : '') + '<li>To keep the website secure and improve it.</li></ul><p>We do not sell your data. We only send you promotions if you have agreed to it, and you can stop them at any time.</p>'],
+    ['Who else has access', '<p>Only who needs it to provide the service:</p><ul><li><b>Daniel IA</b> (Zoriel-tech Su Lda, Maputo), the platform that hosts this website and stores the data on our behalf, as a technical provider.</li>' + (d.vende || (d.agenda && d.agenda.pagamento !== 'nenhum') ? '<li><b>Payment providers</b> (M-Pesa, e-Mola, card networks), to process payments.</li>' : '') + '<li><b>Email and messaging services</b>, to send notifications.</li>' + (d.vende ? '<li><b>Delivery partners</b>, when there is a delivery.</li>' : '') + '<li><b>Authorities</b>, only when the law requires it.</li></ul>'],
+    ['Where it is stored', '<p>The data is stored on servers of cloud providers, which may be located outside Mozambique, with secure connections (HTTPS) and restricted access.</p>'],
+    ['How long we keep it', '<ul>' + (d.vende ? '<li>Orders and payments: for the period required by tax and accounting law.</li>' : '') + (d.agenda ? '<li>Bookings: up to 24 months after the appointment.</li>' : '') + '<li>Messages: for as long as needed to answer you and follow up.</li><li>Statistics: only in aggregate form (totals per day).</li></ul>'],
+    ['Your rights', '<p>You can ask to see the data we hold about you, correct it, delete it when we no longer need to keep it, or object to receiving promotions. Contact ' + C + '; we reply within 30 days.</p><p>These rights follow the Constitution of the Republic of Mozambique, which protects privacy and personal data in computer records, and Law no. 3/2017 on electronic transactions.</p>'],
+    ['Security', '<p>We use encrypted connections and limit access to the data. No system is 100% safe; if something serious happens to your data, we will let you know.</p>'],
+    ['Minors', '<p>This website is not aimed at children. If you are under 18, ask a parent or guardian before sending us your data.</p>'],
+    ['Changes', '<p>We may update this policy. The date at the top always shows the latest version.</p>']
+  ] };
+  return { titulo: 'Política de Privacidade', intro: 'Como ' + e(d.nome) + ' recolhe, usa e protege os teus dados pessoais quando usas este site.', seccoes: [
+    ['Quem é o responsável', '<p>' + lsQuem(d, l) + ' é o responsável pelos dados pessoais recolhidos através deste site (<a href="' + e(d.url) + '">' + e(d.url.replace(/^https?:\/\//, '').replace(/\/$/, '')) + '</a>).</p><p>Para qualquer questão sobre os teus dados, fala connosco por ' + C + '.</p>'],
+    ['Que dados recolhemos', '<ul><li><b>Contactos que nos envias</b> - nome, telefone, email e a tua mensagem, quando nos escreves por formulário, WhatsApp ou email.</li>'
+      + (d.vende ? '<li><b>Encomendas</b> - nome, telefone, email, morada de entrega, produtos, quantidades e valores. Os pagamentos por M-Pesa, e-Mola ou cartão são processados pelo prestador de pagamentos: nunca vemos o teu PIN nem os dados completos do cartão.</li>' : '')
+      + (d.agenda ? '<li><b>Marcações</b> - nome, telefone, email, o serviço, o profissional, o dia e a hora, e a nota que deixares.</li>' : '')
+      + '<li><b>Estatísticas de visitas</b> - página vista, de onde veio a visita e se foi telemóvel ou computador. São anónimas; só se aceitares as estatísticas fica guardado no teu navegador um número ao acaso, para contar visitantes únicos.</li></ul>'],
+    ['Para que os usamos', '<ul><li>Para responder às tuas mensagens e pedidos.</li>' + (d.vende ? '<li>Para processar, entregar e dar apoio às tuas encomendas, e emitir os documentos que a lei exige.</li>' : '') + (d.agenda ? '<li>Para gerir as tuas marcações e enviar confirmações, lembretes e alterações por email ou WhatsApp.</li>' : '') + '<li>Para manter o site seguro e melhorá-lo.</li></ul><p>Não vendemos os teus dados. Só te enviamos promoções se tiveres concordado, e podes deixar de as receber quando quiseres.</p>'],
+    ['Quem mais tem acesso', '<p>Só quem precisa para prestar o serviço:</p><ul><li><b>Daniel IA</b> (Zoriel-tech Su Lda, Maputo), a plataforma que aloja este site e guarda os dados por nossa conta, como prestador técnico.</li>' + (d.vende || (d.agenda && d.agenda.pagamento !== 'nenhum') ? '<li><b>Prestadores de pagamento</b> (M-Pesa, e-Mola, redes de cartões), para processar os pagamentos.</li>' : '') + '<li><b>Serviços de email e mensagens</b>, para enviar os avisos.</li>' + (d.vende ? '<li><b>Parceiros de entrega</b>, quando há entrega.</li>' : '') + '<li><b>Autoridades</b>, só quando a lei o exigir.</li></ul>'],
+    ['Onde ficam guardados', '<p>Os dados ficam em servidores de prestadores de serviços na nuvem, que podem estar fora de Moçambique, com ligações seguras (HTTPS) e acesso restrito.</p>'],
+    ['Durante quanto tempo', '<ul>' + (d.vende ? '<li>Encomendas e pagamentos: o tempo exigido pela lei fiscal e contabilística.</li>' : '') + (d.agenda ? '<li>Marcações: até 24 meses depois do atendimento.</li>' : '') + '<li>Mensagens: o tempo necessário para te responder e dar seguimento.</li><li>Estatísticas: só em totais (somas por dia).</li></ul>'],
+    ['Os teus direitos', '<p>Podes pedir para ver os dados que temos sobre ti, corrigi-los, apagá-los quando já não formos obrigados a guardá-los, ou opor-te a receber promoções. Fala connosco por ' + C + '; respondemos no prazo de 30 dias.</p><p>Estes direitos seguem a Constituição da República de Moçambique, que protege a vida privada e os dados pessoais em registos informáticos, e a Lei n.º 3/2017, das transacções electrónicas.</p>'],
+    ['Segurança', '<p>Usamos ligações cifradas e limitamos o acesso aos dados. Nenhum sistema é 100% seguro; se acontecer algo grave com os teus dados, avisamos-te.</p>'],
+    ['Menores', '<p>Este site não é dirigido a crianças. Se tens menos de 18 anos, pede a um dos pais ou a um adulto responsável antes de nos enviares os teus dados.</p>'],
+    ['Alterações', '<p>Podemos actualizar esta política. A data no topo mostra sempre a versão em vigor.</p>']
+  ] };
+}
+
+function lsDocTermos(d, l) {
+  const e = escaparHtml, C = lsContactoHtml(d, l), a = d.agenda;
+  const notas = d.notas ? [[l === 'en' ? 'Other conditions' : 'Outras condições', lsParagrafos(d.notas)]] : [];
+  if (l === 'en') return { titulo: 'Terms of Use', intro: 'The rules for using this website' + (d.vende ? ' and buying from ' + e(d.nome) : '') + (a ? ' and booking with ' + e(d.nome) : '') + '. By using it, you accept these terms.', seccoes: [
+    ['Who we are', '<p>This website belongs to ' + lsQuem(d, l) + '. Contact: ' + C + '.</p>'],
+    ['Using the website', '<p>You may use this website for personal and lawful purposes. Do not try to break its security, copy its content for commercial purposes or use it to harm others.</p>'],
+    ['Information and prices', '<p>We do our best to keep the information correct and up to date. Prices are in meticais (MZN). If there is an obvious error in a price or description, we will contact you before going ahead' + (d.vende ? ' and you may cancel the order at no cost' : '') + '.</p>'],
+  ].concat(d.vende ? [
+    ['Orders and payment', '<p>The order is placed when you complete the checkout and is confirmed once the payment is approved (M-Pesa, e-Mola or card). You will receive a confirmation with the order details. Products are subject to availability; if something runs out after you pay, we will offer you an alternative or refund that amount.</p>'],
+    ['Delivery', d.entregas ? lsParagrafos(d.entregas) : '<p>Delivery times, areas and costs are agreed with you after the order. Contact us at ' + C + ' if you have any questions.</p>'],
+    ['Returns and exchanges', d.devolucoes_dias ? '<p>You can ask to return or exchange a product within <b>' + d.devolucoes_dias + ' days</b> of receiving it, as long as it is unused, in its original packaging and with proof of purchase. Contact ' + C + ' before sending it back.</p><p>If the product is faulty or does not match what you ordered, we will exchange it or refund you, as provided for in Law no. 22/2009 (Consumer Protection Law).</p>' : '<p>We do not accept returns for change of mind. If the product is faulty or does not match what you ordered, we will exchange it or refund you, as provided for in Law no. 22/2009 (Consumer Protection Law). Contact ' + C + '.</p>']
+  ] : []).concat(a ? [
+    ['Bookings', '<p>You choose the service, the professional (if any), the day and time, and leave your contact details. ' + (a.confirmacao === 'manual' ? 'Each booking is confirmed by us; you will receive a message when it is.' : 'The booking is confirmed straight away and you receive a confirmation.') + '</p><p>' + lsPagAgenda(a, l) + '</p>'],
+    ['Cancelling and rescheduling', '<p>' + (a.cancelar_h ? 'You can cancel through the link in the confirmation up to <b>' + a.cancelar_h + ' hours</b> before the appointment. After that, contact us directly.' : 'You can cancel through the link in the confirmation until the time of the appointment.') + (a.pagamento !== 'nenhum' ? ' If you cancel within that period, the amount paid is refunded or kept as credit, as agreed with you. Late cancellations and no-shows may lose the amount paid.' : '') + '</p><p>If we need to change or cancel your booking, we will let you know as soon as possible' + (a.pagamento !== 'nenhum' ? ' and refund what you paid if you cannot come at another time' : '') + '.</p>']
+  ] : []).concat(notas).concat([
+    ['Intellectual property', '<p>The texts, images, logos and design of this website belong to ' + e(d.nome) + ' or are used with permission. Do not reuse them without authorisation.</p>'],
+    ['Liability', '<p>We are responsible for what we sell and the services we provide, under the law. We are not responsible for external websites we link to, or for interruptions caused by third parties (networks, payment providers, hosting).</p>'],
+    ['Applicable law and disputes', '<p>These terms are governed by the laws of the Republic of Mozambique. If there is a problem, talk to us first: most situations are solved quickly. If not, the competent Mozambican courts will decide, without prejudice to your rights as a consumer.</p>'],
+    ['Changes', '<p>We may update these terms. The date at the top always shows the latest version; changes do not affect orders or bookings already made.</p>']
+  ]) };
+  return { titulo: 'Termos de Utilização', intro: 'As regras para usar este site' + (d.vende ? ' e comprar a ' + e(d.nome) : '') + (a ? ' e marcar com ' + e(d.nome) : '') + '. Ao usá-lo, aceitas estes termos.', seccoes: [
+    ['Quem somos', '<p>Este site pertence a ' + lsQuem(d, l) + '. Contacto: ' + C + '.</p>'],
+    ['Utilização do site', '<p>Podes usar este site para fins pessoais e legais. Não tentes quebrar a segurança, copiar o conteúdo para fins comerciais ou usá-lo para prejudicar outras pessoas.</p>'],
+    ['Informação e preços', '<p>Fazemos o possível para manter a informação certa e actualizada. Os preços estão em meticais (MZN). Se houver um erro evidente num preço ou descrição, falamos contigo antes de avançar' + (d.vende ? ' e podes cancelar a encomenda sem custos' : '') + '.</p>'],
+  ].concat(d.vende ? [
+    ['Encomendas e pagamento', '<p>A encomenda é feita quando concluis o checkout e fica confirmada quando o pagamento é aprovado (M-Pesa, e-Mola ou cartão). Recebes uma confirmação com os detalhes. Os produtos estão sujeitos a disponibilidade; se algo esgotar depois de pagares, propomos-te uma alternativa ou devolvemos esse valor.</p>'],
+    ['Entregas', d.entregas ? lsParagrafos(d.entregas) : '<p>Os prazos, as zonas e o custo da entrega são combinados contigo depois da encomenda. Fala connosco por ' + C + ' se tiveres dúvidas.</p>'],
+    ['Devoluções e trocas', d.devolucoes_dias ? '<p>Podes pedir a devolução ou troca de um produto até <b>' + d.devolucoes_dias + ' dias</b> depois de o receberes, desde que não tenha sido usado, esteja na embalagem original e com o comprovativo da compra. Fala connosco por ' + C + ' antes de o enviares.</p><p>Se o produto tiver defeito ou não corresponder ao que encomendaste, trocamo-lo ou devolvemos o valor, como prevê a Lei n.º 22/2009 (Lei de Defesa do Consumidor).</p>' : '<p>Não aceitamos devoluções por desistência. Se o produto tiver defeito ou não corresponder ao que encomendaste, trocamo-lo ou devolvemos o valor, como prevê a Lei n.º 22/2009 (Lei de Defesa do Consumidor). Fala connosco por ' + C + '.</p>']
+  ] : []).concat(a ? [
+    ['Marcações', '<p>Escolhes o serviço, o profissional (se houver), o dia e a hora, e deixas os teus contactos. ' + (a.confirmacao === 'manual' ? 'Cada marcação é confirmada por nós; recebes uma mensagem quando estiver confirmada.' : 'A marcação fica confirmada logo e recebes a confirmação.') + '</p><p>' + lsPagAgenda(a, l) + '</p>'],
+    ['Cancelar e remarcar', '<p>' + (a.cancelar_h ? 'Podes cancelar pelo link da confirmação até <b>' + a.cancelar_h + ' horas</b> antes do atendimento. Depois disso, fala directamente connosco.' : 'Podes cancelar pelo link da confirmação até à hora do atendimento.') + (a.pagamento !== 'nenhum' ? ' Se cancelares dentro desse prazo, o valor pago é devolvido ou fica como crédito, conforme combinado contigo. Cancelamentos fora do prazo e faltas podem perder o valor pago.' : '') + '</p><p>Se precisarmos de mudar ou cancelar a tua marcação, avisamos-te o quanto antes' + (a.pagamento !== 'nenhum' ? ' e devolvemos o que pagaste se não puderes vir noutra hora' : '') + '.</p>']
+  ] : []).concat(notas).concat([
+    ['Propriedade intelectual', '<p>Os textos, imagens, logótipos e o design deste site pertencem a ' + e(d.nome) + ' ou são usados com autorização. Não os reutilizes sem autorização.</p>'],
+    ['Responsabilidade', '<p>Respondemos pelo que vendemos e pelos serviços que prestamos, nos termos da lei. Não respondemos por sites externos para os quais haja links, nem por interrupções causadas por terceiros (redes, prestadores de pagamento, alojamento).</p>'],
+    ['Lei aplicável e litígios', '<p>Estes termos regem-se pelas leis da República de Moçambique. Se houver um problema, fala primeiro connosco: a maioria das situações resolve-se depressa. Se não for possível, decidem os tribunais moçambicanos competentes, sem prejuízo dos teus direitos como consumidor.</p>'],
+    ['Alterações', '<p>Podemos actualizar estes termos. A data no topo mostra sempre a versão em vigor; as alterações não afectam encomendas nem marcações já feitas.</p>']
+  ]) };
+}
+
+function lsDocCookies(d, l) {
+  const e = escaparHtml;
+  const linha = (n, p, t) => '<tr><td><code>' + n + '</code></td><td>' + p + '</td><td>' + t + '</td></tr>';
+  if (l === 'en') return { titulo: 'Cookie Policy', intro: 'What this website stores in your browser, why, and how you can choose.', seccoes: [
+    ['What they are', '<p>Cookies and similar technologies (such as the browser\'s local storage) are small pieces of information that a website saves on your device, to remember things between visits.</p>'],
+    ['What we use', '<table><thead><tr><th>Name</th><th>What it is for</th><th>Type</th></tr></thead><tbody>'
+      + linha('dia_consent_site', 'Remembers your cookie choice (12 months).', 'Essential')
+      + (d.vende ? linha('daniel_ia_carrinho_*', 'Keeps your shopping cart.', 'Essential') + linha('daniel_ia_vistos_*', 'Remembers the products you viewed, to show them again.', 'Essential') : '')
+      + linha('daniel_ia_quiz_*', 'Remembers your quiz result, if the website has one.', 'Essential')
+      + linha('dia_v', 'Random number to count unique visitors. Only if you accept statistics.', 'Statistics')
+      + '</tbody></table><p>We do not use advertising cookies nor sell information about your visits.</p>'],
+    ['Third parties', '<p>Some parts of the website come from other services, which may set their own cookies under their own policies: fonts (Google Fonts), the payment page' + (d.vende || (d.agenda && d.agenda.pagamento !== 'nenhum') ? ' (M-Pesa, e-Mola, card)' : '') + ', WhatsApp when you click to talk to us, and embedded maps or videos (Google Maps, YouTube), if any.</p>'],
+    ['How to choose', '<p>Use the <b>Cookie preferences</b> button at the bottom of the website to accept or refuse statistics at any time. You can also delete what is stored in your browser settings; the cart and choices saved there will be lost.</p>'],
+    ['Contact', '<p>Questions? Talk to ' + e(d.nome) + ' at ' + lsContactoHtml(d, l) + '.</p>']
+  ] };
+  return { titulo: 'Política de Cookies', intro: 'O que este site guarda no teu navegador, para quê, e como podes escolher.', seccoes: [
+    ['O que são', '<p>Os cookies e tecnologias parecidas (como o armazenamento local do navegador) são pequenas informações que um site guarda no teu aparelho, para se lembrar de coisas entre visitas.</p>'],
+    ['O que usamos', '<table><thead><tr><th>Nome</th><th>Para que serve</th><th>Tipo</th></tr></thead><tbody>'
+      + linha('dia_consent_site', 'Guarda a tua escolha sobre cookies (12 meses).', 'Essencial')
+      + (d.vende ? linha('daniel_ia_carrinho_*', 'Guarda o teu carrinho de compras.', 'Essencial') + linha('daniel_ia_vistos_*', 'Lembra os produtos que viste, para os mostrar de novo.', 'Essencial') : '')
+      + linha('daniel_ia_quiz_*', 'Lembra o resultado do teu quiz, se o site tiver um.', 'Essencial')
+      + linha('dia_v', 'Número ao acaso para contar visitantes únicos. Só se aceitares as estatísticas.', 'Estatísticas')
+      + '</tbody></table><p>Não usamos cookies de publicidade nem vendemos informação sobre as tuas visitas.</p>'],
+    ['Terceiros', '<p>Algumas partes do site vêm de outros serviços, que podem usar os seus próprios cookies, segundo as suas políticas: as letras (Google Fonts), a página de pagamento' + (d.vende || (d.agenda && d.agenda.pagamento !== 'nenhum') ? ' (M-Pesa, e-Mola, cartão)' : '') + ', o WhatsApp quando clicas para falar connosco, e mapas ou vídeos incorporados (Google Maps, YouTube), se os houver.</p>'],
+    ['Como escolher', '<p>Usa o botão <b>Preferências de cookies</b>, no fundo do site, para aceitar ou recusar as estatísticas quando quiseres. Também podes apagar o que está guardado nas definições do navegador; o carrinho e as escolhas guardadas perdem-se.</p>'],
+    ['Contacto', '<p>Dúvidas? Fala com ' + e(d.nome) + ' por ' + lsContactoHtml(d, l) + '.</p>']
+  ] };
+}
+
+const LS_UI = {
+  pt: { doc: { privacidade: 'Privacidade', termos: 'Termos', cookies: 'Cookies' }, act: 'Última actualização', voltar: 'Voltar ao site', imprimir: 'Imprimir', indice: 'Nesta página', previa: 'Pré-visualização: estas páginas ainda não estão ligadas no site.', feito: 'Feito com', nada: 'Página não disponível', nadaP: 'Este site não tem esta página.' },
+  en: { doc: { privacidade: 'Privacy', termos: 'Terms', cookies: 'Cookies' }, act: 'Last updated', voltar: 'Back to the website', imprimir: 'Print', indice: 'On this page', previa: 'Preview: these pages are not switched on on the website yet.', feito: 'Made with', nada: 'Page not available', nadaP: 'This website does not have this page.' }
+};
+
+function lsPagina(site, cfg, doc, l, cor, agenda) {
+  const e = escaparHtml, U = LS_UI[l];
+  const d = { nome: cfg.nome_legal || site['Nome'] || 'Este negócio', nuit: cfg.nuit, morada: cfg.morada, email: cfg.email, telefone: cfg.telefone, url: lsUrlSite(site) || '#',
+    vende: cfg.vende, agenda: agenda, entregas: cfg.entregas, devolucoes_dias: cfg.devolucoes_dias, notas: cfg.notas };
+  const D = (doc === 'privacidade' ? lsDocPrivacidade : (doc === 'termos' ? lsDocTermos : lsDocCookies))(d, l);
+  const p = /^#[0-9a-fA-F]{3,8}$/.test(cor || '') ? cor : '#1F2937';
+  const links = lsLinks(site);
+  const qs = l === 'en' ? '?l=en' : '';
+  const abas = LS_DOCS.map(x => '<a href="' + e(links[x] + qs) + '"' + (x === doc ? ' aria-current="page"' : '') + '>' + U.doc[x] + '</a>').join('');
+  const indice = D.seccoes.map((s, i) => '<li><a href="#s' + (i + 1) + '">' + e(s[0]) + '</a></li>').join('');
+  const corpo = D.seccoes.map((s, i) => '<section id="s' + (i + 1) + '"><h2><span>' + String(i + 1).padStart(2, '0') + '</span>' + e(s[0]) + '</h2>' + s[1] + '</section>').join('');
+  return `<!DOCTYPE html><html lang="${l}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${e(D.titulo)} · ${e(d.nome)}</title><meta name="description" content="${e(D.intro.replace(/<[^>]+>/g, ''))}">${cfg.activo ? '' : '<meta name="robots" content="noindex">'}
+<style>
+:root{--p:${p};--tinta:#16181D;--suave:#5B6270;--linha:#E6E8EC;--fundo:#F7F7F5;--cartao:#fff}
+@media (prefers-color-scheme:dark){:root{--tinta:#ECEEF2;--suave:#A3A9B6;--linha:#2A2E37;--fundo:#111318;--cartao:#181B21}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--fundo);color:var(--tinta);font:16px/1.7 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--p)}
+.topo{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--fundo) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--linha)}
+.topo-in{max-width:1080px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px}
+.marca{display:flex;align-items:center;gap:10px;font-weight:800;color:var(--tinta);text-decoration:none;min-width:0}
+.marca i{width:30px;height:30px;border-radius:9px;background:var(--p);color:#fff;display:grid;place-items:center;font-style:normal;font-size:14px;flex:0 0 30px}
+.marca span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.voltar{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:999px;border:1px solid var(--linha);background:var(--cartao);color:var(--tinta);font-weight:700;font-size:14px;text-decoration:none;white-space:nowrap}
+.voltar:hover{border-color:var(--p)}
+.cab{max-width:1080px;margin:0 auto;padding:clamp(28px,6vw,64px) 20px 8px}
+.abas{display:inline-flex;gap:4px;padding:4px;border-radius:999px;background:var(--cartao);border:1px solid var(--linha);margin-bottom:26px;flex-wrap:wrap}
+.abas a{padding:8px 16px;border-radius:999px;color:var(--suave);font-weight:700;font-size:14px;text-decoration:none}
+.abas a[aria-current]{background:var(--p);color:#fff}
+h1{font-size:clamp(32px,5.6vw,54px);line-height:1.04;letter-spacing:-.03em;margin:0 0 14px}
+.intro{font-size:clamp(17px,2vw,19px);color:var(--suave);max-width:640px;margin:0 0 16px}
+.data{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--suave)}
+.data b{width:8px;height:8px;border-radius:50%;background:var(--p)}
+.previa{max-width:1040px;margin:18px auto 0;padding:12px 16px;border-radius:14px;background:#FFF7E6;color:#7A4B00;border:1px solid #F3D49B;font-size:14px;font-weight:600}
+.grelha{max-width:1080px;margin:0 auto;padding:28px 20px 60px;display:grid;grid-template-columns:240px minmax(0,1fr);gap:40px;align-items:start}
+.indice{position:sticky;top:84px;font-size:14px}
+.indice b{display:block;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--suave);margin-bottom:10px}
+.indice ol{list-style:none;margin:0;padding:0;border-left:2px solid var(--linha)}
+.indice a{display:block;padding:6px 0 6px 14px;margin-left:-2px;border-left:2px solid transparent;color:var(--suave);text-decoration:none;line-height:1.35}
+.indice a:hover{color:var(--tinta);border-left-color:var(--p)}
+.indice button{margin-top:18px;padding:8px 14px;border-radius:999px;border:1px solid var(--linha);background:var(--cartao);color:var(--tinta);font:inherit;font-weight:700;cursor:pointer}
+article{background:var(--cartao);border:1px solid var(--linha);border-radius:24px;padding:clamp(22px,4vw,48px)}
+section{padding:6px 0 22px;scroll-margin-top:90px}section+section{border-top:1px solid var(--linha);padding-top:26px}
+h2{display:flex;align-items:baseline;gap:12px;font-size:clamp(20px,2.4vw,24px);letter-spacing:-.01em;line-height:1.25;margin:0 0 12px}
+h2 span{font:700 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--p)}
+p{margin:0 0 12px}ul{margin:0 0 12px;padding-left:20px}li{margin:0 0 8px}li::marker{color:var(--p)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:6px 0 14px;display:block;overflow-x:auto}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--linha);vertical-align:top}th{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--suave)}
+code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:color-mix(in srgb,var(--p) 10%,transparent);padding:2px 6px;border-radius:6px;white-space:nowrap}
+.rodape{max-width:1080px;margin:0 auto;padding:0 20px 40px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--suave)}
+.rodape a{color:var(--suave)}
+@media (max-width:860px){.grelha{grid-template-columns:1fr;gap:18px}.indice{position:static}.indice ol{display:none}.indice b{display:none}.indice button{display:none}}
+@media print{.topo,.indice,.abas,.previa,.rodape{display:none}body{background:#fff;color:#000}article{border:0;padding:0}.grelha{display:block;padding:0}}
+</style></head><body>
+<header class="topo"><div class="topo-in"><a class="marca" href="${e(d.url)}"><i>${e(d.nome.trim().charAt(0).toUpperCase() || '·')}</i><span>${e(d.nome)}</span></a><a class="voltar" href="${e(d.url)}">&larr; ${U.voltar}</a></div></header>
+${cfg.activo ? '' : '<div class="previa">' + U.previa + '</div>'}
+<div class="cab"><nav class="abas">${abas}</nav><h1>${e(D.titulo)}</h1><p class="intro">${D.intro}</p><span class="data"><b></b>${U.act}: ${e(lsDataLonga(cfg.actualizado, l))}</span></div>
+<div class="grelha"><aside class="indice"><b>${U.indice}</b><ol>${indice}</ol><button type="button" onclick="window.print()">${U.imprimir}</button></aside><article>${corpo}</article></div>
+<footer class="rodape"><span>&copy; ${new Date().getFullYear()} ${e(d.nome)}</span><span>${U.feito} <a href="https://daniel-ia.pro" rel="noopener">Daniel IA</a></span></footer>
+</body></html>`;
+}
+
+// ---------- rotas públicas ----------
+app.get('/site-legal', async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  try {
+    if (!contar('site-legal:' + ipDe(req), 240, MIN)) return res.json({ activo: false });
+    const site = await lsSitePorChave(String(req.query.k || ''));
+    if (!site || site['Status'] !== 'Pronto') return res.json({ activo: false });
+    const cfg = await lsLer(site);
+    if (!cfg.activo) return res.json({ activo: false });
+    return res.json({ activo: true, links: lsLinks(site) });
+  } catch (erro) {
+    return res.json({ activo: false });
+  }
+});
+app.get('/legal-site/:siteId/:doc', async (req, res) => {
+  const l = String(req.query.l || '').slice(0, 2) === 'en' ? 'en' : 'pt';
+  const nada = (cod) => {
+    res.status(cod).set('Content-Type', 'text/html; charset=utf-8');
+    return res.send('<!DOCTYPE html><html lang="' + l + '"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>' + LS_UI[l].nada + '</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F7F7F5;color:#16181D;padding:20px;text-align:center}h1{font-size:24px;margin:0 0 8px}p{color:#5B6270;margin:0}</style></head><body><main><h1>' + LS_UI[l].nada + '</h1><p>' + LS_UI[l].nadaP + '</p></main></body></html>');
+  };
+  try {
+    if (!contar('legal-site:' + ipDe(req), 120, MIN)) return nada(429);
+    const doc = String(req.params.doc || '');
+    if (!LS_DOCS.includes(doc) || !/^[A-Za-z0-9_-]{1,64}$/.test(req.params.siteId)) return nada(404);
+    const site = await bubbleGet('site', req.params.siteId).catch(() => null);
+    if (!site || site['Status'] !== 'Pronto') return nada(404);
+    const cfg = await lsLer(site);
+    if (!cfg.activo && !(cfg.nome_legal && (cfg.email || cfg.telefone))) return nada(404);
+    let agenda = null;
+    if (site['Tipo'] === 'Agendamento') {
+      try { const a = await agLer(site); agenda = { pagamento: await agPagamentoEfectivo(site, a), sinal_pct: a.sinal_pct, cancelar_h: a.cancelar_h, confirmacao: a.confirmacao }; }
+      catch (e) { agenda = { pagamento: 'nenhum', sinal_pct: 30, cancelar_h: 2, confirmacao: 'automatica' }; }
+    }
+    const html = lsPagina(site, cfg, doc, l, await lsCor(site), agenda);
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=120');
+    return res.send(html);
+  } catch (erro) {
+    console.error('Erro em /legal-site:', erro);
+    return nada(500);
+  }
+});
+
+// ---------- rotas do dono (app /legal-site/) ----------
+async function lsSiteDoDono(req, res) {
+  const site = req.body.site_id ? await bubbleGet('site', req.body.site_id).catch(() => null) : null;
+  if (!site || site['Owner'] !== req.body.owner) { res.json({ status: 'error', message: 'Não tens permissão para este site.' }); return null; }
+  return site;
+}
+async function lsResposta(site, cfg) {
+  let agenda = null;
+  if (site['Tipo'] === 'Agendamento') {
+    try { const a = await agLer(site); agenda = { pagamento: await agPagamentoEfectivo(site, a), sinal_pct: a.sinal_pct, cancelar_h: a.cancelar_h, confirmacao: a.confirmacao }; } catch (e) { agenda = null; }
+  }
+  return { config: cfg, links: lsLinks(site), agenda,
+    site: { id: site._id, nome: site['Nome'] || '', tipo: site['Tipo'] || '', url: lsUrlSite(site), pronto: site['Status'] === 'Pronto' } };
+}
+app.post('/site-legal-ler', async (req, res) => {
+  try {
+    const site = await lsSiteDoDono(req, res);
+    if (!site) return;
+    const cfg = await lsLer(site);
+    return res.json({ status: 'success', response: await lsResposta(site, cfg) });
+  } catch (erro) {
+    console.error('Erro em /site-legal-ler:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível abrir.' });
+  }
+});
+app.post('/site-legal-guardar', async (req, res) => {
+  try {
+    const site = await lsSiteDoDono(req, res);
+    if (!site) return;
+    const cfg = lsLimpar(req.body.config, site);
+    if (cfg.activo) {
+      if (cfg.nome_legal.length < 2) return res.json({ status: 'error', campo: 'nome_legal', message: 'Escreve o nome do negócio (ou o teu nome, se vendes em nome próprio).' });
+      if (!cfg.email && !cfg.telefone) return res.json({ status: 'error', campo: 'email', message: 'Deixa pelo menos um contacto (email ou telefone) para os clientes falarem contigo sobre os dados deles.' });
+      if (req.body.config && req.body.config.email && !cfg.email) return res.json({ status: 'error', campo: 'email', message: 'O email não parece válido.' });
+    }
+    cfg.actualizado = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10);
+    await lsGuardar(site, cfg);
+    const k = chaveMedicaoDoSite(site);
+    if (k) lsChaves.set(k, { t: Date.now(), site });
+    return res.json({ status: 'success', response: await lsResposta(site, cfg) });
+  } catch (erro) {
+    console.error('Erro em /site-legal-guardar:', erro);
+    return res.json({ status: 'error', message: 'Não foi possível guardar. Tenta outra vez.' });
+  }
+});
+['/site-legal-ler', '/site-legal-guardar'].forEach(r => ROTAS_PRIVADAS.add(r));
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
