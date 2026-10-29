@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.74.0'; // 29/10/2026 - domínios: todas as extensões do mundo (às páginas, com filtro); cores do logótipo
+const VERSION = '1.74.1'; // 29/10/2026 - domínios: todas as extensões do mundo; custo real de qualquer extensão no painel; cores do logótipo
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -14890,7 +14890,7 @@ app.post('/admin-dominios', async (req, res) => {
     const c = await configDominios();
     const lista = await bubbleListTodos('dominio', [], 2000).catch(() => []);
     lista.sort((a, b) => String(b['Created Date'] || '').localeCompare(String(a['Created Date'] || '')));
-    let tldsDisponiveis = [], moedaTurbo = '', tabela = [];
+    let tldsDisponiveis = [], moedaTurbo = '', tabela = [], apiTodas = {};
     try {
       const m = await produtosDominio(); tldsDisponiveis = Array.from(m.keys()).sort(); moedaTurbo = moedaDe(m.get('com') || m.values().next().value);
       const tlds = Array.from(new Set(c.tlds.concat(Object.keys(c.custos || {})))).filter(t => m.has(t));
@@ -14900,10 +14900,11 @@ app.post('/admin-dominios', async (req, res) => {
           custo: { registo: Math.round(pr.custo_mzn.registo * 100) / 100, renovacao: Math.round(pr.custo_mzn.renovacao * 100) / 100 },
           manual: (c.custos || {})[t] || null, preco: { registo: pr.registo, renovacao: pr.renovacao }, origem: pr.origem };
       });
+      m.forEach((p, t) => { const a = precosDoTld(t, p, c).custo_api; apiTodas[t] = [Math.round(a.registo * 100) / 100, Math.round(a.renovacao * 100) / 100]; });
     } catch (e) { tldsDisponiveis = []; }
     const emails = {};
     return res.json({ status: 'success', response: {
-      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, moeda_turbo: moedaTurbo, config: c, tabela, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
+      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, moeda_turbo: moedaTurbo, config: c, tabela, api_todas: apiTodas, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
       dominios: lista.filter(d => d['Estado'] !== 'Por pagar').slice(0, 300).map(d => {
         const x = dadosDominio(d);
         return { id: d._id, dominio: d['Nome'], estado: d['Estado'], owner: d['Owner'], site: d['Site'], valor_mzn: Number(d['Valor MZN']) || 0,
