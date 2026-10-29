@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.73.0'; // 29/10/2026 - cores e identidade do logótipo nos sites, lojas e templates; domínios com custo real
+const VERSION = '1.74.0'; // 29/10/2026 - domínios: todas as extensões do mundo (às páginas, com filtro); cores do logótipo
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -14181,6 +14181,7 @@ const DOMINIO_PADRAO = {
   tlds: (clean(process.env.DOMINIO_TLDS) || 'co.mz,mz,com,net,org,store,shop,online,africa,co')
     .split(',').map(t => t.trim().toLowerCase().replace(/^\./, '')).filter(Boolean),
   fixos: {},
+  todas: clean(process.env.DOMINIO_TODAS) !== '0', // 1.74.0: vende todas as extensões da TurboHost (as da lista aparecem primeiro)
   custos: {} // 1.72.0: { tld: { registo, renovacao } } em MZN - o que a TurboHost te cobra mesmo
 };
 // Contacto técnico e de cobrança (opcional): JSON com FirstName, LastName,
@@ -14335,6 +14336,7 @@ async function configDominios() {
       if (Array.isArray(guardado.tlds) && guardado.tlds.length) c.tlds = guardado.tlds;
       if (guardado.fixos && typeof guardado.fixos === 'object') c.fixos = guardado.fixos;
       if (guardado.custos && typeof guardado.custos === 'object') c.custos = guardado.custos;
+      if (typeof guardado.todas === 'boolean') c.todas = guardado.todas;
     }
   } catch (e) { /* ainda não há configuração guardada */ }
   cacheConfigDominios = { t: Date.now(), c };
@@ -14437,6 +14439,25 @@ function separarDominio(texto, tldsConhecidos) {
   return { sld, tld };
 }
 
+// ---- 1.74.0: que extensões mostrar e por que ordem ----
+const DOMINIO_POR_PAGINA = 16;
+const DOMINIO_POPULARES = ['com', 'net', 'org', 'co.mz', 'mz', 'africa', 'online', 'store', 'shop', 'site', 'info', 'biz', 'co', 'io', 'app', 'dev', 'tech', 'xyz', 'me', 'pro', 'website', 'space', 'business', 'company', 'agency', 'studio', 'design', 'digital', 'media', 'live', 'world', 'global', 'club', 'blog', 'news', 'top', 'life', 'cloud', 'solutions', 'services', 'consulting', 'academy', 'education', 'health', 'clinic', 'restaurant', 'cafe', 'food', 'fashion', 'beauty', 'hair', 'fitness', 'travel', 'tours', 'photography', 'music', 'art', 'events', 'church', 'law', 'finance', 'money', 'realestate', 'house', 'land', 'farm', 'energy', 'eco', 'auto', 'car', 'express', 'delivery', 'market', 'sale', 'deals', 'co.za', 'co.uk', 'uk', 'eu', 'us', 'ca', 'pt', 'com.br', 'br', 'ao', 'co.ao', 'fr', 'de', 'es', 'it', 'nl', 'in', 'ae', 'ng', 'ke'];
+function ordemExtensoes(c, produtos, filtro, tldPedido) {
+  const vende = t => produtos.has(t) && precosDoTld(t, produtos.get(t), c).registo > 0;
+  let ordem = c.tlds.filter(vende);
+  if (c.todas !== false) {
+    const resto = Array.from(produtos.keys()).filter(t => !ordem.includes(t) && vende(t));
+    const pop = DOMINIO_POPULARES.filter(t => resto.includes(t));
+    ordem = ordem.concat(pop, resto.filter(t => !pop.includes(t)).sort());
+  }
+  if (filtro) {
+    const f = filtro.replace(/^\./, '');
+    ordem = ordem.filter(t => t.includes(f)).sort((a, b) => (a === f ? -2 : a.startsWith(f) ? -1 : 0) - (b === f ? -2 : b.startsWith(f) ? -1 : 0));
+  }
+  if (tldPedido) ordem = [tldPedido].concat(ordem.filter(t => t !== tldPedido));
+  return ordem;
+}
+
 // ---- Pesquisa: disponibilidade + preço ----
 app.post('/dominio-procurar', async (req, res) => {
   try {
@@ -14445,12 +14466,12 @@ app.post('/dominio-procurar', async (req, res) => {
     const produtos = await produtosDominio();
     const { sld, tld } = separarDominio(req.body.nome, Array.from(produtos.keys()));
     if (sld.length < 2) return res.json({ status: 'error', message: 'Escreve o nome que queres (pelo menos 2 letras ou números).' });
-    let tlds = c.tlds.filter(t => produtos.has(t));
-    if (tld) {
-      if (!produtos.has(tld)) return res.json({ status: 'error', message: 'Ainda não vendemos domínios ".' + tld + '". Experimenta outra extensão.' });
-      tlds = [tld].concat(tlds.filter(t => t !== tld));
-    }
-    tlds = tlds.slice(0, 14);
+    if (tld && !produtos.has(tld)) return res.json({ status: 'error', message: 'Ainda não vendemos domínios ".' + tld + '". Experimenta outra extensão.' });
+    // 1.74.0: as da lista do painel primeiro, depois as mais procuradas no mundo, depois todas (A-Z)
+    const ordem = ordemExtensoes(c, produtos, limparTld(req.body.filtro || ''), tld);
+    const pagina = Math.max(0, Math.min(500, parseInt(req.body.pagina, 10) || 0));
+    const tlds = ordem.slice(pagina * DOMINIO_POR_PAGINA, (pagina + 1) * DOMINIO_POR_PAGINA);
+    if (!tlds.length) return res.json({ status: 'success', response: { sld, procurado: tld ? sld + '.' + tld : '', resultados: [], total: ordem.length, pagina, mais: false } });
     const disp = await verDisponibilidade(sld, tlds);
     const lista = tlds.map(t => {
       const d = disp[sld + '.' + t] || {};
@@ -14464,7 +14485,7 @@ app.post('/dominio-procurar', async (req, res) => {
         documentos: documentosDoTld(p)
       };
     }).filter(x => x.preco > 0);
-    return res.json({ status: 'success', response: { sld, procurado: tld ? sld + '.' + tld : '', resultados: lista } });
+    return res.json({ status: 'success', response: { sld, procurado: tld ? sld + '.' + tld : '', resultados: lista, total: ordem.length, pagina, mais: (pagina + 1) * DOMINIO_POR_PAGINA < ordem.length } });
   } catch (erro) {
     console.error('Erro em /dominio-procurar:', esconderChaveTurbo(erro.message || erro));
     return res.json({ status: 'error', message: 'Não foi possível procurar agora. Tenta outra vez daqui a pouco.' });
@@ -14903,9 +14924,10 @@ app.post('/admin-dominios-config', async (req, res) => {
     const c = {
       taxa: Math.min(500, Math.max(1, Number(b.taxa) || DOMINIO_PADRAO.taxa)),
       margem: Math.min(500, Math.max(0, Number(b.margem) || 0)),
-      tlds: (Array.isArray(b.tlds) ? b.tlds : String(b.tlds || '').split(',')).map(limparTld).filter(Boolean).slice(0, 30),
+      tlds: (Array.isArray(b.tlds) ? b.tlds : String(b.tlds || '').split(',')).map(limparTld).filter(Boolean).slice(0, 60),
       fixos: {},
-      custos: {}
+      custos: {},
+      todas: b.todas !== false
     };
     if (!c.tlds.length) c.tlds = DOMINIO_PADRAO.tlds;
     Object.keys(b.custos || {}).slice(0, 60).forEach(k => {
@@ -14984,7 +15006,7 @@ app.post('/admin-dominios-teste', async (req, res) => {
 ['/dominio-procurar', '/dominio-pedido', '/dominios', '/dominio-estado', '/dominio-renovar', '/admin-dominios', '/admin-dominios-config', '/admin-dominio-tentar', '/admin-dominios-teste']
   .forEach(r => ROTAS_PRIVADAS.add(r));
 Object.assign(LIMITES, {
-  '/dominio-procurar': [['owner', 60, 10 * MIN], ['ip', 120, 10 * MIN]],
+  '/dominio-procurar': [['owner', 180, 10 * MIN], ['ip', 300, 10 * MIN]],
   '/dominio-pedido': [['owner', 12, 60 * MIN]],
   '/dominio-renovar': [['owner', 12, 60 * MIN]]
 });
