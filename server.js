@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.71.1'; // 29/10/2026 - email de confirmação de site criado; OpenAI sem saldo: o Free paga o plano primeiro, os pagos ficam na fila
+const VERSION = '1.73.0'; // 29/10/2026 - cores e identidade do logótipo nos sites, lojas e templates; domínios com custo real
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2170,7 +2170,7 @@ async function fetchGeracao(url, opcoes) {
   }
 }
 
-async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes, referencia, paginas, fotos, quiz }) {
+async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, direcao, outrasDirecoes, referencia, paginas, fotos, quiz, marca }) {
   const multiPagina = Array.isArray(paginas) && paginas.length > 1;
   const lingua = normalizarIdioma(idioma);
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
@@ -2243,7 +2243,7 @@ ${guia}${padroesDoTipo(tipo)}${instrucaoRiqueza(tipo)}${INSTRUCAO_ICONES}${instr
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Idioma do site: ${IDIOMAS_SITE[lingua].nome}
-${instrucaoLogo}${instrucaoImagens}${instrucaoFotos(fotos)}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
+${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
 Descrição pedida pela pessoa: ${prompt}`;
 
   // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
@@ -6179,8 +6179,10 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
         .then(r => guardarQuizNoSite(siteId, r.quiz).then(() => r))
         .catch(erro => { console.error('O quiz não foi criado:', erro.message || erro); return null; })
       : Promise.resolve(null);
-    const [refR, planoR, quizR] = await Promise.all([tarefaReferencia, tarefaPlano, tarefaQuiz]);
-    tokensReferencia = (refR ? refR.tokens || 0 : 0) + (planoR.tokens || 0) + (quizR ? quizR.tokens || 0 : 0);
+    const tarefaMarca = estado.logo ? marcaDoSite(siteId, logo_data_url || estado.logo, estado.logo) : Promise.resolve({ marca: null, tokens: 0 });
+    const [refR, planoR, quizR, marcaR] = await Promise.all([tarefaReferencia, tarefaPlano, tarefaQuiz, tarefaMarca]);
+    estado.marca = marcaR.marca || null;
+    tokensReferencia = (refR ? refR.tokens || 0 : 0) + (planoR.tokens || 0) + (quizR ? quizR.tokens || 0 : 0) + (marcaR.tokens || 0);
     if (quizR) quizAtivo = true;
     if (comReferencia) {
       const analise = (refR && refR.analise) || analiseReferenciaVazia(tipo);
@@ -6215,8 +6217,9 @@ async function processarVariantes({ owner, nome, tipo, prompt, logo_data_url, im
           nome, tipo, prompt, logoUrl: estado.logo, imagensUrls, siteId, mostrarMarcaDeAgua, idioma,
           direcao: Object.assign({ n: i + 1 }, d), outrasDirecoes: outras,
           referencia: comReferencia ? { url: referencia_data_url } : null,
-          paginas: estado.plano_paginas || null, fotos: estado.fotos || [], quiz: quizAtivo
+          paginas: estado.plano_paginas || null, fotos: estado.fotos || [], quiz: quizAtivo, marca: estado.marca
         });
+        html = aplicarCoresMarcaHtml(html, estado.marca, prompt);
         tokens += tokensReferencia;
         if (ehLoja) html = marcarEstiloLoja(html, d.cartao, d.tema);
         const caminho = `sites/${owner}/${slug}/v${i + 1}.html`;
@@ -6512,6 +6515,9 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
       }
     }
 
+    // 1.73.0: as cores e o estilo do logótipo (em paralelo com o resto)
+    const tarefaMarca = logoUrl ? marcaDoSite(siteId, logo_data_url, logoUrl) : Promise.resolve({ marca: null, tokens: 0 });
+
     // ---- Imagens anexadas ao pedido (opcional) ----
     // Ao contrário do logótipo, estas foram pedidas explicitamente pela
     // pessoa para entrarem no site - se o envio falhar (normalmente por
@@ -6541,9 +6547,10 @@ async function processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imag
     const planoPaginas = planoR.paginas && planoR.paginas.length > 1 ? planoR.paginas : [];
 
     // ---- Gerar o HTML com a OpenAI ----
-    const gerado = await gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, referencia: referencia_data_url ? { url: referencia_data_url } : null, paginas: planoPaginas, fotos: planoR.fotos, quiz: !!quizR });
-    const html = gerado.html;
-    const tokens = gerado.tokens + (planoR.tokens || 0) + (quizR ? quizR.tokens || 0 : 0);
+    const marcaR = await tarefaMarca;
+    const gerado = await gerarComOpenAI({ marca: marcaR.marca, nome, tipo, prompt, logoUrl, imagensUrls, siteId, mostrarMarcaDeAgua, idioma, referencia: referencia_data_url ? { url: referencia_data_url } : null, paginas: planoPaginas, fotos: planoR.fotos, quiz: !!quizR });
+    const html = aplicarCoresMarcaHtml(gerado.html, marcaR.marca, prompt);
+    const tokens = gerado.tokens + (planoR.tokens || 0) + (quizR ? quizR.tokens || 0 : 0) + (marcaR.tokens || 0);
 
     // ---- Guardar o HTML no Bunny Storage ----
     const caminhoSite = `sites/${owner}/${siteSlug}/index.html`;
@@ -14070,7 +14077,9 @@ async function processarTemplate({ owner, nome, tipo, prompt, logo_data_url, sit
     delete conteudo.fotos;
     conteudo.marca = Object.assign({}, conteudo.marca, { nome });
     const fts = await prepararFotos({ owner, slug, pedidos: tPedidosFotos(t, usos, iaR && iaR.conteudo) });
-    const m = montarTemplate({ t, conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: !!quizR, nome });
+    // 1.73.0: com logótipo, o template ganha as cores dele
+    const marcaR = logoUrl ? await marcaDoSite(siteId, logo_data_url, logoUrl) : { marca: null, tokens: 0 };
+    const m = montarTemplate({ t: recolorirTemplate(t, marcaR.marca), conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: !!quizR, nome });
     let html = prepararCasca(m.casca, m.plano);
     html = aplicarRedeResponsiva(html);
     const ehLoja = tipo === 'E-commerce' || tipo === 'Checkout';
@@ -14086,7 +14095,7 @@ async function processarTemplate({ owner, nome, tipo, prompt, logo_data_url, sit
     const caminhoSite = `sites/${owner}/${slug}/index.html`;
     const cdnUrl = await uploadParaBunny(caminhoSite, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
     await uploadParaBunny(`sites/${owner}/${slug}/_paginas.json`, Buffer.from(JSON.stringify({ versao: 1, idioma: normalizarIdioma(idioma), fragmentos: m.fragmentos, template: t.id, actualizado: new Date().toISOString() }), 'utf8'), 'application/json; charset=utf-8');
-    const tokens = (iaR ? iaR.tokens : 0) + (fts.tokens || 0) + (quizR ? quizR.tokens || 0 : 0);
+    const tokens = (iaR ? iaR.tokens : 0) + (fts.tokens || 0) + (quizR ? quizR.tokens || 0 : 0) + (marcaR.tokens || 0);
     await bubblePatch('generation', generationId, { 'Status': 'Pronto', 'Tokens Usados': tokens });
     await cobrarTokensCriacao(owner, tokens);
     await bubblePatch('site', siteId, {
@@ -14168,10 +14177,11 @@ const TURBOHOST_URL = (clean(process.env.TURBOHOST_URL) || 'https://my.turbo.hos
 const DOMINIO_NS = ['kiki.bunny.net', 'coco.bunny.net'];
 const DOMINIO_PADRAO = {
   taxa: Number(clean(process.env.DOMINIO_TAXA_USD)) || 66,
-  margem: Number(clean(process.env.DOMINIO_MARGEM)) || 30,
+  margem: Number(clean(process.env.DOMINIO_MARGEM)) || 15,
   tlds: (clean(process.env.DOMINIO_TLDS) || 'co.mz,mz,com,net,org,store,shop,online,africa,co')
     .split(',').map(t => t.trim().toLowerCase().replace(/^\./, '')).filter(Boolean),
-  fixos: {}
+  fixos: {},
+  custos: {} // 1.72.0: { tld: { registo, renovacao } } em MZN - o que a TurboHost te cobra mesmo
 };
 // Contacto técnico e de cobrança (opcional): JSON com FirstName, LastName,
 // Company, EMail, City, State, AddressLine1, ZipCode, Phone. Sem ele, usa
@@ -14324,6 +14334,7 @@ async function configDominios() {
       if (Number(guardado.margem) >= 0) c.margem = Number(guardado.margem);
       if (Array.isArray(guardado.tlds) && guardado.tlds.length) c.tlds = guardado.tlds;
       if (guardado.fixos && typeof guardado.fixos === 'object') c.fixos = guardado.fixos;
+      if (guardado.custos && typeof guardado.custos === 'object') c.custos = guardado.custos;
     }
   } catch (e) { /* ainda não há configuração guardada */ }
   cacheConfigDominios = { t: Date.now(), c };
@@ -14360,14 +14371,28 @@ function custoMznDe(p, tipo, c) {
   const valor = Math.max(0, Number(x.amount) || 0);
   return moedaDe(p, tipo) === 'MZN' ? valor : valor * c.taxa;
 }
+function arredondarDominio(v) {
+  if (!(v > 0)) return 0;
+  const passo = v < 1000 ? 5 : 10;
+  return Math.ceil(Math.round(v * 100) / 100 / passo) * passo;
+}
 function mznDe(custoMzn, c) {
   if (!(custoMzn > 0)) return 0;
-  return Math.ceil((custoMzn * (1 + c.margem / 100)) / 10) * 10;
+  return arredondarDominio(custoMzn * (1 + c.margem / 100));
+}
+// Custo que vale para uma extensão: o que escreveste no painel (custo real
+// na TurboHost, ex: a promoção do 1.º ano) ou, se não escreveste, o da API.
+function custoManualDe(c, tld, tipo) {
+  const x = c && c.custos && c.custos[tld];
+  const v = x ? Number(x[tipo]) : 0;
+  return v > 0 ? v : 0;
 }
 function precosDoTld(tld, p, c) {
   const fixo = c.fixos && Number(c.fixos[tld]) > 0 ? Math.round(Number(c.fixos[tld])) : 0;
+  const api = { registo: custoMznDe(p, 'register', c), renovacao: custoMznDe(p, 'renewal', c) };
   const custo = {
-    registo: custoMznDe(p, 'register', c), renovacao: custoMznDe(p, 'renewal', c),
+    registo: custoManualDe(c, tld, 'registo') || api.registo,
+    renovacao: custoManualDe(c, tld, 'renovacao') || api.renovacao,
     transferencia: custoMznDe(p, 'transfer', c), privacidade: custoMznDe(p, 'whois_privacy', c)
   };
   return {
@@ -14376,7 +14401,9 @@ function precosDoTld(tld, p, c) {
     transferencia: mznDe(custo.transferencia, c),
     privacidade: mznDe(custo.privacidade, c),
     moeda: moedaDe(p),
-    custo_mzn: custo
+    custo_mzn: custo,
+    custo_api: api,
+    origem: fixo ? 'fixo' : (custoManualDe(c, tld, 'registo') || custoManualDe(c, tld, 'renovacao') ? 'manual' : 'api')
   };
 }
 // Campos extra que a extensão exige (ex: número de identificação, um ficheiro).
@@ -14842,11 +14869,20 @@ app.post('/admin-dominios', async (req, res) => {
     const c = await configDominios();
     const lista = await bubbleListTodos('dominio', [], 2000).catch(() => []);
     lista.sort((a, b) => String(b['Created Date'] || '').localeCompare(String(a['Created Date'] || '')));
-    let tldsDisponiveis = [], moedaTurbo = '';
-    try { const m = await produtosDominio(); tldsDisponiveis = Array.from(m.keys()).sort(); moedaTurbo = moedaDe(m.get('com') || m.values().next().value); } catch (e) { tldsDisponiveis = []; }
+    let tldsDisponiveis = [], moedaTurbo = '', tabela = [];
+    try {
+      const m = await produtosDominio(); tldsDisponiveis = Array.from(m.keys()).sort(); moedaTurbo = moedaDe(m.get('com') || m.values().next().value);
+      const tlds = Array.from(new Set(c.tlds.concat(Object.keys(c.custos || {})))).filter(t => m.has(t));
+      tabela = tlds.map(t => {
+        const pr = precosDoTld(t, m.get(t), c);
+        return { tld: t, a_venda: c.tlds.includes(t), api: { registo: Math.round(pr.custo_api.registo * 100) / 100, renovacao: Math.round(pr.custo_api.renovacao * 100) / 100 },
+          custo: { registo: Math.round(pr.custo_mzn.registo * 100) / 100, renovacao: Math.round(pr.custo_mzn.renovacao * 100) / 100 },
+          manual: (c.custos || {})[t] || null, preco: { registo: pr.registo, renovacao: pr.renovacao }, origem: pr.origem };
+      });
+    } catch (e) { tldsDisponiveis = []; }
     const emails = {};
     return res.json({ status: 'success', response: {
-      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, moeda_turbo: moedaTurbo, config: c, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
+      activo: !!TURBOHOST_KEY, ultimo_erro: ultimoErroTurbo, moeda_turbo: moedaTurbo, config: c, tabela, tlds_disponiveis: tldsDisponiveis.slice(0, 1500),
       dominios: lista.filter(d => d['Estado'] !== 'Por pagar').slice(0, 300).map(d => {
         const x = dadosDominio(d);
         return { id: d._id, dominio: d['Nome'], estado: d['Estado'], owner: d['Owner'], site: d['Site'], valor_mzn: Number(d['Valor MZN']) || 0,
@@ -14868,9 +14904,15 @@ app.post('/admin-dominios-config', async (req, res) => {
       taxa: Math.min(500, Math.max(1, Number(b.taxa) || DOMINIO_PADRAO.taxa)),
       margem: Math.min(500, Math.max(0, Number(b.margem) || 0)),
       tlds: (Array.isArray(b.tlds) ? b.tlds : String(b.tlds || '').split(',')).map(limparTld).filter(Boolean).slice(0, 30),
-      fixos: {}
+      fixos: {},
+      custos: {}
     };
     if (!c.tlds.length) c.tlds = DOMINIO_PADRAO.tlds;
+    Object.keys(b.custos || {}).slice(0, 60).forEach(k => {
+      const t = limparTld(k), x = b.custos[k] || {};
+      const reg = Math.round((Number(x.registo) || 0) * 100) / 100, ren = Math.round((Number(x.renovacao) || 0) * 100) / 100;
+      if (t && (reg > 0 || ren > 0)) c.custos[t] = Object.assign({}, reg > 0 ? { registo: reg } : {}, ren > 0 ? { renovacao: ren } : {});
+    });
     Object.keys(b.fixos || {}).slice(0, 60).forEach(k => { const t = limparTld(k); const v = Math.round(Number(b.fixos[k]) || 0); if (t && v > 0) c.fixos[t] = v; });
     await uploadParaBunny('config/dominios.json', Buffer.from(JSON.stringify(c), 'utf8'), 'application/json; charset=utf-8');
     cacheConfigDominios = { t: Date.now(), c: Object.assign({}, DOMINIO_PADRAO, c) };
@@ -16503,7 +16545,8 @@ async function aplicarTemplateAoSite({ owner, site, t, inicio }) {
     conteudo.marca = Object.assign({}, conteudo.marca, { nome });
     const fts = await prepararFotos({ owner, slug: slugFotos, pedidos: tPedidosFotos(t, usos, iaR && iaR.conteudo) });
     const logoUrl = site['Logo URL'] || '';
-    const m = montarTemplate({ t, conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: temQuiz, nome });
+    const marcaT = logoUrl ? await marcaDoSite(siteId, logoUrl, logoUrl) : { marca: null };
+    const m = montarTemplate({ t: recolorirTemplate(t, marcaT.marca), conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: temQuiz, nome });
 
     let html = prepararCasca(m.casca, m.plano);
     html = aplicarRedeResponsiva(html);
@@ -18119,6 +18162,216 @@ async function cicloFilaIA() {
 }
 setTimeout(() => { cicloFilaIA(); setInterval(cicloFilaIA, 5 * 60 * 1000).unref(); }, 45000).unref();
 globalThis.__danielFilaIA = { ciclo: cicloFilaIA, processar: processarFilaIA, sondar: sondarSaldoIA };
+
+
+// ======================================================
+// Identidade visual a partir do logótipo (1.73.0)
+// ------------------------------------------------------
+// Quando a pessoa carrega um logótipo, o site/loja tem de parecer da mesma
+// marca: as cores, o ambiente e o tipo de letra saem do logótipo.
+//  1. analisarLogo: SVG -> lê as cores do próprio ficheiro (sem IA);
+//     PNG/JPG/WEBP -> uma chamada curta de visão à OpenAI (detail low),
+//     que devolve as cores por importância, o estilo e a tipografia.
+//  2. paletaDaMarca: calcula em código as fichas com contraste garantido
+//     (texto em cima da cor principal, versão legível da cor para links e
+//     etiquetas, cor escura para rodapés, fundo levemente tingido).
+//  3. Usos: instrução obrigatória para a IA (instrucaoMarca), fichas
+//     --dia-primaria/--dia-primaria-texto forçadas no HTML final
+//     (aplicarCoresMarcaHtml) e templates recoloridos (recolorirTemplate).
+//  4. Fica guardada no site (Variantes Json -> marca) para mudar de
+//     layout ou de template sem voltar a analisar.
+//  Se a descrição da pessoa pedir cores concretas, a descrição manda.
+// ======================================================
+function mcHex(v) {
+  let s = String(v || '').trim();
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(s);
+  if (rgb) return '#' + [rgb[1], rgb[2], rgb[3]].map(n => Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0')).join('').toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(s)) s = '#' + s.slice(1).split('').map(c => c + c).join('');
+  return /^#[0-9a-f]{6}$/i.test(s) ? s.toUpperCase() : '';
+}
+function mcRgb(h) { const x = parseInt(h.slice(1), 16); return [(x >> 16) & 255, (x >> 8) & 255, x & 255]; }
+function mcDeRgb(c) { return '#' + c.map(n => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')).join('').toUpperCase(); }
+function mcLum(h) { return mcRgb(h).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }).reduce((t, v, i) => t + v * [0.2126, 0.7152, 0.0722][i], 0); }
+function mcContraste(a, b) { const x = mcLum(a), y = mcLum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+function mcMistura(a, b, p) { const x = mcRgb(a), y = mcRgb(b); return mcDeRgb(x.map((v, i) => v + (y[i] - v) * p)); }
+function mcSat(h) { const [r, g, b] = mcRgb(h).map(v => v / 255); const mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mx === mn) return 0; const l = (mx + mn) / 2; return (mx - mn) / (l > 0.5 ? 2 - mx - mn : mx + mn); }
+function mcNeutra(h) { return mcSat(h) < 0.14 || mcLum(h) > 0.9 || mcLum(h) < 0.012; }
+function mcTextoSobre(h) { return mcContraste(h, '#FFFFFF') >= mcContraste(h, '#111111') ? '#FFFFFF' : '#111111'; }
+// Escurece (ou clareia) a cor até ter o contraste pedido com o fundo.
+function mcLegivel(cor, fundo, alvo) {
+  if (mcContraste(cor, fundo) >= alvo) return cor;
+  const destino = mcLum(fundo) > 0.4 ? '#000000' : '#FFFFFF';
+  for (let p = 0.05; p <= 1; p += 0.05) { const c = mcMistura(cor, destino, p); if (mcContraste(c, fundo) >= alvo) return c; }
+  return destino === '#000000' ? '#111111' : '#FFFFFF';
+}
+
+function limparMarcaLogo(o) {
+  o = o && typeof o === 'object' ? o : {};
+  const cores = [...new Set((Array.isArray(o.cores) ? o.cores : []).map(mcHex).filter(Boolean))].slice(0, 6);
+  const m = {
+    cores,
+    primaria: mcHex(o.primaria) || '', secundaria: mcHex(o.secundaria) || '', destaque: mcHex(o.destaque) || '',
+    monocromatico: o.monocromatico === true,
+    fundo_logo: ['claro', 'escuro', 'transparente'].includes(o.fundo_logo) ? o.fundo_logo : 'transparente',
+    estilo: textoCurto(o.estilo, 160), tipografia: textoCurto(o.tipografia, 120),
+    fonte_titulos: textoCurto(o.fonte_titulos, 40).replace(/[^A-Za-z0-9 ]/g, ''), fonte_texto: textoCurto(o.fonte_texto, 40).replace(/[^A-Za-z0-9 ]/g, ''),
+    personalidade: textoCurto(o.personalidade, 160)
+  };
+  // a principal tem de ser uma cor a sério (não branco, preto ou cinzento)
+  const coloridas = [m.primaria, m.secundaria, m.destaque].concat(cores).filter(c => c && !mcNeutra(c));
+  if (!m.primaria || mcNeutra(m.primaria)) m.primaria = coloridas[0] || '';
+  if (!m.secundaria || m.secundaria === m.primaria) m.secundaria = coloridas.find(c => c !== m.primaria) || '';
+  if (!m.destaque || m.destaque === m.primaria) m.destaque = m.secundaria || '';
+  if (!m.primaria) m.monocromatico = true;
+  if (m.monocromatico && !m.primaria) m.neutra = cores.find(c => mcLum(c) < 0.2) || '#111111';
+  return m;
+}
+// Fichas prontas a usar, com contraste garantido.
+function paletaDaMarca(m) {
+  if (!m) return null;
+  if (!m.primaria) {
+    const n = m.neutra || '#111111';
+    return { mono: true, primaria: n, primariaTexto: mcTextoSobre(n), destaque: n, realce: mcLegivel(n, '#FFFFFF', 4.5), escuro: mcLum(n) < 0.05 ? n : '#111111', fundo: '#FFFFFF', fundo2: '#F4F4F2' };
+  }
+  const p = m.primaria;
+  const segEscura = m.secundaria && mcLum(m.secundaria) < 0.06 ? m.secundaria : '';
+  return {
+    mono: false, primaria: p, primariaTexto: mcTextoSobre(p),
+    destaque: m.destaque || m.secundaria || p,
+    realce: mcLegivel(p, '#FFFFFF', 4.5),
+    escuro: segEscura || mcMistura(p, '#0B0B10', 0.8),
+    fundo: mcMistura('#FFFFFF', p, 0.025), fundo2: mcMistura('#FFFFFF', p, 0.07)
+  };
+}
+
+const SISTEMA_LOGO = 'És director de arte de identidade visual. Estudas logótipos para criar sites com a mesma identidade. Respondes só com um objecto JSON válido.';
+async function analisarLogo(fonte) {
+  fonte = String(fonte || '');
+  if (!fonte) return null;
+  // SVG: as cores estão escritas no próprio ficheiro
+  let svg = '';
+  if (/^data:image\/svg\+xml/i.test(fonte)) {
+    const i = fonte.indexOf(',');
+    svg = /;base64,/i.test(fonte.slice(0, i + 1)) ? Buffer.from(fonte.slice(i + 1), 'base64').toString('utf8') : decodeURIComponent(fonte.slice(i + 1));
+  } else if (/^https?:\/\/.+\.svg(\?|$)/i.test(fonte)) {
+    try { svg = await (await fetch(fonte, { signal: AbortSignal.timeout(15000) })).text(); } catch (e) { svg = ''; }
+  }
+  if (svg) {
+    const conta = {};
+    (svg.match(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\([^)]{5,40}\)/g) || []).forEach(c => { const h = mcHex(c); if (h) conta[h] = (conta[h] || 0) + 1; });
+    const cores = Object.keys(conta).sort((a, b) => conta[b] - conta[a]);
+    return { marca: limparMarcaLogo({ cores, monocromatico: !cores.some(c => !mcNeutra(c)) }), tokens: 0 };
+  }
+  if (!OPENAI_API_KEY) return null;
+  const pedido = [
+    'Este é o logótipo de um negócio. Vou criar o site/loja dele e tem de parecer claramente da MESMA marca.',
+    'Diz-me as cores reais do logótipo (ignora o fundo branco ou transparente da imagem), por ordem de importância, e o estilo.',
+    'Formato exacto: {"cores":["#RRGGBB"],"primaria":"#RRGGBB","secundaria":"#RRGGBB","destaque":"#RRGGBB","monocromatico":false,"fundo_logo":"claro|escuro|transparente",'
+      + '"estilo":"uma frase: ex. moderno e geométrico, artesanal, luxuoso, lúdico, corporativo","tipografia":"como são as letras do logótipo: ex. sem serifa grossa e redonda","fonte_titulos":"a fonte do Google Fonts mais parecida para títulos","fonte_texto":"uma fonte do Google Fonts legível que combine","personalidade":"uma frase sobre o ambiente da marca"}',
+    '"primaria" é a cor mais marcante (a que deve ir nos botões). Se o logótipo for só preto, branco ou cinzento, "monocromatico": true e "primaria" vazia.'
+  ].join('\n');
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST', signal: AbortSignal.timeout(60000),
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL, reasoning_effort: 'low', max_completion_tokens: 2500,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'system', content: SISTEMA_LOGO }, { role: 'user', content: [{ type: 'text', text: pedido }, { type: 'image_url', image_url: { url: fonte, detail: 'low' } }] }]
+    })
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error('OpenAI falhou: ' + ((json.error && json.error.message) || res.status));
+  const texto = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+  const m = texto.match(/\{[\s\S]*\}/);
+  return { marca: limparMarcaLogo(JSON.parse(m ? m[0] : texto)), tokens: (json.usage && json.usage.total_tokens) || 0 };
+}
+// Nunca deixa a criação falhar por causa da análise do logótipo.
+async function analisarLogoSeguro(fonte) {
+  try { return (await analisarLogo(fonte)) || { marca: null, tokens: 0 }; }
+  catch (e) { console.error('[logótipo] não deu para estudar as cores:', e.message || e); return { marca: null, tokens: 0 }; }
+}
+// A descrição pede cores concretas? Então a descrição manda.
+function pedidoTemCores(prompt) {
+  return /#[0-9a-f]{3,6}\b|\b(cor|cores|colou?r|couleur|verde|azul|vermelh|amarel|laranja|roxo|lil[aá]s|rosa|preto|branco|dourad|prateado|castanho|bege|cinz|turquesa|bordeaux|bord[oô]|green|blue|red|yellow|orange|purple|pink|black|gold|vert|bleu|rouge|jaune|noir|negro|rojo|amarillo|morado|naranja)\b/i.test(String(prompt || ''));
+}
+function instrucaoMarca(marca, prompt) {
+  const pa = paletaDaMarca(marca);
+  if (!pa) return '';
+  const manda = pedidoTemCores(prompt) ? 'Se a descrição da pessoa pedir cores concretas, a descrição manda; caso contrário, segue isto à risca.' : 'Segue isto à risca: tem prioridade sobre a direcção de arte e sobre qualquer sorteio de estilo (as versões diferem na composição, não nas cores da marca).';
+  const linhas = ['\nIDENTIDADE VISUAL DO LOGÓTIPO (OBRIGATÓRIO): o site tem de parecer claramente da mesma marca que o logótipo. ' + manda];
+  if (pa.mono) {
+    linhas.push('- O logótipo é monocromático (' + pa.primaria + '). Faz um site elegante a preto, branco e neutros, com ' + pa.primaria + ' como cor principal; se precisares de uma cor de destaque, usa-a com muita moderação.');
+  } else {
+    linhas.push('- Cores do logótipo, por importância: ' + [marca.primaria, marca.secundaria, marca.destaque].concat(marca.cores || []).filter((c, i, l) => c && l.indexOf(c) === i).slice(0, 5).join(', ') + '.');
+    linhas.push('- Usa exactamente: --dia-primaria: ' + pa.primaria + '; --dia-primaria-texto: ' + pa.primariaTexto + '. Destaque: ' + pa.destaque + '. Para títulos, links e etiquetas coloridos sobre fundo claro usa ' + pa.realce + ' (tem contraste). Secções escuras e rodapé: ' + pa.escuro + '.');
+    linhas.push('- Neutros a combinar: fundo ' + pa.fundo + ' (ou branco), fundos alternados ' + pa.fundo2 + '. Nada de cores fora da família do logótipo (nada de roxo, azul ou verde genéricos se o logótipo não os tiver).');
+  }
+  if (marca.estilo || marca.personalidade) linhas.push('- Ambiente da marca: ' + [marca.estilo, marca.personalidade].filter(Boolean).join('; ') + '.');
+  if (marca.tipografia || marca.fonte_titulos) linhas.push('- Letras: o logótipo usa ' + (marca.tipografia || 'letras com carácter') + '. Escolhe no Google Fonts títulos que combinem' + (marca.fonte_titulos ? ' (ex: "' + marca.fonte_titulos + '")' : '') + (marca.fonte_texto ? ' e texto em "' + marca.fonte_texto + '"' : '') + '.');
+  linhas.push('- O logótipo aparece no cabeçalho com tamanho digno (nunca esmagado) e o resto do site repete as suas cores em botões, ícones, etiquetas e pormenores.');
+  return linhas.join('\n');
+}
+// No HTML final, garante que os botões e os módulos (loja, carrinho, galeria...) usam a cor da marca.
+function aplicarCoresMarcaHtml(html, marca, prompt) {
+  const pa = paletaDaMarca(marca);
+  if (!pa || pa.mono || pedidoTemCores(prompt)) return html;
+  let feito = false;
+  return String(html).replace(/:root\s*\{[^}]*\}/, bloco => {
+    if (feito) return bloco;
+    feito = true;
+    let b = bloco;
+    const por = (nome, valor) => { const re = new RegExp('(' + nome + '\\s*:\\s*)[^;}]+'); b = re.test(b) ? b.replace(re, '$1' + valor) : b.replace(/\}$/, ';' + nome + ':' + valor + '}'); };
+    por('--dia-primaria', pa.primaria);
+    por('--dia-primaria-texto', pa.primariaTexto);
+    return b.replace(/;;+/g, ';');
+  });
+}
+// Templates: a mesma composição, com as cores do logótipo.
+function recolorirTemplate(t, marca) {
+  const pa = paletaDaMarca(marca);
+  if (!t || !pa || pa.mono) return t; // logótipo a preto e branco: o template fica com as cores dele
+  const m = Object.assign({}, t.tema || {});
+  const escuroAntes = m.escuro || '';
+  const primAntes = mcHex(m.primaria), destAntes = mcHex(m.destaque);
+  const fundo = mcHex(m.fundo) || '#FFFFFF';
+  const fundoClaro = mcLum(fundo) > 0.4;
+  m.primaria = pa.primaria; m.primariaTexto = pa.primariaTexto;
+  m.destaque = pa.destaque;
+  m.etq = mcLegivel(pa.primaria, fundo, 4.6); // etiquetas: legíveis no fundo real do template
+  // Palavras em destaque nos títulos: depende de como o template as desenha
+  const dc = mcHex(m.destCor);
+  if (dc) {
+    const sublinhaComPrimaria = /em\.dest\{[^}]*background[^}]*--dia-primaria/.test(String(t.css || ''));
+    if (sublinhaComPrimaria) m.destCor = dc; // o sublinhado só pinta metade da letra: o texto fica com a cor que tinha
+    else if (dc === primAntes) m.destCor = mcLegivel(pa.primaria, fundo, 3);
+    else m.destCor = mcLegivel(pa.destaque, fundo, 3);
+  }
+  // cores escritas à mão no CSS do template também mudam
+  let css = String(t.css || '');
+  if (primAntes) css = css.split(primAntes).join(pa.primaria).split(primAntes.toLowerCase()).join(pa.primaria);
+  if (destAntes && destAntes !== primAntes) css = css.split(destAntes).join(pa.destaque).split(destAntes.toLowerCase()).join(pa.destaque);
+  if (!pa.mono) {
+    m.escuro = pa.escuro; m.escuroTexto = '#FFFFFF'; m.escuroSuave = 'rgba(255,255,255,.74)';
+    if (!m.rodFundo || m.rodFundo === escuroAntes || mcLum(mcHex(m.rodFundo) || '#000000') < 0.1) { m.rodFundo = pa.escuro; m.rodTexto = '#FFFFFF'; }
+    if (fundoClaro) m.fundo2 = pa.fundo2;
+  }
+  return Object.assign({}, t, { tema: m, css });
+}
+// A marca do site fica guardada no Storage (marca/<siteId>.json), ligada ao logótipo.
+async function marcaDoSite(siteId, fonte, logoUrl) {
+  if (siteId && logoUrl) {
+    try {
+      const g = JSON.parse((await descarregarDoBunny('marca/' + siteId + '.json')).toString('utf8'));
+      if (g && g.logo === logoUrl && g.marca) return { marca: g.marca, tokens: 0 };
+    } catch (e) { /* ainda não há */ }
+  }
+  const r = await analisarLogoSeguro(fonte || logoUrl);
+  if (r.marca && siteId) {
+    await uploadParaBunny('marca/' + siteId + '.json', Buffer.from(JSON.stringify({ logo: logoUrl || '', marca: r.marca, quando: new Date().toISOString() }), 'utf8'), 'application/json; charset=utf-8').catch(() => {});
+  }
+  return r;
+}
+globalThis.__danielMarca = { limparMarcaLogo, paletaDaMarca, recolorirTemplate, aplicarCoresMarcaHtml, analisarLogo, instrucaoMarca, mcContraste };
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
