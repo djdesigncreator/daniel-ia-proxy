@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.71.0'; // 29/10/2026 - OpenAI sem saldo: o Free paga o plano primeiro, os pagos ficam na fila e recebem email
+const VERSION = '1.71.1'; // 29/10/2026 - email de confirmação de site criado; OpenAI sem saldo: o Free paga o plano primeiro, os pagos ficam na fila
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -17913,6 +17913,7 @@ app.post('/site-legal-guardar', async (req, res) => {
 
 // ======================================================
 // OpenAI sem saldo: o Free paga primeiro, quem paga fica na fila (1.71.0)
+// + email de confirmação de site criado (1.71.1)
 // ------------------------------------------------------
 //  - O servidor sabe que a OpenAI está sem saldo quando ela recusa um pedido
 //    com "insufficient_quota" (usoIA.sem_saldo, já desde a 1.6x). Agora também
@@ -17984,8 +17985,50 @@ async function filaIAEntrar({ siteId, generationId, owner, nome, tipo, variantes
   }
 }
 
+// ---- 1.71.1: email de confirmação sempre que um site/loja fica criado ----
+const emailsCriadoEnviados = new Set();
+const CRIADO_TIPO = {
+  'E-commerce': { o: 'A tua loja', pronto: 'está pronta', ver: 'Ver a minha loja', a: 'a', seguinte: 'Agora junta os teus produtos em <b>Gerir loja</b>, no dashboard, e partilha o link com os teus clientes.' },
+  'Checkout': { o: 'A tua página de venda', pronto: 'está pronta', ver: 'Ver a minha página', a: 'a', seguinte: 'Confirma os produtos e os preços em <b>Gerir loja</b>, no dashboard, e partilha o link.' },
+  'Agendamento': { o: 'A tua app de marcações', pronto: 'está pronta', ver: 'Ver a minha app', a: 'a', seguinte: 'Confirma os serviços, a equipa e o horário em <b>Gerir agenda</b>, no dashboard. Os clientes já podem marcar.' },
+  'Portefólio': { o: 'O teu portefólio', pronto: 'está pronto', ver: 'Ver o meu portefólio', a: 'o', seguinte: 'Junta os teus trabalhos em <b>Gerir portefólio</b>, no dashboard, e partilha o link.' },
+  'Blog': { o: 'O teu blog', pronto: 'está pronto', ver: 'Ver o meu blog', a: 'o', seguinte: 'Escreve o primeiro artigo no dashboard e partilha o link.' },
+  'Galeria': { o: 'A tua galeria', pronto: 'está pronta', ver: 'Ver a minha galeria', a: 'a', seguinte: 'Cria os teus álbuns no dashboard e partilha o link.' }
+};
+async function emailSiteCriado(siteId, owner, daFila) {
+  if (emailsCriadoEnviados.has(siteId)) return false;
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  if (!site || !['Pronto', 'A escolher'].includes(site['Status'])) return false;
+  const user = await bubbleGet('user', owner || site['Owner']).catch(() => null);
+  if (!user || !user.email) return false;
+  emailsCriadoEnviados.add(siteId);
+  if (emailsCriadoEnviados.size > 5000) emailsCriadoEnviados.clear();
+  const T = CRIADO_TIPO[site['Tipo']] || { o: 'O teu site', pronto: 'está pronto', ver: 'Ver o meu site', a: 'o', seguinte: 'Partilha o link com os teus clientes nas redes sociais e no WhatsApp.' };
+  const dash = (function(){ try { return new URL(APP_URL).origin + '/dashboard/'; } catch (e) { return APP_URL; } })();
+  const url = site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo' ? 'https://' + site['Dominio Personalizado'] + '/' : String(site['CDN URL'] || '');
+  const escolher = site['Status'] === 'A escolher';
+  const nome = escaparHtml(site['Nome'] || '');
+  const ola = 'Olá' + (user['Full Name'] ? ' ' + escaparHtml(String(user['Full Name']).trim().split(/\s+/)[0]) : '') + '!';
+  const pars = [];
+  if (daFila) pars.push('Obrigado pela paciência.');
+  pars.push(escolher
+    ? T.o + ' <b>' + nome + '</b> foi criad' + T.a + '. Falta só escolheres o layout de que mais gostas para ficar no ar.'
+    : T.o + ' <b>' + nome + '</b> foi criad' + T.a + ' e já está no ar.');
+  if (!escolher && url) pars.push('<span style="display:block;padding:12px 14px;border-radius:10px;background:#F4F0F8;color:#5A0F80;font-size:13px;word-break:break-all;">' + escaparHtml(url) + '</span>');
+  if (!escolher) pars.push(T.seguinte);
+  pars.push('Também ' + (T.a === 'a' ? 'a' : 'o') + ' encontras sempre no teu <a href="' + escaparHtml(dash) + '" style="color:#5A0F80;font-weight:700;">dashboard</a>.');
+  await enviarEmail(user.email, (escolher ? T.o + ' foi criad' + T.a + ' - escolhe o layout' : T.o + ' ' + T.pronto) + ' - Daniel IA',
+    templateEmailKyc(escolher ? T.o + ' foi criad' + T.a : T.o + ' ' + T.pronto, ola, pars,
+      { texto: escolher || !url ? 'Abrir o dashboard' : T.ver, url: escolher || !url ? dash : url }));
+  return true;
+}
+
 // O trabalho pesado da geração (o mesmo para o /generate e para a fila).
-function lancarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quizPedido, umaPagina, tplEscolhido, tplInspiracao, variantes }) {
+// No fim, manda sempre o email de confirmação ao dono (se ficou criado).
+function lancarGeracao(p) {
+  return lancarGeracaoTrabalho(p).then(() => emailSiteCriado(p.siteId, p.owner, p.daFila).catch(e => console.error('[email criado]', e.message || e)));
+}
+function lancarGeracaoTrabalho({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quizPedido, umaPagina, tplEscolhido, tplInspiracao, variantes }) {
   if (tplEscolhido) {
     return processarTemplate({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, t: tplEscolhido })
       .catch(erro => console.error('Erro em processarTemplate:', erro));
@@ -18030,20 +18073,14 @@ async function filaIAProcessarUm(siteFila) {
     umaPagina: p.uma_pagina === true,
     tplEscolhido: p.template_id ? TEMPLATES_POR_ID.get(String(p.template_id)) || null : null,
     tplInspiracao: p.template_inspiracao ? TEMPLATES_POR_ID.get(String(p.template_inspiracao)) || null : null,
-    variantes: f.variantes === 3 ? 3 : 1
+    variantes: f.variantes === 3 ? 3 : 1,
+    daFila: true
   });
   await new Promise(r => setTimeout(r, 1500)); // o registo do uso da OpenAI corre em paralelo
   const depois = await bubbleGet('site', siteId).catch(() => null);
   const estado = depois ? depois['Status'] : '';
   if (estado === 'Pronto' || estado === 'A escolher') {
-    await filaIAFechar(siteId, 'pronto');
-    if (user.email) {
-      const dash = (function(){ try { return new URL(APP_URL).origin + '/dashboard/'; } catch (e) { return APP_URL; } })();
-      await enviarEmail(user.email, 'O teu site está pronto - Daniel IA', templateEmailKyc('O teu site está pronto', 'Olá' + (user['Full Name'] ? ' ' + escaparHtml(String(user['Full Name']).split(' ')[0]) : '') + '!',
-        ['Obrigado pela paciência. O teu site <b>' + escaparHtml(nome) + '</b> já foi criado e está no ar.',
-          estado === 'A escolher' ? 'Entra no Daniel IA para escolheres o layout de que mais gostas.' : 'Entra no Daniel IA para o veres, editares e partilhares.'],
-        { texto: 'Ver o meu site', url: dash })).catch(() => {});
-    }
+    await filaIAFechar(siteId, 'pronto'); // o email de confirmação já foi pelo lancarGeracao
     return 'pronto';
   }
   if (await iaSemSaldo()) {
