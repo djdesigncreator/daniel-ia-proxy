@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.70.0'; // 28/10/2026 - privacidade, termos e cookies da Daniel IA e dos sites criados (opcional)
+const VERSION = '1.71.0'; // 29/10/2026 - OpenAI sem saldo: o Free paga o plano primeiro, os pagos ficam na fila e recebem email
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -6048,6 +6048,12 @@ app.post('/generate', async (req, res) => {
       return res.json(respSemTokens(plano));
     }
 
+    // ---- 3b. (1.71.0) OpenAI sem saldo: o Free paga o plano primeiro; os pagos ficam na fila ----
+    const semSaldoIA = await iaSemSaldo();
+    if (semSaldoIA && mostrarMarcaDeAgua) {
+      return res.json({ status: 'error', codigo: 'plano', motivo: 'ia_pausa', plano_pago: false, message: MSG_IA_PAUSA_FREE });
+    }
+
     // ---- 4. Registar já o Site e a Generation, com estado "A gerar" ----
     // Respondemos de imediato à página - o trabalho pesado (OpenAI + upload)
     // corre a seguir, em segundo plano, porque demora mais do que o tempo
@@ -6070,24 +6076,18 @@ app.post('/generate', async (req, res) => {
     });
 
     const variantes = tplEscolhido ? 1 : (VERSOES_IA === 3 && Number(req.body.variantes) === 3 && (!mostrarMarcaDeAgua || FREE_VERSOES === 3) ? 3 : 1);
+    if (semSaldoIA) {
+      // 1.71.0: plano pago com a OpenAI sem saldo - o pedido fica guardado na fila
+      await filaIAEntrar({ siteId, generationId, owner, nome, tipo, variantes, pedido: req.body });
+      return res.json({ status: 'success', response: { site_id: siteId, generation_id: generationId, variantes, na_fila: true, fila_posicao: await filaIAContar() } });
+    }
     res.json({
       status: 'success',
       response: { site_id: siteId, generation_id: generationId, variantes }
     });
 
-    // ---- 5. Trabalho pesado, sem bloquear a resposta ----
-    if (tplEscolhido) {
-      processarTemplate({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, t: tplEscolhido })
-        .catch(erro => console.error('Erro em processarTemplate:', erro));
-      return;
-    }
-    if (variantes === 3) {
-      processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua, umaPagina, templateBase: tplInspiracao })
-        .catch(erro => console.error('Erro em processarVariantes:', erro));
-      return;
-    }
-    processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua, umaPagina })
-      .catch(erro => console.error('Erro em processarGeracao:', erro));
+    // ---- 5. Trabalho pesado, sem bloquear a resposta (ver lancarGeracao) ----
+    lancarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quizPedido, umaPagina, tplEscolhido, tplInspiracao, variantes });
 
   } catch (erro) {
     console.error('Erro em /generate:', erro);
@@ -6783,6 +6783,9 @@ app.post('/generate-status', async (req, res) => {
     if (generation_id) {
       const generation = await bubbleGet('generation', generation_id);
       response.geracao_estado = generation ? generation['Status'] : '';
+    }
+    if (site['Status'] === 'Na fila') {
+      response.fila_posicao = 1 + await bubbleCount('site', [{ key: 'Status', constraint_type: 'equals', value: 'Na fila' }, { key: 'Created Date', constraint_type: 'less than', value: site['Created Date'] }]).catch(() => 0);
     }
 
     return res.json({ status: 'success', response });
@@ -16394,7 +16397,7 @@ app.post('/admin-uso-ia', async (req, res) => {
     const media = comCusto.length ? comCusto.reduce((t, d) => t + d.custo, 0) / comCusto.length : null;
     const maximo = comCusto.length ? Math.max.apply(null, comCusto.map(d => d.custo)) : null;
     return res.json({ status: 'success', response: {
-      dias, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo,
+      dias, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo, fila: await filaIAContar(),
       media_dia: media, maximo_dia: maximo,
       saldo_minimo: media == null ? null : Math.ceil(Math.max(media * 7, (maximo || 0) * 5)),
       recarga_quando: media == null ? null : Math.ceil(media * 3),
@@ -17906,6 +17909,179 @@ app.post('/site-legal-guardar', async (req, res) => {
   }
 });
 ['/site-legal-ler', '/site-legal-guardar'].forEach(r => ROTAS_PRIVADAS.add(r));
+
+
+// ======================================================
+// OpenAI sem saldo: o Free paga primeiro, quem paga fica na fila (1.71.0)
+// ------------------------------------------------------
+//  - O servidor sabe que a OpenAI está sem saldo quando ela recusa um pedido
+//    com "insufficient_quota" (usoIA.sem_saldo, já desde a 1.6x). Agora também
+//    pergunta sozinho: um pedido mínimo de embeddings (custa quase nada) de
+//    30 em 30 minutos, e de 5 em 5 minutos enquanto estiver sem saldo - assim
+//    descobre logo quando recarregas, sem precisar que um cliente tente.
+//  - Sem saldo, no /generate:
+//      * plano Free  -> "paga o plano primeiro" (codigo 'plano');
+//      * plano pago  -> o site fica com o estado "Na fila" e o pedido é
+//        guardado no Storage (fila-ia/<siteId>.json).
+//  - Quando a OpenAI volta a responder, a fila é feita por ordem de chegada,
+//    um site de cada vez, e cada cliente recebe um email quando o site fica
+//    pronto. Se a OpenAI voltar a falhar por saldo, o site volta para a fila.
+//  - O admin recebe um email (no máximo 1 por hora) quando entra alguém na fila.
+// ======================================================
+const MSG_IA_PAUSA_FREE = 'Neste momento a criação gratuita está em pausa. Activa um plano e o teu site entra logo na fila: criamo-lo assim que possível e avisamos-te por email.';
+const FILA_IA_ESTADO = 'Na fila';
+let filaIAOcupada = false, filaIAUltimaSonda = 0, filaIAUltimoAvisoAdmin = 0;
+
+async function iaSemSaldo() {
+  await carregarUsoIA();
+  return !!usoIA.sem_saldo;
+}
+// true = há saldo; false = sem saldo; null = não deu para saber (rede, outro erro)
+async function sondarSaldoIA() {
+  if (!OPENAI_API_KEY) return null;
+  try {
+    const r = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST', signal: AbortSignal.timeout(20000),
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: 'ok' })
+    });
+    if (r.ok) {
+      await carregarUsoIA();
+      if (usoIA.sem_saldo) { usoIA.sem_saldo = null; guardarUsoIA(); console.log('[fila IA] a OpenAI voltou a ter saldo'); }
+      return true;
+    }
+    const t = await r.text().catch(() => '');
+    if ((r.status === 429 || r.status === 402) && /insufficient_quota|exceeded your current quota|billing|credit balance/i.test(t)) {
+      await avisarSemSaldoIA(t);
+      return false;
+    }
+    return null;
+  } catch (e) { return null; }
+}
+async function filaIAContar() {
+  return bubbleCount('site', [{ key: 'Status', constraint_type: 'equals', value: FILA_IA_ESTADO }]).catch(() => 0);
+}
+
+// Chamado pelo /generate (plano pago, sem saldo), antes de responder à página.
+async function filaIAEntrar({ siteId, generationId, owner, nome, tipo, variantes, pedido }) {
+  const p = {};
+  ['nome', 'tipo', 'prompt', 'idioma', 'logo_data_url', 'imagens_data_url', 'referencia_data_url', 'quiz', 'uma_pagina', 'template_id', 'template_inspiracao']
+    .forEach(k => { if (pedido[k] != null) p[k] = pedido[k]; });
+  await uploadParaBunny('fila-ia/' + siteId + '.json', Buffer.from(JSON.stringify({ v: 1, owner, site_id: siteId, generation_id: generationId, variantes, entrou: new Date().toISOString(), pedido: p }), 'utf8'), 'application/json; charset=utf-8');
+  await bubblePatch('site', siteId, { 'Status': FILA_IA_ESTADO });
+  await bubblePatch('generation', generationId, { 'Status': FILA_IA_ESTADO }).catch(() => {});
+  console.warn('[fila IA] site na fila (OpenAI sem saldo):', siteId, tipo, nome);
+  if (Date.now() - filaIAUltimoAvisoAdmin > 60 * 60 * 1000) {
+    filaIAUltimoAvisoAdmin = Date.now();
+    const n = await filaIAContar();
+    const destinos = Array.from(new Set([ADMIN_EMAIL].concat(ADMIN_EMAILS).filter(Boolean)));
+    for (const d of destinos) {
+      await enviarEmail(d, 'Clientes pagos na fila - carrega a OpenAI', templateEmailKyc('Há clientes à espera', 'Atenção!',
+        ['A OpenAI continua sem saldo e ' + (n > 1 ? n + ' sites de clientes com plano pago estão' : 'um site de um cliente com plano pago está') + ' na fila.',
+          'Assim que carregares em platform.openai.com → Billing, o servidor dá por isso em poucos minutos, cria os sites por ordem de chegada e avisa cada cliente por email.'],
+        { texto: 'Abrir o painel', url: (function(){ try { return new URL(APP_URL).origin + '/admin/#sistema'; } catch (e) { return APP_URL; } })() })).catch(() => {});
+    }
+  }
+}
+
+// O trabalho pesado da geração (o mesmo para o /generate e para a fila).
+function lancarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quizPedido, umaPagina, tplEscolhido, tplInspiracao, variantes }) {
+  if (tplEscolhido) {
+    return processarTemplate({ owner, nome, tipo, prompt, logo_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, t: tplEscolhido })
+      .catch(erro => console.error('Erro em processarTemplate:', erro));
+  }
+  if (variantes === 3) {
+    return processarVariantes({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua, umaPagina, templateBase: tplInspiracao })
+      .catch(erro => console.error('Erro em processarVariantes:', erro));
+  }
+  return processarGeracao({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quiz: quizPedido, pago: !mostrarMarcaDeAgua, umaPagina })
+    .catch(erro => console.error('Erro em processarGeracao:', erro));
+}
+
+async function filaIAFechar(siteId, estado) {
+  await uploadParaBunny('fila-ia/' + siteId + '.json', Buffer.from(JSON.stringify({ v: 1, feito: estado, quando: new Date().toISOString() }), 'utf8'), 'application/json; charset=utf-8').catch(() => {});
+}
+async function filaIAProcessarUm(siteFila) {
+  const siteId = siteFila._id;
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  if (!site || site['Status'] !== FILA_IA_ESTADO) return 'saltar';
+  let f = null;
+  try { f = JSON.parse((await descarregarDoBunny('fila-ia/' + siteId + '.json')).toString('utf8')); } catch (e) { f = null; }
+  if (!f || !f.pedido) { await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {}); return 'erro'; }
+  const owner = site['Owner'];
+  const user = await bubbleGet('user', owner).catch(() => null);
+  const planId = user ? await garantirPlano(owner, user).catch(() => null) : null;
+  const plano = planId ? await bubbleGet('plan', planId).catch(() => null) : null;
+  if (!user || !plano) { await bubblePatch('site', siteId, { 'Status': 'Erro' }).catch(() => {}); await filaIAFechar(siteId, 'erro'); return 'erro'; }
+  const p = f.pedido;
+  const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
+  const tipo = site['Tipo'] || p.tipo, nome = site['Nome'] || p.nome, prompt = site['Prompt Original'] || p.prompt;
+  const generationId = f.generation_id;
+  // começa: sai da fila
+  await bubblePatch('site', siteId, { 'Status': 'A gerar', 'Variantes Json': '' });
+  if (generationId) await bubblePatch('generation', generationId, { 'Status': 'A gerar' }).catch(() => {});
+  console.log('[fila IA] a criar o site da fila:', siteId, tipo, nome);
+  await lancarGeracao({
+    owner, nome, tipo, prompt,
+    logo_data_url: p.logo_data_url, imagens_data_url: p.imagens_data_url, referencia_data_url: p.referencia_data_url,
+    siteId, generationId, tokensUsados: user['Tokens Usados Mes'] || 0, mostrarMarcaDeAgua,
+    idioma: normalizarIdioma(p.idioma),
+    quizPedido: (tipo === 'Checkout' || tipo === 'E-commerce') && p.quiz && p.quiz.ativo === true ? { descricao: textoCurto(p.quiz.descricao, 800) } : null,
+    umaPagina: p.uma_pagina === true,
+    tplEscolhido: p.template_id ? TEMPLATES_POR_ID.get(String(p.template_id)) || null : null,
+    tplInspiracao: p.template_inspiracao ? TEMPLATES_POR_ID.get(String(p.template_inspiracao)) || null : null,
+    variantes: f.variantes === 3 ? 3 : 1
+  });
+  await new Promise(r => setTimeout(r, 1500)); // o registo do uso da OpenAI corre em paralelo
+  const depois = await bubbleGet('site', siteId).catch(() => null);
+  const estado = depois ? depois['Status'] : '';
+  if (estado === 'Pronto' || estado === 'A escolher') {
+    await filaIAFechar(siteId, 'pronto');
+    if (user.email) {
+      const dash = (function(){ try { return new URL(APP_URL).origin + '/dashboard/'; } catch (e) { return APP_URL; } })();
+      await enviarEmail(user.email, 'O teu site está pronto - Daniel IA', templateEmailKyc('O teu site está pronto', 'Olá' + (user['Full Name'] ? ' ' + escaparHtml(String(user['Full Name']).split(' ')[0]) : '') + '!',
+        ['Obrigado pela paciência. O teu site <b>' + escaparHtml(nome) + '</b> já foi criado e está no ar.',
+          estado === 'A escolher' ? 'Entra no Daniel IA para escolheres o layout de que mais gostas.' : 'Entra no Daniel IA para o veres, editares e partilhares.'],
+        { texto: 'Ver o meu site', url: dash })).catch(() => {});
+    }
+    return 'pronto';
+  }
+  if (await iaSemSaldo()) {
+    // a OpenAI voltou a recusar por saldo: volta para a fila, sem perder o lugar
+    await bubblePatch('site', siteId, { 'Status': FILA_IA_ESTADO, 'Variantes Json': '' }).catch(() => {});
+    if (generationId) await bubblePatch('generation', generationId, { 'Status': FILA_IA_ESTADO }).catch(() => {});
+    return 'sem_saldo';
+  }
+  await filaIAFechar(siteId, 'erro');
+  return 'erro';
+}
+async function processarFilaIA() {
+  if (filaIAOcupada) return [];
+  filaIAOcupada = true;
+  const feitos = [];
+  try {
+    const lista = await bubbleList('site', [{ key: 'Status', constraint_type: 'equals', value: FILA_IA_ESTADO }], 'Created Date', false).catch(() => []);
+    for (const s of lista.slice(0, 30)) {
+      if (await iaSemSaldo()) break;
+      const r = await filaIAProcessarUm(s).catch(e => { console.error('[fila IA]', e.message || e); return 'erro'; });
+      feitos.push(r);
+      if (r === 'sem_saldo') break;
+    }
+  } finally { filaIAOcupada = false; }
+  return feitos;
+}
+async function cicloFilaIA() {
+  try {
+    await carregarUsoIA();
+    if (usoIA.sem_saldo || Date.now() - filaIAUltimaSonda > 30 * 60 * 1000) {
+      filaIAUltimaSonda = Date.now();
+      await sondarSaldoIA();
+    }
+    if (!usoIA.sem_saldo) await processarFilaIA();
+  } catch (e) { console.error('[fila IA] ciclo:', e.message || e); }
+}
+setTimeout(() => { cicloFilaIA(); setInterval(cicloFilaIA, 5 * 60 * 1000).unref(); }, 45000).unref();
+globalThis.__danielFilaIA = { ciclo: cicloFilaIA, processar: processarFilaIA, sondar: sondarSaldoIA };
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
