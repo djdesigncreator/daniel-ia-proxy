@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.74.1'; // 29/10/2026 - domínios: todas as extensões do mundo; custo real de qualquer extensão no painel; cores do logótipo
+const VERSION = '1.75.0'; // 30/10/2026 - hero cinemático com vídeo IA (Business) e popup de publicidade com os nossos vídeos
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2243,7 +2243,7 @@ ${guia}${padroesDoTipo(tipo)}${instrucaoRiqueza(tipo)}${INSTRUCAO_ICONES}${instr
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Idioma do site: ${IDIOMAS_SITE[lingua].nome}
-${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
+${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${siteId && videoHeroPorSite.has(siteId) ? INSTRUCAO_VIDEO_HERO : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
 Descrição pedida pela pessoa: ${prompt}`;
 
   // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
@@ -6076,14 +6076,27 @@ app.post('/generate', async (req, res) => {
     });
 
     const variantes = tplEscolhido ? 1 : (VERSOES_IA === 3 && Number(req.body.variantes) === 3 && (!mostrarMarcaDeAgua || FREE_VERSOES === 3) ? 3 : 1);
+    // 1.75.0: hero cinemático com vídeo IA
+    let videoPedido = '';
+    if (req.body.video_hero && typeof req.body.video_hero === 'object') {
+      try {
+        const vc = await videoPermitido(owner, plano);
+        videoPedido = !vc.permitido ? 'plano' : (!vc.activo ? 'desligado' : (vc.restantes <= 0 ? 'limite' : 'pedido'));
+        if (videoPedido === 'pedido') {
+          await mudarUsoVideo(owner, 1);
+          await guardarVideoSite(siteId, { estado: 'pedido', owner, nome, modo: req.body.video_hero.modo === 'scroll' ? 'scroll' : 'loop', ideia: vdTexto(req.body.video_hero.ideia, 600) });
+          if (!tplEscolhido) videoHeroPorSite.set(siteId, true);
+        }
+      } catch (e) { console.error('[vídeo hero] /generate:', e.message || e); videoPedido = 'erro'; }
+    }
     if (semSaldoIA) {
       // 1.71.0: plano pago com a OpenAI sem saldo - o pedido fica guardado na fila
       await filaIAEntrar({ siteId, generationId, owner, nome, tipo, variantes, pedido: req.body });
-      return res.json({ status: 'success', response: { site_id: siteId, generation_id: generationId, variantes, na_fila: true, fila_posicao: await filaIAContar() } });
+      return res.json({ status: 'success', response: { site_id: siteId, generation_id: generationId, variantes, na_fila: true, fila_posicao: await filaIAContar(), video: videoPedido } });
     }
     res.json({
       status: 'success',
-      response: { site_id: siteId, generation_id: generationId, variantes }
+      response: { site_id: siteId, generation_id: generationId, variantes, video: videoPedido }
     });
 
     // ---- 5. Trabalho pesado, sem bloquear a resposta (ver lancarGeracao) ----
@@ -6848,7 +6861,8 @@ app.post('/account', async (req, res) => {
         plano_pago: !!nomePlano && nomePlano.trim().toLowerCase() !== 'free',
         tokens_usados: user['Tokens Usados Mes'] || 0,
         tokens_incluidos: tokensIncluidos,
-        tokens_extra: Math.max(0, Number(user['Tokens Extra']) || 0)
+        tokens_extra: Math.max(0, Number(user['Tokens Extra']) || 0),
+        video: await videoPermitido(owner).catch(() => null)
       }
     });
   } catch (erro) {
@@ -16462,7 +16476,7 @@ app.post('/admin-uso-ia', async (req, res) => {
     const media = comCusto.length ? comCusto.reduce((t, d) => t + d.custo, 0) / comCusto.length : null;
     const maximo = comCusto.length ? Math.max.apply(null, comCusto.map(d => d.custo)) : null;
     return res.json({ status: 'success', response: {
-      dias, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo, fila: await filaIAContar(),
+      dias, precos: usoIA.precos, sem_saldo: usoIA.sem_saldo, fila: await filaIAContar(), ultima_sonda: ultimaSondaIA,
       media_dia: media, maximo_dia: maximo,
       saldo_minimo: media == null ? null : Math.ceil(Math.max(media * 7, (maximo || 0) * 5)),
       recarga_quando: media == null ? null : Math.ceil(media * 3),
@@ -18003,27 +18017,39 @@ async function iaSemSaldo() {
   await carregarUsoIA();
   return !!usoIA.sem_saldo;
 }
-// true = há saldo; false = sem saldo; null = não deu para saber (rede, outro erro)
+// true = há saldo; false = sem saldo; null = não deu para saber (rede, chave errada, OpenAI em baixo)
+// 1.74.2: pergunta com o MESMO modelo que cria os sites (uma chave de projecto pode não ter acesso
+// aos embeddings, e aí a sonda nunca respondia "há saldo" e o aviso ficava preso para sempre).
+// Qualquer resposta que não seja de falta de saldo (429/402 "quota") prova que a conta tem saldo.
+let ultimaSondaIA = null;
 async function sondarSaldoIA() {
-  if (!OPENAI_API_KEY) return null;
+  if (!OPENAI_API_KEY) { ultimaSondaIA = { quando: new Date().toISOString(), estado: 'sem chave', detalhe: 'OPENAI_API_KEY não está no container' }; return null; }
+  let r, t = '';
   try {
-    const r = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST', signal: AbortSignal.timeout(20000),
+    r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', signal: AbortSignal.timeout(30000),
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: 'ok' })
+      body: JSON.stringify({ model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL, max_completion_tokens: 16, messages: [{ role: 'user', content: 'Responde só: ok' }] })
     });
-    if (r.ok) {
-      await carregarUsoIA();
-      if (usoIA.sem_saldo) { usoIA.sem_saldo = null; guardarUsoIA(); console.log('[fila IA] a OpenAI voltou a ter saldo'); }
-      return true;
-    }
-    const t = await r.text().catch(() => '');
-    if ((r.status === 429 || r.status === 402) && /insufficient_quota|exceeded your current quota|billing|credit balance/i.test(t)) {
-      await avisarSemSaldoIA(t);
-      return false;
-    }
+    if (!r.ok) t = await r.text().catch(() => '');
+  } catch (e) {
+    ultimaSondaIA = { quando: new Date().toISOString(), estado: 'sem resposta', detalhe: String(e.message || e).slice(0, 200) };
     return null;
-  } catch (e) { return null; }
+  }
+  const quota = (r.status === 429 || r.status === 402) && /insufficient_quota|exceeded your current quota|billing|credit balance/i.test(t);
+  if (quota) {
+    ultimaSondaIA = { quando: new Date().toISOString(), estado: 'sem saldo', status: r.status, detalhe: t.slice(0, 300) };
+    await avisarSemSaldoIA(t);
+    return false;
+  }
+  if (r.ok || (r.status >= 400 && r.status < 500 && r.status !== 401)) {
+    ultimaSondaIA = { quando: new Date().toISOString(), estado: 'com saldo', status: r.status, detalhe: r.ok ? '' : t.slice(0, 300) };
+    await carregarUsoIA();
+    if (usoIA.sem_saldo) { usoIA.sem_saldo = null; guardarUsoIA(); console.log('[fila IA] a OpenAI voltou a ter saldo'); }
+    return true;
+  }
+  ultimaSondaIA = { quando: new Date().toISOString(), estado: r.status === 401 ? 'chave inválida' : 'OpenAI com problemas', status: r.status, detalhe: t.slice(0, 300) };
+  return null;
 }
 async function filaIAContar() {
   return bubbleCount('site', [{ key: 'Status', constraint_type: 'equals', value: FILA_IA_ESTADO }]).catch(() => 0);
@@ -18092,7 +18118,10 @@ async function emailSiteCriado(siteId, owner, daFila) {
 // O trabalho pesado da geração (o mesmo para o /generate e para a fila).
 // No fim, manda sempre o email de confirmação ao dono (se ficou criado).
 function lancarGeracao(p) {
-  return lancarGeracaoTrabalho(p).then(() => emailSiteCriado(p.siteId, p.owner, p.daFila).catch(e => console.error('[email criado]', e.message || e)));
+  const prep = p.daFila ? lerVideoSite(p.siteId).then(v => { if (v && v.estado === 'pedido' && !p.tplEscolhido) videoHeroPorSite.set(p.siteId, true); }).catch(() => {}) : Promise.resolve();
+  return prep.then(() => lancarGeracaoTrabalho(p))
+    .then(() => emailSiteCriado(p.siteId, p.owner, p.daFila).catch(e => console.error('[email criado]', e.message || e)))
+    .then(() => videoDepoisDeCriar(p.siteId).catch(e => console.error('[vídeo hero]', e.message || e)));
 }
 function lancarGeracaoTrabalho({ owner, nome, tipo, prompt, logo_data_url, imagens_data_url, referencia_data_url, siteId, generationId, tokensUsados, mostrarMarcaDeAgua, idioma, quizPedido, umaPagina, tplEscolhido, tplInspiracao, variantes }) {
   if (tplEscolhido) {
@@ -18184,6 +18213,20 @@ async function cicloFilaIA() {
   } catch (e) { console.error('[fila IA] ciclo:', e.message || e); }
 }
 setTimeout(() => { cicloFilaIA(); setInterval(cicloFilaIA, 5 * 60 * 1000).unref(); }, 45000).unref();
+app.post('/admin-ia-verificar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res);
+    if (!admin) return;
+    filaIAUltimaSonda = Date.now();
+    const saldo = await sondarSaldoIA();
+    if (saldo === true) setTimeout(() => processarFilaIA().catch(() => {}), 200);
+    registar(admin, 'ia-verificar', String(saldo));
+    return res.json({ status: 'success', response: { saldo, sonda: ultimaSondaIA, fila: await filaIAContar() } });
+  } catch (erro) {
+    return res.json({ status: 'error', message: 'Não foi possível verificar agora.' });
+  }
+});
+ROTAS_PRIVADAS.add('/admin-ia-verificar');
 globalThis.__danielFilaIA = { ciclo: cicloFilaIA, processar: processarFilaIA, sondar: sondarSaldoIA };
 
 
@@ -18395,6 +18438,380 @@ async function marcaDoSite(siteId, fonte, logoUrl) {
   return r;
 }
 globalThis.__danielMarca = { limparMarcaLogo, paletaDaMarca, recolorirTemplate, aplicarCoresMarcaHtml, analisarLogo, instrucaoMarca, mcContraste };
+
+const HERO_VIDEO_JS = "/*\n  Daniel IA - hero cinemático com vídeo IA (1.75.0)\n  --------------------------------------------------\n  Servido em /hero-video.js. Procura <div id=\"daniel-ia-hero-video\"> e mete\n  lá o vídeo da transformação do produto (feito pela Daniel IA).\n  Modos (escolha do dono): \"loop\" (sempre a tocar, sem som) ou \"scroll\"\n  (o vídeo anda para a frente e para trás com o scroll).\n  No telemóvel fica sempre em loop; com \"reduzir movimento\" mostra só a\n  primeira imagem.\n*/\n(function(){\n  'use strict';\n  if (window.__danielHeroVideo) return;\n  window.__danielHeroVideo = true;\n  var eu = document.currentScript || document.querySelector('script[src*=\"hero-video.js\"]');\n  if (!eu) return;\n  var SITE = eu.getAttribute('data-site') || window.DANIEL_IA_SITE_ID || '';\n  var BASE = '';\n  try { BASE = new URL(eu.src, location.href).origin; } catch (e) { return; }\n  if (!/^[A-Za-z0-9_-]{1,64}$/.test(SITE)) return;\n\n  var CSS = ''\n    + '#daniel-ia-hero-video{position:relative;overflow:hidden;border-radius:var(--dia-raio,18px);background:color-mix(in srgb,var(--dia-primaria,#222) 8%,var(--dia-superficie,#f3f3f3));isolation:isolate}'\n    + '#daniel-ia-hero-video.dia-hv-169{aspect-ratio:16/9;height:auto}'\n    + '#daniel-ia-hero-video .dia-hv{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:0;opacity:0;transition:opacity .6s ease}'\n    + '#daniel-ia-hero-video .dia-hv.pronto{opacity:1}'\n    + '#daniel-ia-hero-video.dia-hv-espera::after{content:\"\";position:absolute;inset:0;background:linear-gradient(110deg,transparent 30%,rgba(255,255,255,.35) 50%,transparent 70%);background-size:220% 100%;animation:diaHvBrilho 1.8s linear infinite}'\n    + '@keyframes diaHvBrilho{from{background-position:120% 0}to{background-position:-120% 0}}'\n    + '.dia-cine{max-width:var(--t-max,1200px);margin:clamp(18px,3vw,44px) auto;padding:0 clamp(16px,3vw,32px);box-sizing:border-box}'\n    + '.dia-cine #daniel-ia-hero-video{box-shadow:0 30px 70px -40px rgba(0,0,0,.45)}'\n    + '@media (prefers-reduced-motion:reduce){#daniel-ia-hero-video.dia-hv-espera::after{animation:none}#daniel-ia-hero-video .dia-hv{transition:none}}';\n\n  function arrancar(){\n    var caixa = document.getElementById('daniel-ia-hero-video');\n    if (!caixa) return;\n    var st = document.createElement('style'); st.setAttribute('data-daniel-ia', 'hero-video'); st.textContent = CSS; document.head.appendChild(st);\n    // sem altura definida pelo site: proporção 16:9\n    if (caixa.getBoundingClientRect().height < 40) caixa.classList.add('dia-hv-169');\n    var secCine = caixa.getAttribute('data-dia-cine') === '1' ? caixa.closest('.dia-cine') : null;\n    caixa.classList.add('dia-hv-espera');\n    fetch(BASE + '/hero-video-info?site=' + encodeURIComponent(SITE))\n      .then(function(r){ return r.json(); })\n      .then(function(v){ montar(caixa, secCine, v || {}); })\n      .catch(function(){ montar(caixa, secCine, {}); });\n  }\n\n  function esconder(caixa, secCine){\n    if (secCine) secCine.style.display = 'none';\n    else caixa.style.display = 'none';\n  }\n\n  function montar(caixa, secCine, v){\n    var url = v.url || '', poster = v.poster || '';\n    var aGerar = v.estado === 'pedido' || v.estado === 'a gerar';\n    if (!url) {\n      // ainda a ser criado: deixa o brilho (no layout da IA) ou esconde a secção extra\n      if (aGerar && !secCine) { if (poster) imagem(caixa, poster); return; }\n      if (poster && !secCine) { imagem(caixa, poster); return; }\n      esconder(caixa, secCine);\n      return;\n    }\n    var reduzir = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;\n    if (reduzir) { if (poster) imagem(caixa, poster); else esconder(caixa, secCine); return; }\n    var movel = (window.innerWidth || 1024) < 768;\n    var modo = v.modo === 'scroll' && !movel ? 'scroll' : 'loop';\n    var vid = document.createElement('video');\n    vid.className = 'dia-hv';\n    vid.muted = true; vid.defaultMuted = true; vid.playsInline = true;\n    vid.setAttribute('muted', ''); vid.setAttribute('playsinline', ''); vid.setAttribute('aria-hidden', 'true');\n    vid.setAttribute('disablepictureinpicture', ''); vid.setAttribute('tabindex', '-1');\n    if (poster) vid.poster = poster;\n    caixa.appendChild(vid);\n    function mostrar(){ vid.classList.add('pronto'); caixa.classList.remove('dia-hv-espera'); }\n    if (modo === 'scroll') scroll(caixa, vid, url, mostrar, function(){ loop(caixa, vid, url, mostrar); });\n    else loop(caixa, vid, url, mostrar);\n  }\n\n  function imagem(caixa, src){\n    var im = new Image();\n    im.className = 'dia-hv'; im.alt = ''; im.decoding = 'async';\n    im.onload = function(){ im.classList.add('pronto'); caixa.classList.remove('dia-hv-espera'); };\n    im.src = src;\n    caixa.appendChild(im);\n  }\n\n  function loop(caixa, vid, url, mostrar){\n    vid.loop = true; vid.autoplay = true; vid.preload = 'auto';\n    vid.addEventListener('loadeddata', mostrar, { once: true });\n    vid.src = url;\n    var tocar = function(){ var p = vid.play(); if (p && p.catch) p.catch(function(){}); };\n    tocar();\n    // fora do ecrã pára (poupa bateria e dados)\n    if ('IntersectionObserver' in window) {\n      new IntersectionObserver(function(ent){\n        ent.forEach(function(e){ if (e.isIntersecting) tocar(); else vid.pause(); });\n      }, { threshold: 0.05 }).observe(caixa);\n    }\n  }\n\n  function scroll(caixa, vid, url, mostrar, falhou){\n    vid.preload = 'auto'; vid.loop = false; vid.autoplay = false;\n    // o vídeo inteiro em memória: assim o scroll salta para qualquer ponto sem esperar pela rede\n    fetch(url).then(function(r){ if (!r.ok) throw new Error('x'); return r.blob(); }).then(function(b){\n      vid.src = URL.createObjectURL(b);\n      vid.addEventListener('loadedmetadata', function(){\n        mostrar();\n        try { vid.pause(); vid.currentTime = 0; } catch (e) {}\n        var dur = vid.duration || 8, alvo = 0, actual = 0, aCorrer = false;\n        function progresso(){\n          var r = caixa.getBoundingClientRect(), vh = window.innerHeight || 800;\n          var topo = r.top + window.scrollY;\n          var inicio = Math.max(0, topo - vh * 0.65);\n          var fim = topo + Math.max(r.height * 0.9, vh * 0.55);\n          var p = (window.scrollY - inicio) / Math.max(1, fim - inicio);\n          return p < 0 ? 0 : p > 1 ? 1 : p;\n        }\n        function quadro(){\n          actual += (alvo - actual) * 0.18;\n          if (Math.abs(alvo - actual) < 0.002) actual = alvo;\n          if (!vid.seeking) {\n            var t = Math.min(dur - 0.05, actual * dur);\n            if (Math.abs(vid.currentTime - t) > 1 / 40) { try { vid.currentTime = t; } catch (e) {} }\n          }\n          if (actual !== alvo || vid.seeking) requestAnimationFrame(quadro); else aCorrer = false;\n        }\n        function mexeu(){ alvo = progresso(); if (!aCorrer) { aCorrer = true; requestAnimationFrame(quadro); } }\n        window.addEventListener('scroll', mexeu, { passive: true });\n        window.addEventListener('resize', mexeu);\n        mexeu();\n      }, { once: true });\n    }).catch(falhou);\n  }\n\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();\n})();\n";
+
+// ======================================================
+// Hero cinemático com vídeo IA (1.75.0) — plano Business
+// ------------------------------------------------------
+// Sites com uma transformação em vídeo no hero (café a cair num cubo de
+// gelo que vira copo, prédio a construir-se, massa a enrolar...).
+//  1. A IA escreve o conceito: o primeiro quadro, o último quadro e o
+//     movimento entre os dois (com as cores da marca, se houver logótipo).
+//  2. As duas imagens saem do gerador de imagens que já usamos (gerarFotoIA).
+//  3. O vídeo sai do Gemini Omni Flash da Google (o Veo 3.1 da Gemini API
+//     foi desligado a 22/10/2026; a API de vídeo da OpenAI, a 24/09/2026),
+//     com o primeiro e o último quadro: ~0,10 USD por segundo em 720p.
+//  4. Vai para a pasta do site no Bunny; o site mostra-o com /hero-video.js,
+//     em loop ou a andar com o scroll (escolha do dono; no telemóvel e com
+//     "reduzir movimento" fica em loop / parado).
+//  - Só nos planos da lista do painel (por omissão "Business"), com um
+//    limite de vídeos por mês. Chave: GEMINI_API_KEY (só no container).
+//  - Estado de cada site em video/sites/<siteId>.json; uso por dono em
+//    video/uso/<owner>.json; índice para o painel em config/videos-indice.json.
+//  - Popup de publicidade (landing e dashboard) com vídeos feitos pela
+//    própria Daniel IA, escolhidos no painel: config/promo.json.
+// ======================================================
+const GEMINI_API_KEY = clean(process.env.GEMINI_API_KEY);
+const GEMINI_URL = (clean(process.env.GEMINI_URL) || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+const VIDEO_PADRAO = { planos: ['business'], por_mes: 5, modelo: clean(process.env.GEMINI_VIDEO_MODEL) || 'gemini-omni-1.1-flash', resolucao: '720p' };
+const VIDEO_ESPERA_MS = Number(process.env.VIDEO_ESPERA_MS) || 120000;
+const videoHeroPorSite = new Map();// siteId -> true enquanto a IA escreve o site (põe a div do vídeo no hero)
+let cacheConfigVideo = null;
+
+function vdTexto(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, max); }
+async function lerJsonStorage(caminho) { try { return JSON.parse((await descarregarDoBunny(caminho)).toString('utf8')); } catch (e) { return null; } }
+async function gravarJsonStorage(caminho, obj) { await uploadParaBunny(caminho, Buffer.from(JSON.stringify(obj), 'utf8'), 'application/json; charset=utf-8'); }
+
+async function configVideo() {
+  if (cacheConfigVideo && Date.now() - cacheConfigVideo.t < 60000) return cacheConfigVideo.c;
+  const g = await lerJsonStorage('config/video.json') || {};
+  const c = Object.assign({}, VIDEO_PADRAO);
+  if (Array.isArray(g.planos) && g.planos.length) c.planos = g.planos.map(p => String(p).trim().toLowerCase()).filter(Boolean);
+  if (Number(g.por_mes) >= 0) c.por_mes = Math.min(500, Math.round(Number(g.por_mes)));
+  if (g.modelo) c.modelo = vdTexto(g.modelo, 80);
+  if (['360p', '720p', '1080p'].includes(g.resolucao)) c.resolucao = g.resolucao;
+  cacheConfigVideo = { t: Date.now(), c };
+  return c;
+}
+function mesActual() { return new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 7); }
+async function usoVideo(owner) {
+  const u = await lerJsonStorage('video/uso/' + owner + '.json');
+  return u && u.mes === mesActual() ? Number(u.n) || 0 : 0;
+}
+async function mudarUsoVideo(owner, delta) {
+  const n = Math.max(0, (await usoVideo(owner)) + delta);
+  await gravarJsonStorage('video/uso/' + owner + '.json', { mes: mesActual(), n });
+  return n;
+}
+async function videoPermitido(owner, planoObj) {
+  const c = await configVideo();
+  let nome = '';
+  try {
+    if (planoObj) nome = planoObj['Name'] || '';
+    else { const u = await bubbleGet('user', owner); const pid = u ? await garantirPlano(owner, u) : null; const p = pid ? await bubbleGet('plan', pid) : null; nome = (p && p['Name']) || ''; }
+  } catch (e) { nome = ''; }
+  const permitido = c.planos.includes(String(nome).trim().toLowerCase());
+  const usados = permitido ? await usoVideo(owner) : 0;
+  return { permitido, activo: !!GEMINI_API_KEY, plano: nome, planos: c.planos, por_mes: c.por_mes, usados, restantes: permitido ? Math.max(0, c.por_mes - usados) : 0 };
+}
+async function lerVideoSite(siteId) { return await lerJsonStorage('video/sites/' + siteId + '.json'); }
+async function guardarVideoSite(siteId, v) {
+  v.actualizado = new Date().toISOString();
+  await gravarJsonStorage('video/sites/' + siteId + '.json', v);
+  // índice para o painel (os 400 mais recentes)
+  try {
+    const ind = (await lerJsonStorage('config/videos-indice.json')) || { lista: [] };
+    const lista = (ind.lista || []).filter(x => x.site !== siteId);
+    lista.unshift({ site: siteId, owner: v.owner || '', nome: v.nome || '', estado: v.estado, url: v.url || '', poster: v.poster || '', modo: v.modo || 'loop', quando: v.actualizado, erro: v.erro || '' });
+    await gravarJsonStorage('config/videos-indice.json', { lista: lista.slice(0, 400) });
+  } catch (e) { /* o índice é só para o painel */ }
+}
+
+// ---- 1. O conceito (a IA escreve os dois quadros e o movimento) ----
+async function conceitoVideo({ nome, tipo, prompt, ideia, marca }) {
+  const pa = marca ? paletaDaMarca(marca) : null;
+  const pedido = [
+    'Negócio: ' + nome + ' (' + tipo + ').',
+    'Descrição: ' + String(prompt || '').slice(0, 1500),
+    ideia ? 'A pessoa quer esta ideia para o vídeo: ' + String(ideia).slice(0, 600) : '',
+    pa && !pa.mono ? 'Cores da marca: principal ' + pa.primaria + ', destaque ' + pa.destaque + '. Usa-as no fundo ou em pormenores.' : '',
+    'Cria um vídeo de 8 segundos para o hero do site: uma TRANSFORMAÇÃO marcante e bonita do produto ou do serviço principal (ex: café a cair num cubo de gelo que se torna um copo; um prédio a erguer-se do esqueleto à fachada de vidro; ingredientes que voam e se juntam num prato; um grão de café que derrete e vira cappuccino).',
+    'Regras: câmara parada ou muito lenta, fundo limpo e liso (claro e quente, ou na cor da marca), o assunto bem centrado e grande, luz de estúdio, aspecto de anúncio premium, realista. Sem pessoas, sem mãos, sem texto, sem letras, sem logótipos.',
+    'Responde só com JSON: {"primeiro":"descrição fotográfica do primeiro quadro, em inglês","ultimo":"descrição fotográfica do último quadro, em inglês, com o mesmo fundo e o mesmo enquadramento","movimento":"o que acontece entre os dois, em inglês, frase curta"}'
+  ].filter(Boolean).join('\n');
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: OPENAI_MODEL_RAPIDO || OPENAI_MODEL, response_format: { type: 'json_object' },
+      messages: [{ role: 'system', content: 'És director de arte de anúncios de produto. Respondes só com JSON válido.' }, { role: 'user', content: pedido }] })
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error('OpenAI falhou: ' + ((j.error && j.error.message) || r.status));
+  const t = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '');
+  const d = JSON.parse((t.match(/\{[\s\S]*\}/) || [t])[0]);
+  const c = { primeiro: vdTexto(d.primeiro, 900), ultimo: vdTexto(d.ultimo, 900), movimento: vdTexto(d.movimento, 500), tokens: (j.usage && j.usage.total_tokens) || 0 };
+  if (!c.primeiro || !c.ultimo) throw new Error('A IA não escreveu os quadros do vídeo.');
+  return c;
+}
+
+// ---- 2. O vídeo (Gemini Omni Flash, primeiro e último quadro) ----
+function acharVideo(o, fundo) {
+  if (!o || typeof o !== 'object' || (fundo || 0) > 8) return null;
+  if (o.type === 'video' && (o.data || o.uri)) return o;
+  for (const k of Object.keys(o)) { const x = acharVideo(o[k], (fundo || 0) + 1); if (x) return x; }
+  return null;
+}
+async function geminiPedido(caminho, opts, ms) {
+  const r = await fetch(GEMINI_URL + caminho, Object.assign({ signal: AbortSignal.timeout(ms || 60000) }, opts, { headers: Object.assign({ 'x-goog-api-key': GEMINI_API_KEY }, (opts && opts.headers) || {}) }));
+  return r;
+}
+async function gerarVideoGemini({ inicio, fim, movimento }) {
+  if (!GEMINI_API_KEY) throw new Error('Falta a variável GEMINI_API_KEY no container.');
+  const c = await configVideo();
+  const corpo = {
+    model: c.modelo,
+    input: [
+      { type: 'text', text: '<FIRST_FRAME> is the first image and <LAST_FRAME> is the second image. ' + movimento + ' One continuous smooth shot of 8 seconds, locked-off or very slow camera, premium product commercial, photorealistic, clean background, no people, no hands, no text, no logos, no captions, no watermark-like graphics.' },
+      { type: 'image', data: inicio.buffer.toString('base64'), mime_type: inicio.mime || 'image/png' },
+      { type: 'image', data: fim.buffer.toString('base64'), mime_type: fim.mime || 'image/png' }
+    ],
+    response_format: { type: 'video', aspect_ratio: '16:9', resolution: c.resolucao }
+  };
+  const r = await geminiPedido('/interactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }, 9 * 60 * 1000);
+  let j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Gemini respondeu ' + r.status + ': ' + String((j.error && j.error.message) || JSON.stringify(j)).slice(0, 300));
+  let v = acharVideo(j);
+  // ainda a trabalhar: pergunta até ficar pronto (no máximo ~8 minutos)
+  for (let i = 0; !v && j && j.id && !/fail|cancel/i.test(String(j.status || '')) && i < 48; i++) {
+    await new Promise(res => setTimeout(res, Number(process.env.GEMINI_ESPERA_MS) || 10000));
+    const rr = await geminiPedido('/interactions/' + encodeURIComponent(j.id), { method: 'GET' }, 120000);
+    j = await rr.json().catch(() => ({}));
+    v = acharVideo(j);
+  }
+  if (!v) throw new Error('O Gemini não devolveu vídeo (' + String((j && (j.status || (j.error && j.error.message))) || 'sem resposta').slice(0, 200) + ').');
+  if (v.data) return Buffer.from(v.data, 'base64');
+  const m = /files\/([A-Za-z0-9_-]+)/.exec(String(v.uri));
+  const rd = m ? await geminiPedido('/files/' + m[1] + ':download?alt=media', { method: 'GET' }, 180000) : await fetch(v.uri, { signal: AbortSignal.timeout(180000), headers: { 'x-goog-api-key': GEMINI_API_KEY } });
+  if (!rd.ok) throw new Error('Não deu para descarregar o vídeo (' + rd.status + ').');
+  return Buffer.from(await rd.arrayBuffer());
+}
+
+// ---- 3. Pôr o vídeo no site (a div e o script) ----
+async function garantirHeroNoSite(site) {
+  const caminho = String(site['Bunny Path'] || '').replace(/^\/+/, '');
+  if (!caminho) return false;
+  let html = (await descarregarDoBunny(caminho)).toString('utf8');
+  const antes = html;
+  if (!/id=["']daniel-ia-hero-video["']/.test(html)) {
+    const sec = '\n<section class="dia-cine" aria-label="Vídeo"><div id="daniel-ia-hero-video" data-dia-cine="1"></div></section>\n';
+    html = /<\/header>/i.test(html) ? html.replace(/<\/header>/i, '</header>' + sec) : html.replace(/<body([^>]*)>/i, '<body$1>' + sec);
+  }
+  if (!/hero-video\.js/.test(html)) {
+    const sc = `\n<script src="${SELF_URL}/hero-video.js" data-site="${escaparHtml(site._id)}" defer></script>\n`;
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>(?![\s\S]*<\/body>)/i, sc + '</body>') : html + sc;
+  }
+  if (html === antes) return false;
+  await uploadParaBunny(caminho, Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+  if (site['CDN URL']) await purgeCacheBunny(site['CDN URL']).catch(() => {});
+  if (site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo') await purgeCacheBunny('https://' + site['Dominio Personalizado'] + '/').catch(() => {});
+  return true;
+}
+const INSTRUCAO_VIDEO_HERO = `\nINSTRUÇÃO OBRIGATÓRIA - HERO CINEMÁTICO: o hero da página inicial tem um vídeo da transformação do produto. Desenha o hero em duas colunas no computador (texto, botões e prova social à esquerda; o vídeo à direita, grande) e uma coluna no telemóvel (texto em cima, vídeo por baixo). No lugar da imagem do hero põe exactamente esta div vazia: <div id="daniel-ia-hero-video"></div> - com a largura da coluna e proporção 16:9 (aspect-ratio:16/9), cantos arredondados como o resto do site, sem imagem, sem fundo e sem nada lá dentro: o vídeo aparece sozinho. O fundo do hero deve ser limpo e calmo para o vídeo brilhar.`;
+
+// ---- 4. O trabalho (2 de cada vez) ----
+const filaVideos = [];
+let videosACorrer = 0;
+function pedirVideoSite(siteId) {
+  if (filaVideos.includes(siteId)) return;
+  filaVideos.push(siteId);
+  correrVideos();
+}
+function correrVideos() {
+  while (videosACorrer < 2 && filaVideos.length) {
+    const id = filaVideos.shift();
+    videosACorrer++;
+    trabalharVideoSite(id).catch(e => console.error('[vídeo hero]', e.message || e)).finally(() => { videosACorrer--; correrVideos(); });
+  }
+}
+async function trabalharVideoSite(siteId) {
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  let v = await lerVideoSite(siteId);
+  if (!site || !v || v.estado !== 'pedido') return;
+  // as 3 versões (a pessoa ainda escolhe) ou ainda a gerar: tenta de novo daqui a 2 minutos (até 12 horas)
+  if (['A escolher', 'A gerar', 'Na fila'].includes(site['Status']) && (Number(v.esperas) || 0) < 360) {
+    v.esperas = (Number(v.esperas) || 0) + 1; await guardarVideoSite(siteId, v);
+    setTimeout(() => pedirVideoSite(siteId), VIDEO_ESPERA_MS).unref();
+    return;
+  }
+  if (site['Status'] !== 'Pronto') { v.estado = 'erro'; v.erro = 'O site ainda não está pronto.'; await mudarUsoVideo(v.owner, -1).catch(() => {}); await guardarVideoSite(siteId, v); return; }
+  Object.assign(v, { estado: 'a gerar', inicio: new Date().toISOString(), erro: '', nome: site['Nome'] || '', owner: site['Owner'] });
+  await guardarVideoSite(siteId, v);
+  try {
+    const marcaG = await lerJsonStorage('marca/' + siteId + '.json');
+    const con = await conceitoVideo({ nome: site['Nome'] || '', tipo: site['Tipo'] || '', prompt: site['Prompt Original'] || '', ideia: v.ideia || '', marca: marcaG && marcaG.marca });
+    const [a, b] = await Promise.all([gerarFotoIA(con.primeiro, 'paisagem'), gerarFotoIA(con.ultimo, 'paisagem')]);
+    if (!a || !b) throw new Error('As imagens do vídeo não ficaram prontas (as fotos IA estão desligadas?).');
+    const pasta = pastaDoSite(site), ts = Date.now().toString(36);
+    const ext = m => /jpe?g/.test(m || '') ? 'jpg' : 'png';
+    const poster = await uploadParaBunny(pasta + 'hero-' + ts + '-inicio.' + ext(a.mime), a.buffer, a.mime);
+    v.poster = poster; await guardarVideoSite(siteId, v);
+    const mp4 = await gerarVideoGemini({ inicio: a, fim: b, movimento: con.movimento });
+    const url = await uploadParaBunny(pasta + 'hero-' + ts + '.mp4', mp4, 'video/mp4');
+    Object.assign(v, { estado: 'pronto', url, poster, versao: (Number(v.versao) || 0) + 1, conceito: con.movimento, pronto_em: new Date().toISOString() });
+    await guardarVideoSite(siteId, v);
+    await garantirHeroNoSite(site).catch(e => console.error('[vídeo hero] não deu para pôr no site:', e.message || e));
+    const u = await bubbleGet('user', site['Owner']).catch(() => null);
+    if (u && u.email) {
+      const dash = (function(){ try { return new URL(APP_URL).origin + '/video-hero/?site=' + encodeURIComponent(siteId); } catch (e) { return APP_URL; } })();
+      await enviarEmail(u.email, 'O vídeo do teu site está pronto - Daniel IA', templateEmailKyc('O vídeo do teu site está pronto', 'Olá!',
+        ['O hero cinemático de <b>' + escaparHtml(site['Nome'] || '') + '</b> já está no ar.', 'Podes escolher se o vídeo anda com o scroll ou fica em loop, e gerar outro se quiseres.'],
+        { texto: 'Ver o vídeo', url: dash })).catch(() => {});
+    }
+  } catch (e) {
+    console.error('[vídeo hero] falhou:', e.message || e);
+    v.estado = 'erro'; v.erro = String(e.message || e).slice(0, 300);
+    await mudarUsoVideo(v.owner, -1).catch(() => {}); // não conta para o limite do mês
+    await guardarVideoSite(siteId, v);
+  }
+}
+// Chamado no fim de cada criação (lancarGeracao): se o site pediu vídeo, começa agora.
+async function videoDepoisDeCriar(siteId) {
+  videoHeroPorSite.delete(siteId);
+  const v = await lerVideoSite(siteId);
+  if (v && v.estado === 'pedido') pedirVideoSite(siteId);
+}
+// Trabalhos presos por um reinício do servidor
+setTimeout(async () => {
+  try {
+    const ind = (await lerJsonStorage('config/videos-indice.json')) || { lista: [] };
+    for (const x of (ind.lista || []).slice(0, 60)) {
+      if (x.estado !== 'a gerar' && x.estado !== 'pedido') continue;
+      const v = await lerVideoSite(x.site);
+      if (!v) continue;
+      if (v.estado === 'a gerar' && Date.now() - Date.parse(v.inicio || v.actualizado || 0) > 20 * 60000) { v.estado = 'pedido'; await guardarVideoSite(x.site, v); }
+      if (v.estado === 'pedido') { const s = await bubbleGet('site', x.site).catch(() => null); if (s && s['Status'] === 'Pronto') pedirVideoSite(x.site); }
+    }
+  } catch (e) { /* nada a retomar */ }
+}, 60000).unref();
+
+// ---- 5. Rotas públicas (sites e popup) ----
+app.get('/hero-video.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(HERO_VIDEO_JS);
+});
+app.get('/hero-video-info', async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=60');
+  try {
+    const id = String(req.query.site || '');
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !contar('hero-video:' + ipDe(req), 240, MIN)) return res.json({});
+    const v = await lerVideoSite(id);
+    if (!v) return res.json({});
+    return res.json({ estado: v.estado, url: v.estado === 'pronto' ? v.url : (v.url_anterior || ''), poster: v.poster || '', modo: v.modo === 'scroll' ? 'scroll' : 'loop' });
+  } catch (e) { return res.json({}); }
+});
+app.get('/promo-popup', async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=120');
+  try {
+    const p = await lerJsonStorage('config/promo.json');
+    const onde = req.query.onde === 'dashboard' ? 'dashboard' : 'landing';
+    if (!p || !p.activo || !p[onde] || !Array.isArray(p.videos) || !p.videos.length) return res.json({ activo: false });
+    return res.json({ activo: true, versao: p.versao || 1, titulo: p.titulo || '', texto: p.texto || '', botao: p.botao || '', link: p.link || '', videos: p.videos.slice(0, 6) });
+  } catch (e) { return res.json({ activo: false }); }
+});
+
+// ---- 6. Rotas do dono (página /video-hero/) ----
+async function vdSiteDoDono(req, res) {
+  const site = req.body.site_id ? await bubbleGet('site', req.body.site_id).catch(() => null) : null;
+  if (!site || site['Owner'] !== req.body.owner) { res.json({ status: 'error', message: 'Não tens permissão para este site.' }); return null; }
+  return site;
+}
+async function vdResposta(site, owner) {
+  const v = await lerVideoSite(site._id);
+  return { video: v ? { estado: v.estado, url: v.url || '', poster: v.poster || '', modo: v.modo === 'scroll' ? 'scroll' : 'loop', erro: v.estado === 'erro' ? (v.erro || '') : '', ideia: v.ideia || '' } : null,
+    conta: await videoPermitido(owner),
+    site: { id: site._id, nome: site['Nome'] || '', tipo: site['Tipo'] || '', url: site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo' ? 'https://' + site['Dominio Personalizado'] + '/' : (site['CDN URL'] || ''), pronto: site['Status'] === 'Pronto' } };
+}
+app.post('/video-hero-ler', async (req, res) => {
+  try { const site = await vdSiteDoDono(req, res); if (!site) return; return res.json({ status: 'success', response: await vdResposta(site, req.body.owner) }); }
+  catch (e) { return res.json({ status: 'error', message: 'Não foi possível abrir.' }); }
+});
+app.post('/video-hero-guardar', async (req, res) => {
+  try {
+    const site = await vdSiteDoDono(req, res); if (!site) return;
+    const v = await lerVideoSite(site._id);
+    if (!v) return res.json({ status: 'error', message: 'Este site ainda não tem vídeo.' });
+    v.modo = req.body.modo === 'scroll' ? 'scroll' : 'loop';
+    await guardarVideoSite(site._id, v);
+    return res.json({ status: 'success', response: await vdResposta(site, req.body.owner) });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível guardar.' }); }
+});
+app.post('/video-hero-gerar', async (req, res) => {
+  try {
+    const site = await vdSiteDoDono(req, res); if (!site) return;
+    const conta = await videoPermitido(req.body.owner);
+    if (!conta.permitido) return res.json({ status: 'error', codigo: 'plano', message: 'Os vídeos cinemáticos fazem parte do plano ' + (conta.planos.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' / ') || 'Business') + '.' });
+    if (!conta.activo) return res.json({ status: 'error', message: 'Os vídeos estão a ser ligados. Tenta daqui a pouco.' });
+    if (conta.restantes <= 0) return res.json({ status: 'error', codigo: 'limite', message: 'Já usaste os ' + conta.por_mes + ' vídeos deste mês. No próximo mês tens mais.' });
+    if (site['Status'] !== 'Pronto') return res.json({ status: 'error', message: 'O site ainda não está pronto.' });
+    const ant = await lerVideoSite(site._id);
+    if (ant && (ant.estado === 'a gerar' || ant.estado === 'pedido')) return res.json({ status: 'error', message: 'Já está um vídeo a ser criado para este site.' });
+    if (await usoVideo(site['Owner']) >= conta.por_mes) return res.json({ status: 'error', codigo: 'limite', message: 'Já usaste os vídeos deste mês.' });
+    await mudarUsoVideo(req.body.owner, 1);
+    const v = Object.assign({}, ant || {}, { estado: 'pedido', owner: req.body.owner, nome: site['Nome'] || '', modo: req.body.modo === 'scroll' ? 'scroll' : ((ant && ant.modo) || 'loop'), ideia: vdTexto(req.body.ideia, 600), url_anterior: ant && ant.url ? ant.url : '', erro: '' });
+    await guardarVideoSite(site._id, v);
+    pedirVideoSite(site._id);
+    return res.json({ status: 'success', response: await vdResposta(site, req.body.owner) });
+  } catch (e) { console.error('Erro em /video-hero-gerar:', e); return res.json({ status: 'error', message: 'Não foi possível começar o vídeo.' }); }
+});
+app.post('/video-hero-repor', async (req, res) => {
+  try {
+    const site = await vdSiteDoDono(req, res); if (!site) return;
+    const mudou = await garantirHeroNoSite(site);
+    return res.json({ status: 'success', response: { mudou } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível.' }); }
+});
+
+// ---- 7. Painel ----
+app.post('/admin-videos', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    const c = await configVideo();
+    const ind = (await lerJsonStorage('config/videos-indice.json')) || { lista: [] };
+    const promo = (await lerJsonStorage('config/promo.json')) || { activo: false, landing: true, dashboard: true, titulo: 'Sites que parecem anúncios de televisão', texto: 'No plano Business, a Daniel IA cria o teu site com um vídeo cinemático do teu produto no topo da página.', botao: 'Quero um assim', link: '', videos: [], versao: 0 };
+    return res.json({ status: 'success', response: { config: c, chave: !!GEMINI_API_KEY, videos: ind.lista || [], promo } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível ler os vídeos.' }); }
+});
+app.post('/admin-videos-config', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    const b = req.body.config || {};
+    const c = {
+      planos: (Array.isArray(b.planos) ? b.planos : String(b.planos || '').split(',')).map(p => vdTexto(p, 40).toLowerCase()).filter(Boolean).slice(0, 10),
+      por_mes: Math.min(500, Math.max(0, Math.round(Number(b.por_mes) || 0))),
+      modelo: vdTexto(b.modelo, 80) || VIDEO_PADRAO.modelo,
+      resolucao: ['360p', '720p', '1080p'].includes(b.resolucao) ? b.resolucao : '720p'
+    };
+    if (!c.planos.length) c.planos = VIDEO_PADRAO.planos;
+    await gravarJsonStorage('config/video.json', c);
+    cacheConfigVideo = null;
+    registar(admin, 'videos-config', JSON.stringify(c).slice(0, 200));
+    return res.json({ status: 'success', response: { config: await configVideo() } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível guardar.' }); }
+});
+app.post('/admin-promo', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    const b = req.body.promo || {};
+    const ant = (await lerJsonStorage('config/promo.json')) || {};
+    const ind = (await lerJsonStorage('config/videos-indice.json')) || { lista: [] };
+    const prontos = new Map((ind.lista || []).filter(x => x.url).map(x => [x.url, x]));
+    const videos = (Array.isArray(b.videos) ? b.videos : []).map(u => prontos.get(String(u))).filter(Boolean).slice(0, 6).map(x => ({ url: x.url, poster: x.poster || '', nome: x.nome || '' }));
+    const p = {
+      activo: b.activo === true, landing: b.landing !== false, dashboard: b.dashboard !== false,
+      titulo: vdTexto(b.titulo, 90), texto: vdTexto(b.texto, 260), botao: vdTexto(b.botao, 40) || 'Ver planos',
+      link: /^(https:\/\/|\/)[^\s"'<>]{0,300}$/.test(String(b.link || '')) ? String(b.link) : '',
+      videos, versao: (Number(ant.versao) || 0) + 1, actualizado: new Date().toISOString()
+    };
+    if (p.activo && !p.videos.length) return res.json({ status: 'error', message: 'Escolhe pelo menos um vídeo feito pela Daniel IA.' });
+    await gravarJsonStorage('config/promo.json', p);
+    registar(admin, 'promo', (p.activo ? 'activo' : 'desligado') + ' v' + p.versao);
+    return res.json({ status: 'success', response: { promo: p } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível guardar.' }); }
+});
+['/video-hero-ler', '/video-hero-guardar', '/video-hero-gerar', '/video-hero-repor', '/admin-videos', '/admin-videos-config', '/admin-promo'].forEach(r => ROTAS_PRIVADAS.add(r));
+globalThis.__danielVideo = { trabalhar: trabalharVideoSite, pedir: pedirVideoSite, gerarVideoGemini, configVideo };
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
