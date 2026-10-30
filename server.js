@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.75.0'; // 30/10/2026 - hero cinemático com vídeo IA (Business) e popup de publicidade com os nossos vídeos
+const VERSION = '1.76.0'; // 30/10/2026 - sites em pausa (Free 10 dias, pago 5 dias depois de expirar), prazo de cada site no dashboard, sites mais responsivos
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -926,7 +926,7 @@ function templateEmailAvisoExpiracao(nome, nomePlano, dataExpira, diasRestantes)
 // Helpers - Bunny Storage
 // ======================================================
 
-async function uploadParaBunny(caminho, buffer, contentType) {
+async function uploadParaBunnyBase(caminho, buffer, contentType) {
   buffer = comMedicao(caminho, buffer, contentType);
   const url = `https://${STORAGE_HOST}/${STORAGE_ZONE}/${caminho}`;
   const res = await fetch(url, {
@@ -2235,6 +2235,7 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional.
+TELEMÓVEL PRIMEIRO (obrigatório): o site tem de ficar perfeito a 360 px, 768 px e 1280 px de largura. Nada pode sair da largura do ecrã nem criar scroll para o lado: nada de larguras fixas maiores do que o ecrã (usa max-width, %, minmax() e clamp()); grelhas e linhas com várias colunas passam a 1 coluna no telemóvel (grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)) ou media queries); filas de botões, etiquetas e links usam flex-wrap:wrap e gap; títulos com font-size em clamp() e overflow-wrap:break-word; imagens e vídeos com max-width:100% e height:auto; tabelas dentro de uma caixa com overflow-x:auto; o menu vira um botão de menu no telemóvel; margens laterais de pelo menos 16 px; botões com pelo menos 44 px de altura; nada escondido atrás de elementos fixos.
 IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
 ${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : (referencia ? instrucaoReferencia({ referencia: 'fiel', analise: null }, tipo, true) : pontoDePartidaVisual())}
 IMPORTANTE: o site tem de parecer acabado, profissional e RICO - nunca com ar de esqueleto, com caixas vazias, pouca informação ou textos de enchimento. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, o site é completo e cheio de informação útil, como o de uma marca líder do sector (ver SITE RICO E VIVO).
@@ -6862,7 +6863,8 @@ app.post('/account', async (req, res) => {
         tokens_usados: user['Tokens Usados Mes'] || 0,
         tokens_incluidos: tokensIncluidos,
         tokens_extra: Math.max(0, Number(user['Tokens Extra']) || 0),
-        video: await videoPermitido(owner).catch(() => null)
+        video: await videoPermitido(owner).catch(() => null),
+        acesso: await contaAcessoDoDono(owner, user).then(x => x && x.conta).catch(() => null)
       }
     });
   } catch (erro) {
@@ -6898,7 +6900,17 @@ app.post('/meus-sites', async (req, res) => {
       email_contacto: s['Email Contacto'] || ''
     }));
 
-    return res.json({ status: 'success', response: { sites: lista } });
+    // 1.76.0: até quando cada site fica no ar (e aplica já as regras a este dono)
+    let contaAc = null;
+    try {
+      const dadosAc = await contaAcessoDoDono(owner);
+      if (dadosAc) {
+        contaAc = dadosAc.conta;
+        await verificarSitesDoDono(owner, sites, dadosAc).catch(e => console.error('[pausa] /meus-sites:', e.message || e));
+        lista.forEach((x, i) => { x.acesso = acessoSite(sites[i], contaAc); });
+      }
+    } catch (e) { console.error('[pausa] /meus-sites:', e.message || e); }
+    return res.json({ status: 'success', response: { sites: lista, conta: contaAc } });
   } catch (erro) {
     console.error('Erro em /meus-sites:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os teus projectos.' });
@@ -9178,6 +9190,7 @@ app.post('/wh-assinatura-dk7x2mq9pw', async (req, res) => {
     });
 
     console.log('Assinatura paga e plano actualizado:', assinatura._id);
+    verificarSitesDoDono(assinatura['User']).catch(e => console.error('[pausa] depois do pagamento:', e.message || e)); // 1.76.0
 
     // ---- Email de confirmação (não deixa o webhook falhar se o email falhar) ----
     try {
@@ -9679,7 +9692,7 @@ function decifrarKyc(buffer) {
   return Buffer.concat([decifra.update(dados), decifra.final()]);
 }
 
-async function descarregarDoBunny(caminho) {
+async function descarregarDoBunnyBase(caminho) {
   const res = await fetch(`https://${STORAGE_HOST}/${STORAGE_ZONE}/${caminho}`, {
     headers: { AccessKey: STORAGE_PASSWORD }
   });
@@ -10130,6 +10143,7 @@ app.post('/admin-atribuir-plano', async (req, res) => {
     const dados = { 'Plan': plano._id, 'Plan Started': agora.toISOString(), 'Plan Expires': expira.toISOString(), 'Aviso Enviado': false };
     if (req.body.repor_tokens) dados['Tokens Usados Mes'] = 0;
     await bubblePatch('user', u._id, dados);
+    verificarSitesDoDono(u._id).catch(e => console.error('[pausa] depois de atribuir o plano:', e.message || e)); // 1.76.0
     // Fica um registo de assinatura para as contas (método "Manual").
     await bubbleCreate('assinatura', {
       'User': u._id, 'Plano': plano._id, 'Valor MZN': valor, 'Metodo': 'Manual', 'ID Pagamento': '',
@@ -16356,7 +16370,9 @@ Object.assign(LIMITES, {
 // ======================================================
 const usoIA = { dias: {}, precos: null, sem_saldo: null, carregado: false };
 let usoIATimer = null, usoIAUltimoAviso = 0;
-async function carregarUsoIA() {
+let usoIAPromessa = null;
+function carregarUsoIA() { if (!usoIAPromessa) usoIAPromessa = carregarUsoIAAgora(); return usoIAPromessa; }
+async function carregarUsoIAAgora() {
   if (usoIA.carregado) return;
   usoIA.carregado = true;
   try {
@@ -18661,6 +18677,7 @@ async function trabalharVideoSite(siteId) {
   } catch (e) {
     console.error('[vídeo hero] falhou:', e.message || e);
     v.estado = 'erro'; v.erro = String(e.message || e).slice(0, 300);
+    if (v.url_anterior) { v.url = v.url_anterior; v.poster = v.poster_anterior || ''; } // o dono continua a ver o vídeo que está no site
     await mudarUsoVideo(v.owner, -1).catch(() => {}); // não conta para o limite do mês
     await guardarVideoSite(siteId, v);
   }
@@ -18698,7 +18715,8 @@ app.get('/hero-video-info', async (req, res) => {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !contar('hero-video:' + ipDe(req), 240, MIN)) return res.json({});
     const v = await lerVideoSite(id);
     if (!v) return res.json({});
-    return res.json({ estado: v.estado, url: v.estado === 'pronto' ? v.url : (v.url_anterior || ''), poster: v.poster || '', modo: v.modo === 'scroll' ? 'scroll' : 'loop' });
+    const pronto = v.estado === 'pronto';
+    return res.json({ estado: v.estado, url: pronto ? v.url : (v.url_anterior || ''), poster: pronto ? (v.poster || '') : (v.url_anterior ? (v.poster_anterior || '') : (v.poster || '')), modo: v.modo === 'scroll' ? 'scroll' : 'loop' });
   } catch (e) { return res.json({}); }
 });
 app.get('/promo-popup', async (req, res) => {
@@ -18749,7 +18767,7 @@ app.post('/video-hero-gerar', async (req, res) => {
     if (ant && (ant.estado === 'a gerar' || ant.estado === 'pedido')) return res.json({ status: 'error', message: 'Já está um vídeo a ser criado para este site.' });
     if (await usoVideo(site['Owner']) >= conta.por_mes) return res.json({ status: 'error', codigo: 'limite', message: 'Já usaste os vídeos deste mês.' });
     await mudarUsoVideo(req.body.owner, 1);
-    const v = Object.assign({}, ant || {}, { estado: 'pedido', owner: req.body.owner, nome: site['Nome'] || '', modo: req.body.modo === 'scroll' ? 'scroll' : ((ant && ant.modo) || 'loop'), ideia: vdTexto(req.body.ideia, 600), url_anterior: ant && ant.url ? ant.url : '', erro: '' });
+    const v = Object.assign({}, ant || {}, { estado: 'pedido', owner: req.body.owner, nome: site['Nome'] || '', modo: req.body.modo === 'scroll' ? 'scroll' : ((ant && ant.modo) || 'loop'), ideia: vdTexto(req.body.ideia, 600), url_anterior: ant && ant.url ? ant.url : '', poster_anterior: ant && ant.poster ? ant.poster : '', poster: '', erro: '' });
     await guardarVideoSite(site._id, v);
     pedirVideoSite(site._id);
     return res.json({ status: 'success', response: await vdResposta(site, req.body.owner) });
@@ -18812,6 +18830,382 @@ app.post('/admin-promo', async (req, res) => {
 });
 ['/video-hero-ler', '/video-hero-guardar', '/video-hero-gerar', '/video-hero-repor', '/admin-videos', '/admin-videos-config', '/admin-promo'].forEach(r => ROTAS_PRIVADAS.add(r));
 globalThis.__danielVideo = { trabalhar: trabalharVideoSite, pedir: pedirVideoSite, gerarVideoGemini, configVideo };
+
+
+// ======================================================
+// Sites em pausa + base responsiva (1.76.0)
+// ------------------------------------------------------
+// Plano Free: cada site fica visível FREE_DIAS_SITE dias (10) a contar da
+// criação. Plano pago: quando a mensalidade expira, o site fica no ar mais
+// DIAS_TOLERANCIA_PAGO dias (5). Depois disso o site fica "em pausa":
+//  - as páginas HTML da pasta do site são copiadas para pausa/<siteId>/ e
+//    trocadas por uma página "Este site está em pausa" (no idioma do site);
+//  - enquanto está em pausa, quem grava HTML do site (editor, IA, vídeo do
+//    hero...) grava na cópia, e quem lê, lê a cópia: nada se perde;
+//  - quando o dono activa ou renova o plano, as páginas voltam na hora.
+// Índice das pausas: config/pausas.json. Avisos já enviados: no mesmo ficheiro.
+// Ciclo a cada 6 horas; o dashboard (/meus-sites) e os pagamentos também
+// verificam o dono na hora.
+// Base responsiva: todas as páginas dos sites levam um CSS mínimo, de
+// especificidade zero (:where), que impede imagens e vídeos de rebentar a
+// largura e o scroll para o lado no telemóvel.
+// ======================================================
+const FREE_DIAS_SITE = Math.max(1, Math.round(Number(clean(process.env.FREE_DIAS_SITE)) || 10));
+const DIAS_TOLERANCIA_PAGO = (() => { const t = clean(process.env.DIAS_TOLERANCIA_PAGO); return t !== '' && Number(t) >= 0 ? Math.round(Number(t)) : 5; })();
+const DIA_MS = 86400000;
+const PAUSA_CICLO_MS = Number(process.env.PAUSA_CICLO_MS) || 6 * 3600000;
+const pausas = new Map();   // 'sites/<owner>/<slug>/' -> { site, owner, motivo, desde, ficheiros: [] }
+let avisosPausa = {};       // chave -> data em que foi enviado
+let pausasCarregadas = null;
+function carregarPausas() {
+  if (!pausasCarregadas) pausasCarregadas = (async () => {
+    try {
+      const j = JSON.parse((await descarregarDoBunnyBase('config/pausas.json')).toString('utf8'));
+      for (const [k, v] of Object.entries(j.pastas || {})) pausas.set(k, v);
+      avisosPausa = j.avisos || {};
+    } catch (e) { /* ainda não há pausas */ }
+  })();
+  return pausasCarregadas;
+}
+let gravacaoPausas = Promise.resolve();
+function gravarPausas() {
+  gravacaoPausas = gravacaoPausas
+    .then(() => uploadParaBunnyBase('config/pausas.json', Buffer.from(JSON.stringify({ v: 1, pastas: Object.fromEntries(pausas), avisos: avisosPausa }), 'utf8'), 'application/json; charset=utf-8'))
+    .catch(e => console.error('[pausa] não gravei o índice:', e.message || e));
+  return gravacaoPausas;
+}
+function pastaDoCaminho(c) {
+  const m = RE_CAMINHO_SITE.exec(String(c || '').replace(/^\/+/, ''));
+  return m ? { pasta: 'sites/' + m[1] + '/' + m[2] + '/', ficheiro: m[3] } : null;
+}
+function pastaNormalDoSite(site) {
+  const p = pastaDoCaminho(String(site['Bunny Path'] || ''));
+  return p ? p.pasta : '';
+}
+
+// ---- base responsiva ----
+const CSS_BASE_RESPONSIVA = '<style data-daniel-ia="responsivo">'
+  + ':where(img,video,iframe,canvas,svg,embed,object){max-width:100%}'
+  + ':where(img,video){height:auto}'
+  + ':where(h1,h2,h3,h4,h5,h6,p,li,a,span,td,th,label,blockquote,figcaption){overflow-wrap:break-word}'
+  + ':where(pre){max-width:100%;overflow-x:auto}'
+  + '@supports (overflow:clip){:where(html,body){overflow-x:clip}}'
+  + '</style>';
+function comBaseResponsiva(buffer) {
+  try {
+    const ehBuffer = Buffer.isBuffer(buffer);
+    const html = ehBuffer ? buffer.toString('utf8') : String(buffer);
+    if (html.indexOf('data-daniel-ia="responsivo"') >= 0 || !/<html[\s>]/i.test(html)) return buffer;
+    const novo = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, m => m + '\n' + CSS_BASE_RESPONSIVA) : html.replace(/<html[^>]*>/i, m => m + '\n' + CSS_BASE_RESPONSIVA);
+    return ehBuffer ? Buffer.from(novo, 'utf8') : novo;
+  } catch (e) { return buffer; }
+}
+
+// ---- gravar e ler HTML dos sites (com pausas e base responsiva) ----
+async function uploadParaBunny(caminho, buffer, contentType) {
+  const c = String(caminho || '').replace(/^\/+/, '');
+  if (/text\/html/i.test(String(contentType || ''))) {
+    const p = pastaDoCaminho(c);
+    if (p) {
+      buffer = comBaseResponsiva(buffer);
+      await carregarPausas();
+      const pz = pausas.get(p.pasta);
+      if (pz) { // site em pausa: grava na cópia (volta ao ar quando o plano voltar)
+        await uploadParaBunnyBase('pausa/' + pz.site + '/' + p.ficheiro, buffer, contentType);
+        if (!pz.ficheiros.includes(p.ficheiro)) { pz.ficheiros.push(p.ficheiro); gravarPausas(); }
+        return `https://${CDN_HOST}/${STORAGE_ZONE}/${c}`;
+      }
+    }
+  }
+  return uploadParaBunnyBase(c, buffer, contentType);
+}
+async function descarregarDoBunny(caminho) {
+  const c = String(caminho || '').replace(/^\/+/, '');
+  const p = /\.html$/i.test(c) ? pastaDoCaminho(c) : null;
+  if (p) {
+    await carregarPausas();
+    const pz = pausas.get(p.pasta);
+    if (pz && pz.ficheiros.includes(p.ficheiro)) return descarregarDoBunnyBase('pausa/' + pz.site + '/' + p.ficheiro);
+  }
+  return descarregarDoBunnyBase(c);
+}
+async function listarPastaBunny(pasta) {
+  const r = await fetch(`https://${STORAGE_HOST}/${STORAGE_ZONE}/${pasta.replace(/\/?$/, '/')}`, { headers: { AccessKey: STORAGE_PASSWORD, Accept: 'application/json' } });
+  if (!r.ok) throw new Error('Listar a pasta falhou: ' + r.status);
+  const j = await r.json();
+  return Array.isArray(j) ? j : [];
+}
+async function purgarPastaSite(site, pasta) {
+  await purgeCacheBunny(`https://${CDN_HOST}/${STORAGE_ZONE}/${pasta}*`).catch(() => {});
+  if (site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo') await purgeCacheBunny('https://' + site['Dominio Personalizado'] + '/*').catch(() => {});
+}
+
+// ---- a página "em pausa" ----
+const TX_PAUSA = {
+  pt: ['Site em pausa', 'Este site está em pausa', 'Volta a estar disponível em breve.', 'É o dono deste site?', 'Entra na Daniel IA para o voltar a pôr no ar.', 'Voltar a pôr no ar', 'Feito com Daniel IA'],
+  en: ['Site paused', 'This site is paused', 'It will be available again soon.', 'Are you the owner of this site?', 'Sign in to Daniel IA to bring it back online.', 'Bring it back online', 'Made with Daniel IA'],
+  fr: ['Site en pause', 'Ce site est en pause', 'Il sera bientôt de nouveau disponible.', 'Vous êtes le propriétaire de ce site ?', 'Connectez-vous à Daniel IA pour le remettre en ligne.', 'Remettre en ligne', 'Créé avec Daniel IA'],
+  es: ['Sitio en pausa', 'Este sitio está en pausa', 'Pronto volverá a estar disponible.', '¿Eres el dueño de este sitio?', 'Entra en Daniel IA para volver a publicarlo.', 'Volver a publicarlo', 'Hecho con Daniel IA']
+};
+function origemApp() { try { return new URL(APP_URL).origin; } catch (e) { return 'https://app.daniel-ia.pro'; } }
+function paginaPausa(nome, lang) {
+  const L = TX_PAUSA[lang] ? lang : 'pt', t = TX_PAUSA[L], n = escaparHtml(String(nome || '').slice(0, 80));
+  return `<!DOCTYPE html>
+<html lang="${L}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${n ? n + ' · ' : ''}${t[0]}</title>
+<!-- pausa da Daniel IA: sem dia-medir.js -->
+<style>
+*{box-sizing:border-box}html,body{margin:0;min-height:100%}
+body{min-height:100vh;display:grid;place-items:center;padding:24px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1C1A22;background:radial-gradient(80% 60% at 50% 0%,#EFE9F6,transparent 70%),#FAF8FC}
+main{width:min(460px,100%);text-align:center}
+.ic{width:72px;height:72px;margin:0 auto 22px;border-radius:22px;display:grid;place-items:center;background:#fff;border:1px solid #E7E0EF;box-shadow:0 18px 40px -22px rgba(40,10,70,.35)}
+.ic svg{width:30px;height:30px;color:#5A2A82}
+.nome{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#7A6E88;margin:0 0 8px;overflow-wrap:anywhere}
+h1{font-size:clamp(24px,6vw,32px);line-height:1.15;letter-spacing:-.02em;margin:0 0 10px}
+p{margin:0;color:#5E5568;font-size:15.5px;line-height:1.6}
+.dono{margin-top:34px;padding:18px;border-radius:18px;background:#fff;border:1px solid #E7E0EF;text-align:left;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.dono div{flex:1;min-width:180px}.dono b{display:block;font-size:14px;margin-bottom:2px}.dono span{font-size:13.5px;color:#6A6176;line-height:1.5}
+.dono a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:12px;background:#430960;color:#fff;font-weight:700;font-size:14px;text-decoration:none;white-space:nowrap}
+.dono a:focus-visible{outline:3px solid #89C804;outline-offset:2px}
+footer{margin-top:28px;font-size:12px;color:#9A90A6}
+@media (max-width:420px){.dono a{width:100%}}
+</style>
+</head>
+<body>
+<main>
+<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg></div>
+${n ? `<p class="nome">${n}</p>` : ''}
+<h1>${t[1]}</h1>
+<p>${t[2]}</p>
+<div class="dono"><div><b>${t[3]}</b><span>${t[4]}</span></div><a href="${origemApp()}/dashboard/" rel="nofollow">${t[5]}</a></div>
+<footer>${t[6]}</footer>
+</main>
+</body>
+</html>`;
+}
+
+// ---- pôr em pausa e voltar a pôr no ar ----
+async function pausarSite(site, motivo) {
+  const pasta = pastaNormalDoSite(site);
+  if (!pasta) return false;
+  await carregarPausas();
+  if (pausas.has(pasta)) return false;
+  let nomes = [];
+  try { nomes = (await listarPastaBunny(pasta)).filter(x => x && !x.IsDirectory && /^[A-Za-z0-9_.-]{1,80}\.html$/.test(String(x.ObjectName || ''))).map(x => x.ObjectName); } catch (e) { console.error('[pausa] listar', pasta, e.message || e); }
+  const principal = String(site['Bunny Path'] || '').split('/').pop();
+  if (principal && !nomes.includes(principal)) nomes.unshift(principal);
+  let lang = 'pt';
+  const copiados = [];
+  for (const n of nomes) {
+    let buf;
+    try { buf = await descarregarDoBunnyBase(pasta + n); } catch (e) { continue; }
+    if (n === principal) { const m = /<html[^>]*\blang=["']?([a-z]{2})/i.exec(buf.toString('utf8').slice(0, 3000)); if (m) lang = m[1].toLowerCase(); }
+    await uploadParaBunnyBase('pausa/' + site._id + '/' + n, buf, 'text/html; charset=utf-8');
+    copiados.push(n);
+  }
+  if (!copiados.length) return false;
+  pausas.set(pasta, { site: site._id, owner: site['Owner'], motivo, desde: new Date().toISOString(), ficheiros: copiados });
+  await gravarPausas();
+  const pag = Buffer.from(paginaPausa(site['Nome'], lang), 'utf8');
+  for (const n of copiados) await uploadParaBunnyBase(pasta + n, pag, 'text/html; charset=utf-8');
+  await purgarPastaSite(site, pasta);
+  console.log('[pausa] site em pausa:', site._id, motivo);
+  return true;
+}
+async function retomarSite(site) {
+  const pasta = pastaNormalDoSite(site);
+  await carregarPausas();
+  const pz = pasta && pausas.get(pasta);
+  if (!pz) return false;
+  for (const n of pz.ficheiros) {
+    let buf;
+    try { buf = await descarregarDoBunnyBase('pausa/' + pz.site + '/' + n); } catch (e) { continue; }
+    await uploadParaBunnyBase(pasta + n, comBaseResponsiva(buf), 'text/html; charset=utf-8');
+  }
+  pausas.delete(pasta);
+  await gravarPausas();
+  await purgarPastaSite(site, pasta);
+  console.log('[pausa] site de volta ao ar:', site._id);
+  return true;
+}
+
+// ---- regras ----
+function contaAcesso(user, plano) {
+  const nome = String((plano && plano['Name']) || '').trim();
+  const free = !plano || nome.toLowerCase() === 'free' || !(Number(plano['Price MZN']) > 0);
+  if (free) return { tipo: 'free', plano: nome || 'Free', dias_site: FREE_DIAS_SITE };
+  const exp = user && user['Plan Expires'] ? Date.parse(user['Plan Expires']) : NaN;
+  if (!Number.isFinite(exp)) return { tipo: 'pago', plano: nome, expira: '', expirado: false, tolerancia: DIAS_TOLERANCIA_PAGO };
+  return { tipo: 'pago', plano: nome, expira: new Date(exp).toISOString(), expirado: exp <= Date.now(), pausa_em: new Date(exp + DIAS_TOLERANCIA_PAGO * DIA_MS).toISOString(), tolerancia: DIAS_TOLERANCIA_PAGO };
+}
+function fimDoSite(site, conta) { // quando o site sai do ar (ms) ou null
+  if (conta.tipo === 'free') { const c = Date.parse(site['Created Date'] || ''); return Number.isFinite(c) ? c + FREE_DIAS_SITE * DIA_MS : null; }
+  return conta.expira ? Date.parse(conta.expira) + DIAS_TOLERANCIA_PAGO * DIA_MS : null;
+}
+function acessoSite(site, conta) {
+  if (!site || site['Status'] !== 'Pronto' || !conta) return null;
+  const agora = Date.now(), pasta = pastaNormalDoSite(site), pz = pasta && pausas.get(pasta);
+  const fim = fimDoSite(site, conta);
+  const dias = fim ? Math.max(0, Math.ceil((fim - agora) / DIA_MS)) : null;
+  if (pz) return { estado: 'pausa', motivo: pz.motivo, desde: pz.desde };
+  if (fim && agora >= fim) return { estado: 'pausa', motivo: conta.tipo === 'free' ? 'free' : 'expirou', desde: new Date(fim).toISOString() };
+  if (conta.tipo === 'free') return { estado: dias <= 3 ? 'aviso' : 'ok', motivo: 'free', ate: new Date(fim || agora).toISOString(), dias, total: FREE_DIAS_SITE };
+  if (!conta.expira) return { estado: 'ok', motivo: 'pago' };
+  if (conta.expirado) return { estado: 'aviso', motivo: 'expirou', expirou: conta.expira, ate: new Date(fim).toISOString(), dias };
+  const diasPlano = Math.max(0, Math.ceil((Date.parse(conta.expira) - agora) / DIA_MS));
+  return { estado: diasPlano <= 3 ? 'aviso' : 'ok', motivo: diasPlano <= 3 ? 'renovar' : 'pago', ate: conta.expira, dias: diasPlano };
+}
+async function contaAcessoDoDono(owner, user) {
+  user = user || await bubbleGet('user', owner);
+  if (!user) return null;
+  const planId = await garantirPlano(owner, user).catch(() => null);
+  const plano = planId ? await bubbleGet('plan', planId).catch(() => null) : null;
+  return { user, plano, conta: contaAcesso(user, plano) };
+}
+
+// ---- emails ----
+let emailsPausaCiclo = 0;
+async function emailPausa(user, assunto, titulo, paragrafos, botao) {
+  const email = user && (user.email || (user.authentication && user.authentication.email && user.authentication.email.email));
+  if (!email) return;
+  if (emailsPausaCiclo >= 150) return; // o resto vai no próximo ciclo
+  emailsPausaCiclo++;
+  const primeiro = String(user['Full Name'] || '').trim().split(/\s+/)[0];
+  await enviarEmail(email, assunto, templateEmailKyc(titulo, primeiro ? 'Olá ' + escaparHtml(primeiro) + '!' : 'Olá!', paragrafos, botao)).catch(e => console.error('[pausa] email', e.message || e));
+  await new Promise(r => setTimeout(r, Number(process.env.PAUSA_EMAIL_MS) || 600));
+}
+function dataCurta(iso) { try { return formatarDataPt(new Date(Date.parse(iso) + 2 * 3600000)); } catch (e) { return ''; } }
+
+// Aplica as regras a um dono: pausa o que passou do prazo, volta a pôr no
+// ar o que já pode estar, e manda os avisos (uma vez cada).
+async function verificarSitesDoDono(owner, sites, dados) {
+  await carregarPausas();
+  dados = dados || await contaAcessoDoDono(owner);
+  if (!dados) return { pausados: 0, retomados: 0 };
+  const { user, conta } = dados;
+  if (!sites) sites = await bubbleList('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]);
+  const planos = origemApp() + '/planos/';
+  let pausados = 0, retomados = 0, mudou = false;
+  // pago e expirado (ainda dentro da tolerância): um aviso por expiração
+  if (conta.tipo === 'pago' && conta.expirado && Date.now() < Date.parse(conta.pausa_em)) {
+    const k = 'expirou:' + owner + ':' + conta.expira;
+    if (!avisosPausa[k] && sites.some(s => s['Status'] === 'Pronto')) {
+      avisosPausa[k] = new Date().toISOString(); mudou = true;
+      await emailPausa(user, 'A tua mensalidade expirou - Daniel IA', 'A tua mensalidade expirou',
+        ['A mensalidade do plano <b>' + escaparHtml(conta.plano) + '</b> terminou a ' + dataCurta(conta.expira) + '.',
+         'Os teus sites continuam no ar até <b>' + dataCurta(conta.pausa_em) + '</b>. Depois disso ficam em pausa e quem os visitar vê "Este site está em pausa".',
+         'Renova agora e não perdes nenhum dia. Nada é apagado.'],
+        { texto: 'Renovar o plano', url: planos });
+    }
+  }
+  for (const s of sites) {
+    if (s['Status'] !== 'Pronto') continue;
+    const pasta = pastaNormalDoSite(s);
+    if (!pasta) continue;
+    const fim = fimDoSite(s, conta), agora = Date.now();
+    const deve = !!fim && agora >= fim, esta = pausas.has(pasta);
+    if (deve && !esta) {
+      const ok = await pausarSite(s, conta.tipo === 'free' ? 'free' : 'expirou').catch(e => { console.error('[pausa] falhou', s._id, e.message || e); return false; });
+      if (ok) {
+        pausados++;
+        await emailPausa(user, 'O teu site está em pausa - Daniel IA', 'O teu site está em pausa',
+          conta.tipo === 'free'
+            ? ['No plano Free, cada site fica visível ' + FREE_DIAS_SITE + ' dias. O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> chegou ao fim desse prazo e agora quem o visita vê "Este site está em pausa".', 'Nada foi apagado: activa um plano e o site volta ao ar na hora, tal como estava.']
+            : ['A mensalidade do plano <b>' + escaparHtml(conta.plano) + '</b> expirou a ' + dataCurta(conta.expira) + ' e passaram os ' + DIAS_TOLERANCIA_PAGO + ' dias de tolerância. O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> está em pausa.', 'Nada foi apagado: renova o plano e o site volta ao ar na hora.'],
+          { texto: conta.tipo === 'free' ? 'Activar um plano' : 'Renovar o plano', url: planos });
+      }
+    } else if (!deve && esta) {
+      const ok = await retomarSite(s).catch(e => { console.error('[pausa] retomar falhou', s._id, e.message || e); return false; });
+      if (ok) {
+        retomados++;
+        await emailPausa(user, 'O teu site voltou ao ar - Daniel IA', 'O teu site voltou ao ar',
+          ['O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> já está outra vez visível para toda a gente. Obrigado!'],
+          { texto: 'Ver o site', url: s['CDN URL'] || origemApp() + '/dashboard/' });
+      }
+    } else if (!deve && !esta && conta.tipo === 'free' && fim && fim - agora <= 3 * DIA_MS) {
+      const k = 'free3:' + s._id;
+      if (!avisosPausa[k]) {
+        avisosPausa[k] = new Date().toISOString(); mudou = true;
+        const d = Math.max(1, Math.ceil((fim - agora) / DIA_MS));
+        await emailPausa(user, 'O teu site fica em pausa daqui a ' + d + (d === 1 ? ' dia' : ' dias') + ' - Daniel IA', 'O teu site fica em pausa em breve',
+          ['No plano Free, cada site fica visível ' + FREE_DIAS_SITE + ' dias. O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> fica em pausa a <b>' + dataCurta(new Date(fim).toISOString()) + '</b>.', 'Activa um plano e o site continua no ar, sem interrupções.'],
+          { texto: 'Manter o site no ar', url: planos });
+      }
+    }
+  }
+  if (mudou) await gravarPausas();
+  return { pausados, retomados };
+}
+
+// ---- o ciclo (a cada 6 horas) ----
+let pausaCicloACorrer = false;
+async function cicloPausas() {
+  if (pausaCicloACorrer) return null;
+  pausaCicloACorrer = true; emailsPausaCiclo = 0;
+  const total = { donos: 0, pausados: 0, retomados: 0, responsivos: 0 };
+  try {
+    await carregarPausas();
+    const sites = await bubbleListTodos('site', [{ key: 'Status', constraint_type: 'equals', value: 'Pronto' }], 5000);
+    const porDono = new Map();
+    for (const s of sites) { if (!s['Owner']) continue; if (!porDono.has(s['Owner'])) porDono.set(s['Owner'], []); porDono.get(s['Owner']).push(s); }
+    for (const [owner, lista] of porDono) {
+      try {
+        const r = await verificarSitesDoDono(owner, lista);
+        total.donos++; total.pausados += r.pausados; total.retomados += r.retomados;
+      } catch (e) { console.error('[pausa] dono', owner, e.message || e); }
+    }
+    total.responsivos = await migrarResponsivo(sites).catch(() => 0);
+    console.log('[pausa] ciclo:', JSON.stringify(total));
+  } catch (e) { console.error('[pausa] ciclo falhou:', e.message || e); }
+  finally { pausaCicloACorrer = false; }
+  return total;
+}
+// Sites antigos: põe a base responsiva (80 sites por ciclo, uma vez cada)
+async function migrarResponsivo(sites) {
+  let feitos = {};
+  try { feitos = JSON.parse((await descarregarDoBunnyBase('config/responsivo-feito.json')).toString('utf8')).ids || {}; } catch (e) { feitos = {}; }
+  let n = 0;
+  for (const s of sites) {
+    if (n >= 80) break;
+    const pasta = pastaNormalDoSite(s);
+    if (!pasta || feitos[s._id] || pausas.has(pasta)) continue;
+    n++;
+    try {
+      const fs = (await listarPastaBunny(pasta)).filter(x => x && !x.IsDirectory && /\.html$/i.test(String(x.ObjectName || ''))).map(x => x.ObjectName);
+      for (const f of fs) {
+        const buf = await descarregarDoBunnyBase(pasta + f);
+        const novo = comBaseResponsiva(buf);
+        if (novo !== buf) await uploadParaBunnyBase(pasta + f, novo, 'text/html; charset=utf-8');
+      }
+      feitos[s._id] = 1;
+      await purgarPastaSite(s, pasta);
+    } catch (e) { console.error('[responsivo]', s._id, e.message || e); }
+  }
+  if (n) await uploadParaBunnyBase('config/responsivo-feito.json', Buffer.from(JSON.stringify({ ids: feitos }), 'utf8'), 'application/json; charset=utf-8').catch(() => {});
+  return n;
+}
+carregarPausas();
+setTimeout(cicloPausas, Number(process.env.PAUSA_PRIMEIRO_MS) || 120000).unref();
+setInterval(cicloPausas, PAUSA_CICLO_MS).unref();
+
+app.post('/admin-pausas', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    await carregarPausas();
+    if (req.body.correr) { const r = await cicloPausas(); registar(admin, 'pausas', JSON.stringify(r || {})); }
+    if (req.body.retomar) {
+      const s = await bubbleGet('site', req.body.retomar).catch(() => null);
+      if (s) { await retomarSite(s); registar(admin, 'pausa-retomar', s._id); }
+    }
+    return res.json({ status: 'success', response: { free_dias: FREE_DIAS_SITE, tolerancia: DIAS_TOLERANCIA_PAGO, pausas: Array.from(pausas.entries()).map(([pasta, v]) => ({ pasta, site: v.site, owner: v.owner, motivo: v.motivo, desde: v.desde, paginas: v.ficheiros.length })) } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível.' }); }
+});
+ROTAS_PRIVADAS.add('/admin-pausas');
+globalThis.__danielPausa = { ciclo: cicloPausas, verificar: verificarSitesDoDono, pausar: pausarSite, retomar: retomarSite, pausas, acessoSite, contaAcesso, comBaseResponsiva, ler: descarregarDoBunny, gravar: uploadParaBunny };
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
