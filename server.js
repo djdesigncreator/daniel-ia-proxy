@@ -18851,6 +18851,7 @@ globalThis.__danielVideo = { trabalhar: trabalharVideoSite, pedir: pedirVideoSit
 // largura e o scroll para o lado no telemóvel.
 // ======================================================
 const FREE_DIAS_SITE = Math.max(1, Math.round(Number(clean(process.env.FREE_DIAS_SITE)) || 10));
+const FREE_DIAS_AVISO = Math.max(1, Math.round(Number(clean(process.env.FREE_DIAS_AVISO)) || 5)); // aviso ao dono do site Free (dias antes de sair do ar)
 const DIAS_TOLERANCIA_PAGO = (() => { const t = clean(process.env.DIAS_TOLERANCIA_PAGO); return t !== '' && Number(t) >= 0 ? Math.round(Number(t)) : 5; })();
 const DIA_MS = 86400000;
 const PAUSA_CICLO_MS = Number(process.env.PAUSA_CICLO_MS) || 6 * 3600000;
@@ -19051,13 +19052,15 @@ function acessoSite(site, conta) {
   const agora = Date.now(), pasta = pastaNormalDoSite(site), pz = pasta && pausas.get(pasta);
   const fim = fimDoSite(site, conta);
   const dias = fim ? Math.max(0, Math.ceil((fim - agora) / DIA_MS)) : null;
-  if (pz) return { estado: 'pausa', motivo: pz.motivo, desde: pz.desde };
-  if (fim && agora >= fim) return { estado: 'pausa', motivo: conta.tipo === 'free' ? 'free' : 'expirou', desde: new Date(fim).toISOString() };
-  if (conta.tipo === 'free') return { estado: dias <= 3 ? 'aviso' : 'ok', motivo: 'free', ate: new Date(fim || agora).toISOString(), dias, total: FREE_DIAS_SITE };
-  if (!conta.expira) return { estado: 'ok', motivo: 'pago' };
-  if (conta.expirado) return { estado: 'aviso', motivo: 'expirou', expirou: conta.expira, ate: new Date(fim).toISOString(), dias };
+  // validade = até quando o site é válido (Free: criação + 10 dias; pago: fim da mensalidade)
+  const validade = conta.tipo === 'free' ? (fim ? new Date(fim).toISOString() : '') : (conta.expira || '');
+  if (pz) return { estado: 'pausa', motivo: pz.motivo, desde: pz.desde, validade };
+  if (fim && agora >= fim) return { estado: 'pausa', motivo: conta.tipo === 'free' ? 'free' : 'expirou', desde: new Date(fim).toISOString(), validade };
+  if (conta.tipo === 'free') return { estado: dias <= FREE_DIAS_AVISO ? 'aviso' : 'ok', motivo: 'free', ate: new Date(fim || agora).toISOString(), dias, total: FREE_DIAS_SITE, validade };
+  if (!conta.expira) return { estado: 'ok', motivo: 'pago', validade };
+  if (conta.expirado) return { estado: 'aviso', motivo: 'expirou', expirou: conta.expira, ate: new Date(fim).toISOString(), dias, validade };
   const diasPlano = Math.max(0, Math.ceil((Date.parse(conta.expira) - agora) / DIA_MS));
-  return { estado: diasPlano <= 3 ? 'aviso' : 'ok', motivo: diasPlano <= 3 ? 'renovar' : 'pago', ate: conta.expira, dias: diasPlano };
+  return { estado: diasPlano <= 3 ? 'aviso' : 'ok', motivo: diasPlano <= 3 ? 'renovar' : 'pago', ate: conta.expira, dias: diasPlano, validade };
 }
 async function contaAcessoDoDono(owner, user) {
   user = user || await bubbleGet('user', owner);
@@ -19126,14 +19129,16 @@ async function verificarSitesDoDono(owner, sites, dados) {
           ['O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> já está outra vez visível para toda a gente. Obrigado!'],
           { texto: 'Ver o site', url: s['CDN URL'] || origemApp() + '/dashboard/' });
       }
-    } else if (!deve && !esta && conta.tipo === 'free' && fim && fim - agora <= 3 * DIA_MS) {
-      const k = 'free3:' + s._id;
+    } else if (!deve && !esta && conta.tipo === 'free' && fim && fim - agora <= FREE_DIAS_AVISO * DIA_MS) {
+      const k = 'free5:' + s._id;
       if (!avisosPausa[k]) {
         avisosPausa[k] = new Date().toISOString(); mudou = true;
         const d = Math.max(1, Math.ceil((fim - agora) / DIA_MS));
-        await emailPausa(user, 'O teu site fica em pausa daqui a ' + d + (d === 1 ? ' dia' : ' dias') + ' - Daniel IA', 'O teu site fica em pausa em breve',
-          ['No plano Free, cada site fica visível ' + FREE_DIAS_SITE + ' dias. O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> fica em pausa a <b>' + dataCurta(new Date(fim).toISOString()) + '</b>.', 'Activa um plano e o site continua no ar, sem interrupções.'],
-          { texto: 'Manter o site no ar', url: planos });
+        await emailPausa(user, 'O teu site sai do ar daqui a ' + d + (d === 1 ? ' dia' : ' dias') + ' - Daniel IA', 'O teu site vai sair do ar',
+          ['No plano Free, cada site é válido por ' + FREE_DIAS_SITE + ' dias. O <b>' + escaparHtml(s['Nome'] || 'teu site') + '</b> é válido até <b>' + dataCurta(new Date(fim).toISOString()) + '</b> (falta' + (d === 1 ? ' 1 dia' : 'm ' + d + ' dias') + ').',
+           'Depois dessa data o site sai do ar e quem o visitar vê "Este site está em pausa".',
+           '<b>Assina um plano agora para evitar o bloqueio:</b> o site continua no ar, sem interrupções, e ganhas domínio próprio, edição com IA e muito mais.'],
+          { texto: 'Assinar um plano', url: planos });
       }
     }
   }
@@ -19201,7 +19206,7 @@ app.post('/admin-pausas', async (req, res) => {
       const s = await bubbleGet('site', req.body.retomar).catch(() => null);
       if (s) { await retomarSite(s); registar(admin, 'pausa-retomar', s._id); }
     }
-    return res.json({ status: 'success', response: { free_dias: FREE_DIAS_SITE, tolerancia: DIAS_TOLERANCIA_PAGO, pausas: Array.from(pausas.entries()).map(([pasta, v]) => ({ pasta, site: v.site, owner: v.owner, motivo: v.motivo, desde: v.desde, paginas: v.ficheiros.length })) } });
+    return res.json({ status: 'success', response: { free_dias: FREE_DIAS_SITE, free_aviso: FREE_DIAS_AVISO, tolerancia: DIAS_TOLERANCIA_PAGO, pausas: Array.from(pausas.entries()).map(([pasta, v]) => ({ pasta, site: v.site, owner: v.owner, motivo: v.motivo, desde: v.desde, paginas: v.ficheiros.length })) } });
   } catch (e) { return res.json({ status: 'error', message: 'Não foi possível.' }); }
 });
 ROTAS_PRIVADAS.add('/admin-pausas');
