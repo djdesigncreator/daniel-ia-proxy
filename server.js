@@ -10094,6 +10094,9 @@ app.post('/admin-utilizadores', async (req, res) => {
     const termo = String(req.body.pesquisa || '').trim().toLowerCase().slice(0, 80);
     const planoFiltro = String(req.body.plano_id || '');
     let lista = users.map(u => utilizadorParaAdmin(u, planos, sitesPorDono, kycPorDono));
+    await carregarPausas();
+    const pausaPorDono = {}; for (const v of pausas.values()) pausaPorDono[v.owner] = (pausaPorDono[v.owner] || 0) + 1;
+    lista.forEach(u => { u.sites_pausa = pausaPorDono[u.id] || 0; u.plano_free = !u.plano || u.plano.trim().toLowerCase() === 'free'; });
     if (termo) lista = lista.filter(u => (u.nome + ' ' + u.email + ' ' + u.id).toLowerCase().includes(termo));
     if (planoFiltro) lista = lista.filter(u => u.plano_id === planoFiltro);
     return res.json({ status: 'success', response: { total: lista.length, utilizadores: lista.slice(0, 300) } });
@@ -10203,16 +10206,35 @@ app.post('/admin-terminar-sessoes', async (req, res) => {
 app.post('/admin-sites', async (req, res) => {
   try {
     if (!(await exigirAdmin(req, res))) return;
-    const [sites, users] = await Promise.all([listaAdmin('site', !!req.body.actualizar), listaAdmin('user')]);
+    const [sites, users, planosV] = await Promise.all([listaAdmin('site', !!req.body.actualizar), listaAdmin('user'), listaAdmin('plan')]);
     const emailPorId = {}; users.forEach(u => { emailPorId[u._id] = emailDoUsuario(u) || ''; });
+    // 1.76.0: validade de cada site (Free: criação + 10 dias; pago: fim da mensalidade)
+    await carregarPausas();
+    const userPorIdV = {}; users.forEach(u => { userPorIdV[u._id] = u; });
+    const contaPorDono = {};
+    const acessoAdmin = x => {
+      const u = userPorIdV[x['Owner']];
+      if (!u) return null;
+      if (!contaPorDono[u._id]) contaPorDono[u._id] = contaAcesso(u, planosV.find(p => p._id === u['Plan']) || null);
+      return acessoSite(x, contaPorDono[u._id]);
+    };
     const termo = String(req.body.pesquisa || '').trim().toLowerCase().slice(0, 80);
     const tipo = String(req.body.tipo || ''), estado = String(req.body.estado || '');
     let lista = sites.map(x => ({ id: x._id, nome: x['Nome'] || '', tipo: x['Tipo'] || '', estado: x['Status'] || '', url: x['CDN URL'] || '',
-      dono_id: x['Owner'] || '', dono_email: emailPorId[x['Owner']] || '', dominio: x['Dominio'] || '', criado: x['Created Date'] || '' }));
+      dono_id: x['Owner'] || '', dono_email: emailPorId[x['Owner']] || '', dominio: x['Dominio'] || '', criado: x['Created Date'] || '',
+      acesso: acessoAdmin(x), plano: (contaPorDono[x['Owner']] || {}).plano || '', plano_tipo: (contaPorDono[x['Owner']] || {}).tipo || '' }));
+    const resumoV = { no_ar: 0, a_expirar: 0, em_pausa: 0, free: 0, pagos: 0 };
+    lista.forEach(x => { const a = x.acesso; if (!a) return; if (a.estado === 'pausa') resumoV.em_pausa++; else { resumoV.no_ar++; if (a.estado === 'aviso') resumoV.a_expirar++; } if (x.plano_tipo === 'free') resumoV.free++; else resumoV.pagos++; });
     if (termo) lista = lista.filter(x => (x.nome + ' ' + x.dono_email + ' ' + x.dominio).toLowerCase().includes(termo));
     if (tipo) lista = lista.filter(x => x.tipo === tipo);
     if (estado) lista = lista.filter(x => x.estado === estado);
-    return res.json({ status: 'success', response: { total: lista.length, sites: lista.slice(0, 300) } });
+    const validadeF = String(req.body.validade || '');
+    if (validadeF === 'expirar') lista = lista.filter(x => x.acesso && x.acesso.estado === 'aviso');
+    if (validadeF === 'pausa') lista = lista.filter(x => x.acesso && x.acesso.estado === 'pausa');
+    if (validadeF === 'free') lista = lista.filter(x => x.plano_tipo === 'free' && x.acesso);
+    if (validadeF === 'pago') lista = lista.filter(x => x.plano_tipo === 'pago' && x.acesso);
+    if (validadeF) lista.sort((a, b) => { const q = x => Date.parse((x.acesso || {}).ate || (x.acesso || {}).validade || '') || 9e15; return q(a) - q(b); }); // os que acabam primeiro, primeiro
+    return res.json({ status: 'success', response: { total: lista.length, sites: lista.slice(0, 300), resumo: resumoV, free_dias: FREE_DIAS_SITE, free_aviso: FREE_DIAS_AVISO, tolerancia: DIAS_TOLERANCIA_PAGO } });
   } catch (erro) {
     console.error('Erro em /admin-sites:', erro);
     return res.json({ status: 'error', message: 'Não foi possível carregar os sites.' });
