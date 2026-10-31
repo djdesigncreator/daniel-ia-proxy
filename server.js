@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.76.0'; // 30/10/2026 - sites em pausa (Free 10 dias, pago 5 dias depois de expirar), prazo de cada site no dashboard, sites mais responsivos
+const VERSION = '1.77.0'; // 31/10/2026 - escrever por voz; validade dos sites no painel; sites em pausa (Free 10 dias, pago 5 dias depois de expirar)
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -19233,6 +19233,73 @@ app.post('/admin-pausas', async (req, res) => {
 });
 ROTAS_PRIVADAS.add('/admin-pausas');
 globalThis.__danielPausa = { ciclo: cicloPausas, verificar: verificarSitesDoDono, pausar: pausarSite, retomar: retomarSite, pausas, acessoSite, contaAcesso, comBaseResponsiva, ler: descarregarDoBunny, gravar: uploadParaBunny };
+
+
+// ======================================================
+// Escrever por voz (1.77.0)
+// ------------------------------------------------------
+// As caixas de pedido à IA (criar, editar com IA, editor, vídeo do hero)
+// têm um botão "Falar". O navegador grava (até 3 minutos) e manda o áudio
+// para /voz-transcrever; o servidor passa-o à OpenAI (gpt-4o-mini-transcribe,
+// ou whisper-1 se esse não estiver disponível) e devolve o texto.
+// Desconta tokens do plano: o que a OpenAI disser que gastou ou, se não
+// disser, VOZ_TOKENS_MINUTO por minuto de áudio (com o multiplicador).
+// ======================================================
+const VOZ_MODELO = clean(process.env.OPENAI_VOZ_MODEL) || 'gpt-4o-mini-transcribe';
+const VOZ_TOKENS_MINUTO = Math.max(0, Number(clean(process.env.VOZ_TOKENS_MINUTO)) || 600);
+const VOZ_MAX_BYTES = 8 * 1024 * 1024;
+const VOZ_TIPOS = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'm4a', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav' };
+async function transcreverAudio(buffer, mime, idioma, dica) {
+  const ext = VOZ_TIPOS[mime] || 'webm';
+  const tentar = async modelo => {
+    const fd = new FormData();
+    fd.append('file', new Blob([buffer], { type: mime || 'audio/webm' }), 'voz.' + ext);
+    fd.append('model', modelo);
+    if (idioma) fd.append('language', idioma);
+    if (dica) fd.append('prompt', dica);
+    fd.append('response_format', 'json');
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', signal: AbortSignal.timeout(120000), headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, body: fd });
+    const j = await r.json().catch(() => ({}));
+    return { r, j };
+  };
+  let { r, j } = await tentar(VOZ_MODELO);
+  if (!r.ok && VOZ_MODELO !== 'whisper-1' && (r.status === 404 || /model/i.test(JSON.stringify(j.error || '')))) ({ r, j } = await tentar('whisper-1'));
+  if (!r.ok) { const e = new Error((j.error && j.error.message) || ('OpenAI ' + r.status)); e.status = r.status; e.quota = /insufficient_quota|exceeded your current quota/i.test(JSON.stringify(j)); throw e; }
+  return { texto: String(j.text || '').trim(), uso: j.usage || null };
+}
+app.post('/voz-transcrever', async (req, res) => {
+  try {
+    const owner = req.body.owner;
+    if (!owner) return res.json({ status: 'error', message: 'Falta o owner.' });
+    if (!contar('voz:' + owner, 60, 60 * MIN)) return res.json({ status: 'error', message: 'Já gravaste muitas vezes na última hora. Espera um pouco.' });
+    if (!OPENAI_API_KEY) return res.json({ status: 'error', message: 'A voz ainda não está ligada.' });
+    const m = /^data:(audio\/[a-z0-9.+-]+)(?:;[^,]*)?;base64,([A-Za-z0-9+/=]+)$/i.exec(String(req.body.audio || ''));
+    if (!m) return res.json({ status: 'error', message: 'Não recebi o áudio. Tenta gravar outra vez.' });
+    const buffer = Buffer.from(m[2], 'base64');
+    if (buffer.length < 800) return res.json({ status: 'error', codigo: 'curto', message: 'A gravação ficou muito curta. Carrega no microfone e fala um pouco mais.' });
+    if (buffer.length > VOZ_MAX_BYTES) return res.json({ status: 'error', message: 'A gravação é muito longa (máximo 3 minutos).' });
+    const user = await bubbleGet('user', owner).catch(() => null);
+    if (!user) return res.json({ status: 'error', message: 'Utilizador não encontrado.' });
+    const planId = await garantirPlano(owner, user).catch(() => null);
+    const plano = planId ? await bubbleGet('plan', planId).catch(() => null) : null;
+    if (semTokens(user, plano)) return res.json(respSemTokens(plano));
+    if (await iaSemSaldo().catch(() => false)) return res.json({ status: 'error', message: 'A voz está em pausa por uns minutos. Escreve o texto, por agora.' });
+    const idioma = /^(pt|en|fr|es)$/.test(String(req.body.idioma || '')) ? req.body.idioma : '';
+    const dica = 'Pedido em ' + ({ en: 'inglês', fr: 'francês', es: 'espanhol' }[idioma] || 'português de Moçambique') + ' para criar ou mudar um site, loja online ou landing page. Pode ter nomes de negócios, bairros de Maputo, preços em meticais (MZN), M-Pesa, e-Mola e WhatsApp.';
+    const mime = m[1].toLowerCase();
+    const t = await transcreverAudio(buffer, mime, idioma, dica);
+    if (!t.texto) return res.json({ status: 'error', codigo: 'vazio', message: 'Não percebi nada na gravação. Fala mais perto do microfone e tenta outra vez.' });
+    const segundos = Math.min(180, Math.max(1, Number(req.body.segundos) || 0, buffer.length / 6000));
+    const tokens = t.uso && Number(t.uso.total_tokens) > 0 ? Number(t.uso.total_tokens) : Math.max(50, Math.round(segundos / 60 * VOZ_TOKENS_MINUTO));
+    await cobrarTokens(owner, tokens).catch(e => console.error('[voz] tokens:', e.message || e));
+    return res.json({ status: 'success', response: { texto: t.texto.slice(0, 4000), segundos: Math.round(segundos) } });
+  } catch (e) {
+    console.error('[voz]', e.message || e);
+    if (e.quota) return res.json({ status: 'error', message: 'A voz está em pausa por uns minutos. Escreve o texto, por agora.' });
+    return res.json({ status: 'error', message: 'Não deu para passar a voz a texto. Tenta outra vez.' });
+  }
+});
+ROTAS_PRIVADAS.add('/voz-transcrever');
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
