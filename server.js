@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.78.0'; // 02/11/2026 - Inspiração IA (biblioteca de referências no painel); escrever por voz; validade dos sites
+const VERSION = '1.79.0'; // 03/11/2026 - plataformas de cursos (EAD): aulas em vídeo, texto e ao vivo, alunos, pagamentos, certificados
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2127,6 +2127,8 @@ function pontoDePartidaVisual() {
 }
 
 const GUIA_TIPO = {
+  'Curso': 'Plataforma de cursos online (EAD) de um formador, escola ou centro de formação: a landing page que vende os cursos e a área onde os alunos estudam. O protagonista são OS CURSOS: hero com a promessa (o que a pessoa vai conseguir aprender), um botão "Ver os cursos" e prova social (alunos formados, avaliação, anos de experiência); porquê aprender aqui (3 ou 4 vantagens: ao teu ritmo, certificado, aulas ao vivo, apoio do formador); o formador ou a escola com foto, percurso e números; como funciona em 3 passos (escolhe o curso, inscreve-te, estuda no telemóvel ou no computador); testemunhos de alunos; perguntas frequentes (pagamento por M-Pesa, e-Mola ou cartão, acesso, certificado, aulas ao vivo); contacto. INSTRUÇÃO OBRIGATÓRIA: inclui uma secção com id="cursos", com um título curto (ex: "Os nossos cursos") e uma frase, e dentro dela, num contentor com a largura do conteúdo, exactamente esta div vazia: <div id="daniel-ia-cursos"></div> - é ali que a plataforma a sério (catálogo, página de cada curso, aulas em vídeo, área do aluno, pagamentos e certificados) aparece sozinha. NUNCA desenhes tu cartões de cursos com preços inventados, listas de aulas, leitores de vídeo, formulários de login nem botões de comprar. Os botões "Ver os cursos" do site levam a #cursos (ou a cursos.html, num site com várias páginas).',
+
   'Agendamento': 'App de marcações de um negócio de serviços (salão, barbearia, clínica, consultório, spa, ginásio, explicações, oficina, estúdio...). O protagonista é MARCAR: um botão "Marcar horário" bem visível no cabeçalho e no hero. Desenha: hero com a promessa e o botão; os serviços em cartões (nome, duração e preço em MZN) só para apresentar; a equipa, se fizer sentido; como funciona em 3 passos (escolhe o serviço, escolhe o dia e a hora, confirma); testemunhos; horário de funcionamento e localização; perguntas frequentes; contacto. INSTRUÇÃO OBRIGATÓRIA: inclui uma secção de marcação com id="marcar", com um título curto (ex: "Marca o teu horário") e uma frase, e dentro dela, num contentor com a largura do conteúdo, exactamente esta div vazia: <div id="daniel-ia-agenda"></div> - é ali que o sistema de marcações a sério (serviços, profissionais, dias e horas livres, dados e pagamento) aparece sozinho. NUNCA desenhes tu calendários, horas, formulários de marcação nem botões de confirmar. Os botões "Marcar" do site levam a #marcar (ou a marcar.html, num site com várias páginas).',
 
   'E-commerce': 'Esta é uma loja online ao estilo dos grandes marketplaces (Amazon, Shein, Jumia): o protagonista são os PRODUTOS, com pouca informação à volta. Desenha só: (1) um cabeçalho compacto e elegante com o logótipo/nome da loja e um menu curto (ex: Início, Produtos, Contacto), que pode ficar fixo no topo; (2) logo a seguir ao cabeçalho, a div obrigatória da loja (ver instrução abaixo) - NÃO ponhas nenhum hero, banner ou capa antes dela, porque a capa em carrossel, a pesquisa, as categorias, os destaques e os produtos aparecem automaticamente dentro dessa div; (3) depois dela, uma faixa curta de confiança com 3 ou 4 pontos (ex: entrega rápida, pagamento seguro, apoio por WhatsApp), cada um com um ícone SVG; (4) um contacto curto e discreto junto ao rodapé (segue a instrução do contacto) e um rodapé compacto com contactos e redes sociais. Nada de textos longos, sobre nós extensos ou testemunhos - a loja vai directa aos produtos. NÃO desenhes produtos, preços, carrinho, pesquisa, categorias nem capa - é tudo tratado automaticamente.',
@@ -2310,6 +2312,7 @@ Descrição pedida pela pessoa: ${prompt}`;
   html = injectarQuizSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
+  html = injectarEadSeNecessario(html, tipo === 'Curso', siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = injectarContactoSeNecessario(html, siteId);
@@ -2479,6 +2482,20 @@ function injectarAgendaSeNecessario(html, ehAgenda, siteId) {
   }
   return html;
 }
+// 1.79.0: plataformas de cursos - a div dos cursos e o /ead.js
+function injectarEadSeNecessario(html, ehEad, siteId) {
+  const temDiv = /id=["']daniel-ia-cursos["']/.test(html);
+  if (!ehEad && !temDiv) return html;
+  if (!temDiv && !paginasMulti(html)) {
+    const div = '<section id="cursos" style="padding:56px 0"><div id="daniel-ia-cursos"></div></section>\n';
+    html = /<footer\b/i.test(html) ? html.replace(/<footer\b/i, div + '<footer') : html.replace(/<\/body>/i, div + '</body>');
+  }
+  if (!/\/ead\.js/.test(html)) {
+    const sc = `\n<script src="${SELF_URL}/ead.js" data-site="${escaparHtml(siteId || '')}" defer></script>\n`;
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, sc + '</body>') : html + sc;
+  }
+  return html;
+}
 function injectarContactoSeNecessario(html, siteId) {
   if (paginasMulti(html) && !/id=["']daniel-ia-contacto["']/.test(html)) return html;
   if (!/id=["']daniel-ia-contacto["']/.test(html)) {
@@ -2599,6 +2616,7 @@ ${htmlAtual}`;
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
+  html = injectarEadSeNecessario(html, tipo === 'Curso', siteId);
   html = injectarPortfolioSeNecessario(html, ehPortfolio, siteId);
   html = injectarBlogSeNecessario(html, ehBlog, siteId);
   html = injectarContactoSeNecessario(html, siteId);
@@ -6041,6 +6059,7 @@ app.post('/generate', async (req, res) => {
     const mostrarMarcaDeAgua = String(plano['Name'] || '').trim().toLowerCase() === 'free';
 
     if (tipo === 'Agendamento' && mostrarMarcaDeAgua) return res.json({ status: 'error', codigo: 'plano', message: MSG_AGENDA_SO_PAGO });
+    if (tipo === 'Curso' && !(await eadPermitidoPlano(plano))) return res.json({ status: 'error', codigo: 'plano', message: MSG_EAD_SO_PRO });
     // ---- 2. Verificar limite de projectos ----
     const sitesExistentes = await bubbleCount('site', [{ key: 'Owner', constraint_type: 'equals', value: owner }]);
     if (sitesExistentes >= (plano['Sites Limit'] || 0)) {
@@ -6869,7 +6888,8 @@ app.post('/account', async (req, res) => {
         tokens_incluidos: tokensIncluidos,
         tokens_extra: Math.max(0, Number(user['Tokens Extra']) || 0),
         video: await videoPermitido(owner).catch(() => null),
-        acesso: await contaAcessoDoDono(owner, user).then(x => x && x.conta).catch(() => null)
+        acesso: await contaAcessoDoDono(owner, user).then(x => x && x.conta).catch(() => null),
+        ead: await eadContaDono(owner).catch(() => null)
       }
     });
   } catch (erro) {
@@ -8583,6 +8603,11 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     entrada.resultado = 'aplicado: encomenda ' + encomenda._id; guardarRegistoWebhooks();
     await baixarStock(lerJsonSeguro(encomenda['Produtos Json'], []));
     // 1.69.0: pagamento de uma marcação (sinal ou total) - confirma a marcação e avisa
+    // 1.79.0: compra de um curso - liberta o acesso do aluno
+    if (String(encomenda['Notas'] || '').indexOf('ead:') === 0) {
+      await eadPagamentoConfirmado(encomenda).catch(e => console.error('[ead] pagamento confirmado, mas o acesso não abriu:', e.message || e));
+      return;
+    }
     if (String(encomenda['Notas'] || '').indexOf('agendamento:') === 0) {
       await agendaPagamentoConfirmado(encomenda).catch(e => console.error('[agenda] pagamento confirmado, mas a marcação não actualizou:', e.message || e));
       return;
@@ -11695,6 +11720,8 @@ BIBLIOTECA DE PADRÕES PROFISSIONAIS (combina as peças que servem a esta direc�
 - Detalhes que dão acabamento: etiquetas pequenas em pílula por cima dos títulos de secção ("— Os nossos serviços"), títulos de secção com um traço ou estrela decorativa, botões com ícone de seta dentro de um círculo, cartões que sobem 2-4px no hover, sombras longas e suaves, uma segunda cor usada com parcimónia.`;
 
 const PADROES_TIPO = {
+  'Curso': `
+PADRÕES DE PLATAFORMA DE CURSOS DE TOPO: hero com uma foto forte (o formador a ensinar, alunos, ou o resultado do curso), título que promete uma transformação concreta e números (alunos, horas de aula, avaliação); faixa com logótipos ou números de confiança; vantagens em cartões com ícones (estuda ao teu ritmo, certificado, aulas ao vivo, comunidade); secção do formador com foto grande, percurso e citação; a secção dos cursos limpa e espaçosa, com fundo suave, para a plataforma brilhar; testemunhos de alunos com foto e resultado; perguntas frequentes; chamada final para começar.`,
   'Agendamento': `
 PADRÕES DE APP DE MARCAÇÕES DE TOPO: hero com uma foto forte do espaço ou do serviço, promessa curta e o botão "Marcar horário" grande, mais uma prova social (estrelas, clientes atendidos); faixa com o horário de hoje ("Aberto hoje até às 18:00"); serviços em cartões elegantes com duração e preço; equipa com fotos redondas e especialidade; secção de marcação limpa e espaçosa, com fundo suave, para o sistema de marcações brilhar; testemunhos; mapa e horário da semana numa tabela simples; perguntas frequentes (como cancelar, atrasos, formas de pagamento por M-Pesa e e-Mola).`,
   'Portefólio': `
@@ -11755,7 +11782,7 @@ const PAGINAS_IA_MAX = 6;
 
 const PAGINAS_CATALOGO = {
   inicio: {}, loja: { modulo: 'loja' }, produto: { modulo: 'produto', menu: false },
-  trabalhos: { modulo: 'portfolio' }, albuns: { modulo: 'galeria' }, artigos: { modulo: 'blog' }, marcar: { modulo: 'agenda' },
+  trabalhos: { modulo: 'portfolio' }, albuns: { modulo: 'galeria' }, artigos: { modulo: 'blog' }, marcar: { modulo: 'agenda' }, cursos: { modulo: 'ead' },
   sobre: {}, servicos: {}, precos: {}, menu: {}, reservas: {}, galeria: {}, equipa: {}, perguntas: {}, processo: {}, testemunhos: {},
   contacto: { modulo: 'contacto' }
 };
@@ -11776,6 +11803,7 @@ const NOMES_PAGINAS = {
   perguntas: { pt: ['Perguntas', 'Perguntas frequentes'], en: ['FAQ', 'Frequently asked questions'], fr: ['FAQ', 'Questions fréquentes'], es: ['Preguntas', 'Preguntas frecuentes'] },
   processo: { pt: ['Como funciona', 'Como funciona'], en: ['How it works', 'How it works'], fr: ['Comment ça marche', 'Comment ça marche'], es: ['Cómo funciona', 'Cómo funciona'] },
   testemunhos: { pt: ['Clientes', 'O que dizem os clientes'], en: ['Reviews', 'What our clients say'], fr: ['Avis', 'Ce que disent nos clients'], es: ['Opiniones', 'Lo que dicen los clientes'] },
+  cursos: { pt: ['Cursos', 'Os nossos cursos'], en: ['Courses', 'Our courses'], fr: ['Formations', 'Nos formations'], es: ['Cursos', 'Nuestros cursos'] },
   marcar: { pt: ['Marcar', 'Marcar horário'], en: ['Book', 'Book an appointment'], fr: ['Réserver', 'Prendre rendez-vous'], es: ['Reservar', 'Reservar cita'] },
   contacto: { pt: ['Contacto', 'Contacto'], en: ['Contact', 'Contact'], fr: ['Contact', 'Contact'], es: ['Contacto', 'Contacto'] }
 };
@@ -11797,6 +11825,7 @@ const RESUMOS_PAGINAS = {
   processo: 'como funciona passo a passo (do primeiro contacto à entrega), prazos, o que a pessoa recebe e garantias',
   testemunhos: 'depoimentos de clientes por tipo de serviço ou produto, resultados, números e uma chamada para acção',
   marcar: 'marcar um horário: escolher o serviço, o profissional, o dia e a hora',
+  cursos: 'todos os cursos, a página de cada curso, as aulas e a área do aluno',
   contacto: 'os contactos (telefone, WhatsApp, email, morada, horário), um mapa desenhado e o formulário'
 };
 const PAGINAS_TIPO = {
@@ -11807,7 +11836,8 @@ const PAGINAS_TIPO = {
   'Portefólio': { fixas: ['inicio', 'trabalhos', 'sobre', 'contacto'], opcionais: ['servicos', 'processo', 'precos', 'testemunhos'] },
   'Galeria': { fixas: ['inicio', 'albuns', 'sobre', 'contacto'], opcionais: ['servicos', 'precos', 'processo', 'testemunhos'] },
   'Blog': { fixas: ['inicio', 'artigos', 'sobre', 'contacto'], opcionais: ['servicos', 'perguntas'] },
-  'Agendamento': { fixas: ['inicio', 'servicos', 'marcar', 'contacto'], opcionais: ['equipa', 'sobre', 'precos', 'testemunhos', 'perguntas', 'galeria'] }
+  'Agendamento': { fixas: ['inicio', 'servicos', 'marcar', 'contacto'], opcionais: ['equipa', 'sobre', 'precos', 'testemunhos', 'perguntas', 'galeria'] },
+  'Curso': { fixas: ['inicio', 'cursos', 'sobre', 'contacto'], opcionais: ['processo', 'precos', 'equipa', 'testemunhos', 'perguntas'] }
 };
 function ficheiroDaPagina(slug) { return slug === 'inicio' ? 'index.html' : slug + '.html'; }
 function paginaBase(slug, idioma) {
@@ -12215,7 +12245,7 @@ const CSS_PAGINA_MODULO = '.dia-pg-largura{max-width:1240px;margin:0 auto;paddin
   + '.dia-pg-corpo{padding-bottom:clamp(44px,6vw,90px)}.dia-pg-produto{padding-top:clamp(16px,3vw,32px);padding-bottom:clamp(44px,6vw,90px)}';
 function mainDePaginaModulo(p, idioma) {
   const casa = NOMES_PAGINAS.inicio[normalizarIdioma(idioma)][0];
-  const divs = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda' };
+  const divs = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda', ead: 'daniel-ia-cursos' };
   const div = `<div id="${divs[p.modulo] || 'daniel-ia-produtos'}"></div>`;
   if (p.modulo === 'produto') return `<main data-dia="conteudo"><div class="dia-pg-largura dia-pg-produto">${div}</div></main>`;
   return `<main data-dia="conteudo"><section class="dia-pg-topo"><div class="dia-pg-largura"><nav class="dia-pg-migalhas" aria-label="breadcrumb"><a href="index.html">${escaparHtml(casa)}</a><span>/</span><span>${escaparHtml(p.titulo)}</span></nav><h1 class="dia-pg-titulo">${escaparHtml(p.titulo)}</h1>${p.subtitulo ? `<p class="dia-pg-sub">${escaparHtml(p.subtitulo)}</p>` : ''}</div></section><div class="dia-pg-largura dia-pg-corpo">${div}</div></main>`;
@@ -12240,6 +12270,7 @@ function completarPagina(html, siteId, tipo) {
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
+  html = injectarEadSeNecessario(html, tipo === 'Curso', siteId);
   html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
   html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
   html = injectarContactoSeNecessario(html, siteId);
@@ -13727,7 +13758,7 @@ const TPL_SECCOES = {
     return `<section class="s${x.fundo}" style="padding:clamp(40px,6vw,70px) 0"><div class="w"><div class="wa-faixa rv"><span class="icx">${tIc('message-circle')}</span><div><h3>${tEsc(k.titulo || c.d.marca.nome)}</h3><p>${tEsc(k.texto || '')}</p></div><a class="btn btn-p" href="${tEsc(tWa(c))}" target="_blank" rel="noopener">${tEsc(c.txt.whatsapp)}${tIc('arrow-up-right')}</a></div></div></section>`;
   },
   modulo(c, v, x) {
-    const ids = { loja: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda' };
+    const ids = { loja: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda', ead: 'daniel-ia-cursos' };
     const id = ids[v] || 'daniel-ia-produtos';
     const pg = { loja: 'loja', portfolio: 'trabalhos', galeria: 'albuns', blog: 'artigos' }[v];
     const titulo = { loja: c.d.textos.loja_titulo || c.txt.produtos, portfolio: c.d.textos.portfolio_titulo || c.txt.trabalhos, galeria: c.d.textos.galeria_titulo || c.txt.albuns, blog: c.d.textos.blog_titulo || c.txt.artigos }[v];
@@ -13950,7 +13981,7 @@ function tSeccoesInicio(c) {
   return lista;
 }
 function tMainModulo(c, p) {
-  const ids = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda' };
+  const ids = { loja: 'daniel-ia-produtos', produto: 'daniel-ia-produtos', portfolio: 'daniel-ia-portfolio', galeria: 'daniel-ia-galeria', blog: 'daniel-ia-blog', agenda: 'daniel-ia-agenda', ead: 'daniel-ia-cursos' };
   const div = `<div id="${ids[p.modulo] || 'daniel-ia-produtos'}"></div>`;
   if (p.modulo === 'produto') return `<main data-dia="conteudo"><section class="s" style="padding-top:clamp(20px,3vw,36px)"><div class="w">${div}</div></section></main>`;
   return `<main data-dia="conteudo">${TPL_SECCOES.topo(c, (c.t.variantes && c.t.variantes.topo) === 'foto' ? 'simples' : ((c.t.variantes && c.t.variantes.topo) || 'simples'), { pagina: p.slug })}<section class="s s-modulo" style="padding-top:clamp(28px,4vw,48px)"><div class="w">${div}</div></section></main>`;
@@ -14143,6 +14174,7 @@ async function processarTemplate({ owner, nome, tipo, prompt, logo_data_url, sit
     html = injectarQuizSeNecessario(html, ehLoja, siteId);
     html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
+  html = injectarEadSeNecessario(html, tipo === 'Curso', siteId);
     html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
     html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
     html = injectarContactoSeNecessario(html, siteId);
@@ -16635,6 +16667,7 @@ async function aplicarTemplateAoSite({ owner, site, t, inicio }) {
     html = injectarQuizSeNecessario(html, ehLoja, siteId);
     html = injectarGaleriaSeNecessario(html, tipo === 'Galeria', siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
+  html = injectarEadSeNecessario(html, tipo === 'Curso', siteId);
     html = injectarPortfolioSeNecessario(html, tipo === 'Portefólio', siteId);
     html = injectarBlogSeNecessario(html, tipo === 'Blog', siteId);
     html = injectarContactoSeNecessario(html, siteId);
@@ -17472,7 +17505,7 @@ main{width:100%;max-width:440px;background:#fff;border:1px solid #EAE2F2;border-
 .eti{margin:0 0 6px;color:#5E9100;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}h1{margin:0 0 18px;font-size:23px}
 dl{display:grid;grid-template-columns:auto 1fr;gap:10px 16px;margin:0 0 22px}dt{color:#6F5E81;font-size:13px}dd{margin:0;font-weight:700;font-size:14.5px}
 .est{display:inline-block;padding:4px 10px;border-radius:99px;background:#F1E9F8;font-size:12.5px}.est-confirmado{background:#EAF6D6;color:#3B6A00}.est-cancelado,.est-expirado{background:#FDE7EC;color:#B0123A}
-button{width:100%;padding:14px;border-radius:12px;border:1px solid #E7B9C5;background:#fff;color:#B0123A;font:800 15px inherit;cursor:pointer}button.armado{background:#B0123A;color:#fff}
+button{width:100%;padding:14px;border-radius:12px;border:1px solid #E7B9C5;background:#fff;color:#B0123A;font-weight:800;font-size:15px;font-family:inherit;cursor:pointer}button.armado{background:#B0123A;color:#fff}
 #msg{font-size:13.5px;color:#6F5E81;min-height:1em}.voltar{display:block;text-align:center;margin-top:16px;color:#5A0F80;font-weight:700;text-decoration:none}</style></head>
 <body><main>${corpo}</main>
 <script>(function(){var b=document.getElementById('cancelar');if(!b)return;b.addEventListener('click',function(){
@@ -18128,7 +18161,8 @@ const CRIADO_TIPO = {
   'Agendamento': { o: 'A tua app de marcações', pronto: 'está pronta', ver: 'Ver a minha app', a: 'a', seguinte: 'Confirma os serviços, a equipa e o horário em <b>Gerir agenda</b>, no dashboard. Os clientes já podem marcar.' },
   'Portefólio': { o: 'O teu portefólio', pronto: 'está pronto', ver: 'Ver o meu portefólio', a: 'o', seguinte: 'Junta os teus trabalhos em <b>Gerir portefólio</b>, no dashboard, e partilha o link.' },
   'Blog': { o: 'O teu blog', pronto: 'está pronto', ver: 'Ver o meu blog', a: 'o', seguinte: 'Escreve o primeiro artigo no dashboard e partilha o link.' },
-  'Galeria': { o: 'A tua galeria', pronto: 'está pronta', ver: 'Ver a minha galeria', a: 'a', seguinte: 'Cria os teus álbuns no dashboard e partilha o link.' }
+  'Galeria': { o: 'A tua galeria', pronto: 'está pronta', ver: 'Ver a minha galeria', a: 'a', seguinte: 'Cria os teus álbuns no dashboard e partilha o link.' },
+  'Curso': { o: 'A tua plataforma de cursos', pronto: 'está pronta', ver: 'Ver a minha plataforma', a: 'a', seguinte: 'Cria os cursos e junta as aulas em <b>Gerir cursos</b>, no dashboard. Depois partilha o link com os teus alunos.' }
 };
 async function emailSiteCriado(siteId, owner, daFila) {
   if (emailsCriadoEnviados.has(siteId)) return false;
@@ -19326,7 +19360,7 @@ ROTAS_PRIVADAS.add('/voz-transcrever');
 const INSP_MAX_IMG = 8 * 1024 * 1024, INSP_MAX_VID = 10 * 1024 * 1024;
 const INSP_TIPOS_IMG = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 const INSP_TIPOS_VID = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
-const INSP_TIPOS_PROJ = ['E-commerce', 'Checkout', 'Landing Page', 'Portefólio', 'Blog', 'Galeria', 'Agendamento'];
+const INSP_TIPOS_PROJ = ['E-commerce', 'Checkout', 'Landing Page', 'Portefólio', 'Blog', 'Galeria', 'Agendamento', 'Curso'];
 const INSP_ESTILOS = ['Moderno', 'Luxo', 'Minimalista', 'Colorido', 'Clássico', 'Ousado', 'Natural', 'Tecnológico'];
 let inspIndice = null, inspPromessa = null, inspGravacao = Promise.resolve();
 function carregarInspiracao() {
@@ -19463,6 +19497,750 @@ app.post('/admin-inspiracao-apagar', async (req, res) => {
 });
 ['/admin-inspiracao', '/admin-inspiracao-guardar', '/admin-inspiracao-apagar'].forEach(r => ROTAS_PRIVADAS.add(r));
 globalThis.__danielInspiracao = { escolher: inspiracaoParaSite, carregar: carregarInspiracao, ideiasVideo: ideiasVideoInspiracao };
+
+const EAD_JS = "/*\n  Daniel IA - plataforma de cursos (1.79.0)\n  -----------------------------------------\n  Servido em /ead.js. Mostra, dentro de <div id=\"daniel-ia-cursos\">, o\n  catálogo, a página de cada curso, as aulas (vídeo, texto e ao vivo), o\n  progresso, os materiais, os comentários e o certificado.\n  Os alunos entram com o email e um código de 6 dígitos.\n  Navegação pelo endereço: #ead/curso/<id>, #ead/aula/<curso>/<aula>, #ead/meus\n  Usa as fichas --dia-* do próprio site.\n*/\n(function(){\n  'use strict';\n  if (window.__danielEad) return;\n  window.__danielEad = true;\n  var eu = document.currentScript || document.querySelector('script[src*=\"ead.js\"]');\n  if (!eu) return;\n  var SITE = eu.getAttribute('data-site') || '';\n  var API = ''; try { API = new URL(eu.src, location.href).origin; } catch (e) { return; }\n  var PREVIA = /[?&]dia_previa=1/.test(location.search) || /\\/v\\d+\\.html$/.test(location.pathname) || !SITE;\n  if (PREVIA) SITE = 'previa';\n  var LANG = (document.documentElement.lang || 'pt').slice(0, 2).toLowerCase();\n  var TX = {\n    pt: { cursos: 'Cursos', meus: 'Os meus cursos', entrar: 'Entrar', sair: 'Sair', gratis: 'Grátis', aulas: '{n} aulas', aula1: '1 aula', horas: '{n} h', min: '{n} min', continuar: 'Continuar', comecar: 'Começar', verCurso: 'Ver o curso', todos: 'Todos os cursos', inscreverGratis: 'Inscrever-me grátis', comprar: 'Comprar por {v}', continuarCurso: 'Continuar o curso', incluido: 'O que inclui', inclui1: 'Acesso às aulas quando quiseres', inclui2: 'Materiais para descarregar', inclui3: 'Certificado de conclusão', inclui4: 'Perguntas ao formador', curriculo: 'Conteúdo do curso', previa: 'Prévia grátis', aoVivo: 'Ao vivo', aoVivoAgora: 'AO VIVO AGORA', texto: 'Leitura', video: 'Vídeo', progresso: '{f} de {t} aulas concluídas', concluida: 'Concluída', marcarConcluida: 'Marcar como concluída', proxima: 'Próxima aula', anterior: 'Aula anterior', materiais: 'Materiais', comentarios: 'Perguntas e comentários', comentar: 'Escreve a tua pergunta ou comentário...', enviar: 'Enviar', semComentarios: 'Ainda não há comentários. Sê o primeiro!', resposta: 'Resposta do formador', paraComentar: 'Inscreve-te no curso para fazeres perguntas.', parabens: 'Parabéns! Terminaste o curso.', baixarCert: 'Descarregar o certificado', videoPreparar: 'O vídeo desta aula ainda está a ser preparado. Volta daqui a pouco.', aoVivoEm: 'A aula ao vivo começa {q}.', aoVivoTerminou: 'Esta aula ao vivo já terminou.', entrarAoVivo: 'Entrar na aula ao vivo', aguardarProf: 'À espera do formador...', aoVivoLigado: 'Estás na aula ao vivo', chat: 'Chat da aula', escreverChat: 'Escreve uma mensagem...', entrarTit: 'Entra para estudares', entrarSub: 'Recebes um código no teu email. Sem palavras-passe.', email: 'O teu email', nome: 'O teu nome', receberCodigo: 'Receber o código', codigoTit: 'Escreve o código', codigoSub: 'Enviámos um código de 6 dígitos para {e}.', entrarBtn: 'Entrar', outroEmail: 'Usar outro email', reenviar: 'Enviar outro código', fechar: 'Fechar', pagarTit: 'Comprar o curso', comoPagar: 'Como queres pagar?', telefone: 'Número de telefone', pagar: 'Pagar {v}', esperaPag: 'À espera da confirmação do pagamento...', jaPaguei: 'Já paguei', cancelar: 'Cancelar', abrirSeparador: 'A página não aparece? Abrir num separador novo', aindaNao: 'Ainda não recebemos o pagamento. Se já pagaste, espera um pouco.', manualTit: 'Pedido enviado!', manualSub: 'O formador vai contactar-te para combinar o pagamento. Assim que receber, o curso aparece nos teus cursos.', whatsapp: 'Falar no WhatsApp', bemVindo: 'Já tens acesso. Bons estudos!', previaAviso: 'Isto é uma pré-visualização. No teu site, os alunos entram, compram e estudam aqui.', erro: 'Algo correu mal. Tenta outra vez.', semCursos: 'Ainda não há cursos publicados.', nivel: 'Nível', professor: 'Formador', numeroErrado: 'Este número não é M-Pesa (84/85) nem e-Mola (86/87).', escolheMetodo: 'Escolhe como queres pagar.', cartao: 'Cartão', semAulas: 'Este curso ainda não tem aulas.', bloqueada: 'Inscreve-te para abrires esta aula.', hoje: 'hoje às {h}', amanha: 'amanhã às {h}', dia: 'a {d} às {h}', dentro: 'dentro de {m} min', faltaNome: 'Escreve o teu nome.', abrirCurso: 'Abrir o curso', inscrito: 'Inscrito' },\n    en: { cursos: 'Courses', meus: 'My courses', entrar: 'Sign in', sair: 'Sign out', gratis: 'Free', aulas: '{n} lessons', aula1: '1 lesson', horas: '{n} h', min: '{n} min', continuar: 'Continue', comecar: 'Start', verCurso: 'View course', todos: 'All courses', inscreverGratis: 'Enrol for free', comprar: 'Buy for {v}', continuarCurso: 'Continue the course', incluido: 'What you get', inclui1: 'Access to the lessons any time', inclui2: 'Downloadable materials', inclui3: 'Certificate of completion', inclui4: 'Questions to the instructor', curriculo: 'Course content', previa: 'Free preview', aoVivo: 'Live', aoVivoAgora: 'LIVE NOW', texto: 'Reading', video: 'Video', progresso: '{f} of {t} lessons completed', concluida: 'Completed', marcarConcluida: 'Mark as completed', proxima: 'Next lesson', anterior: 'Previous lesson', materiais: 'Materials', comentarios: 'Questions and comments', comentar: 'Write your question or comment...', enviar: 'Send', semComentarios: 'No comments yet. Be the first!', resposta: 'Instructor reply', paraComentar: 'Enrol in the course to ask questions.', parabens: 'Congratulations! You finished the course.', baixarCert: 'Download the certificate', videoPreparar: 'The video for this lesson is still being prepared. Come back soon.', aoVivoEm: 'The live class starts {q}.', aoVivoTerminou: 'This live class has ended.', entrarAoVivo: 'Join the live class', aguardarProf: 'Waiting for the instructor...', aoVivoLigado: 'You are in the live class', chat: 'Class chat', escreverChat: 'Write a message...', entrarTit: 'Sign in to study', entrarSub: 'You get a code by email. No passwords.', email: 'Your email', nome: 'Your name', receberCodigo: 'Get the code', codigoTit: 'Enter the code', codigoSub: 'We sent a 6-digit code to {e}.', entrarBtn: 'Sign in', outroEmail: 'Use another email', reenviar: 'Send another code', fechar: 'Close', pagarTit: 'Buy the course', comoPagar: 'How do you want to pay?', telefone: 'Phone number', pagar: 'Pay {v}', esperaPag: 'Waiting for payment confirmation...', jaPaguei: 'I have paid', cancelar: 'Cancel', abrirSeparador: 'Page not showing? Open in a new tab', aindaNao: \"We haven't received the payment yet. If you've paid, wait a moment.\", manualTit: 'Request sent!', manualSub: 'The instructor will contact you to arrange payment. Once received, the course appears in your courses.', whatsapp: 'Chat on WhatsApp', bemVindo: 'You now have access. Happy learning!', previaAviso: 'This is a preview. On your site, students sign in, buy and study here.', erro: 'Something went wrong. Try again.', semCursos: 'No courses published yet.', nivel: 'Level', professor: 'Instructor', numeroErrado: 'This number is not M-Pesa (84/85) or e-Mola (86/87).', escolheMetodo: 'Choose how to pay.', cartao: 'Card', semAulas: 'This course has no lessons yet.', bloqueada: 'Enrol to open this lesson.', hoje: 'today at {h}', amanha: 'tomorrow at {h}', dia: 'on {d} at {h}', dentro: 'in {m} min', faltaNome: 'Write your name.', abrirCurso: 'Open the course', inscrito: 'Enrolled' }\n  };\n  var L = TX[LANG] || (LANG === 'pt' ? TX.pt : (LANG === 'fr' || LANG === 'es' ? TX.en : TX.pt));\n  function t(k, v){ var s = L[k] || TX.pt[k] || k; if (v) Object.keys(v).forEach(function(n){ s = s.replace('{' + n + '}', v[n]); }); return s; }\n  function esc(x){ return String(x == null ? '' : x).replace(/[&<>\"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }\n  function mzn(v){ return Number(v || 0).toLocaleString('pt-PT') + ' MZN'; }\n  function duracao(min){ min = Number(min) || 0; return min >= 60 ? t('horas', { n: (Math.round(min / 6) / 10).toString().replace('.', ',') }) : t('min', { n: min }); }\n  function soDigitos(x){ return String(x || '').replace(/\\D/g, ''); }\n  function operadora(tel){ var d = soDigitos(tel).replace(/^258/, ''); return /^8[45]/.test(d) ? 'mpesa' : (/^8[67]/.test(d) ? 'emola' : ''); }\n  var CHAVE = 'dia_ead_' + SITE;\n  var S = { sessao: null, cat: null, curso: null, aula: null, poll: null, chatPoll: null, agora: null };\n  try { S.sessao = JSON.parse(localStorage.getItem(CHAVE) || 'null'); } catch (e) { S.sessao = null; }\n  function guardarSessao(s){ S.sessao = s; try { if (s) localStorage.setItem(CHAVE, JSON.stringify(s)); else localStorage.removeItem(CHAVE); } catch (e) {} }\n  function post(rota, corpo){\n    corpo = corpo || {}; corpo.site_id = SITE; corpo.idioma = LANG;\n    if (S.sessao) { corpo.aluno_id = S.sessao.aluno.id; corpo.token = S.sessao.token; }\n    return fetch(API + rota, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).then(function(r){ return r.json(); });\n  }\n  var IC = {\n    play: '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M8 5.5v13l11-6.5z\"/></svg>',\n    livro: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19.5A2.5 2.5 0 0 1 6.5 17H20\"/><path d=\"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z\"/></svg>',\n    vivo: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"2.5\" fill=\"currentColor\"/><path d=\"M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5\"/></svg>',\n    certo: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>',\n    cadeado: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><rect x=\"4\" y=\"11\" width=\"16\" height=\"10\" rx=\"2\"/><path d=\"M8 11V7a4 4 0 0 1 8 0v4\"/></svg>',\n    seta: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>',\n    voltar: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M19 12H5M11 18l-6-6 6-6\"/></svg>',\n    doc: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><polyline points=\"14 2 14 8 20 8\"/></svg>',\n    baixar: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"/></svg>',\n    trofeu: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z\"/><path d=\"M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3\"/></svg>',\n    pessoa: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"8\" r=\"4\"/><path d=\"M4 21a8 8 0 0 1 16 0\"/></svg>',\n    relogio: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>',\n    x: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>'\n  };\n  var CSS = ''\n    + '.dce{--e-p:var(--dia-primaria,#3b2a8f);--e-pt:var(--dia-primaria-texto,#fff);--e-f:var(--dia-fundo,#fff);--e-s:var(--dia-superficie,#f5f4f8);--e-t:var(--dia-texto,#16131f);--e-ts:var(--dia-texto-suave,#5d5868);--e-b:var(--dia-borda,rgba(0,0,0,.1));--e-r:var(--dia-raio,16px);'\n    + 'font-family:var(--dia-fonte-texto,inherit);color:var(--e-t);text-align:left;max-width:1180px;margin:0 auto;padding:0 16px;box-sizing:border-box}'\n    + '.dce *,.dce-m *{box-sizing:border-box}.dce button,.dce-m button{font-family:inherit}'\n    + '.dce h2,.dce h3,.dce h4,.dce-m h3{font-family:var(--dia-fonte-titulos,inherit);letter-spacing:-.01em}'\n    + '.dce-barra{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 18px}'\n    + '.dce-barra .esq{display:flex;gap:8px;flex-wrap:wrap}'\n    + '.dce-pill{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--e-b);background:var(--e-f);color:var(--e-t);font:600 14px/1 inherit;cursor:pointer;text-decoration:none}'\n    + '.dce-pill:hover{border-color:var(--e-p)}.dce-pill.on{background:var(--e-p);color:var(--e-pt);border-color:var(--e-p)}.dce-pill svg{width:16px;height:16px}'\n    + '.dce-btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:48px;padding:0 22px;border-radius:calc(var(--e-r) * .75);border:0;background:var(--e-p);color:var(--e-pt);font:700 15px/1.1 inherit;cursor:pointer;text-decoration:none;transition:transform .15s,opacity .15s}'\n    + '.dce-btn:hover{transform:translateY(-1px)}.dce-btn:disabled{opacity:.55;cursor:default;transform:none}.dce-btn svg{width:17px;height:17px}'\n    + '.dce-btn.sec{background:transparent;color:var(--e-t);border:1.5px solid var(--e-b)}.dce-btn.lg{width:100%}'\n    + '.dce-btn:focus-visible,.dce-pill:focus-visible,.dce-aula-l:focus-visible,.dce-card:focus-visible{outline:3px solid color-mix(in srgb,var(--e-p) 45%,transparent);outline-offset:2px}'\n    + '.dce-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr));gap:18px}'\n    + '.dce-card{display:flex;flex-direction:column;border-radius:var(--e-r);overflow:hidden;background:var(--e-f);border:1px solid var(--e-b);text-decoration:none;color:inherit;cursor:pointer;transition:transform .2s,box-shadow .2s}'\n    + '.dce-card:hover{transform:translateY(-3px);box-shadow:0 22px 50px -28px rgba(0,0,0,.45)}'\n    + '.dce-capa{position:relative;aspect-ratio:16/9;background:linear-gradient(135deg,var(--e-p),color-mix(in srgb,var(--e-p) 45%,#000));background-size:cover;background-position:center;display:grid;place-items:center;color:var(--e-pt);font:800 40px/1 var(--dia-fonte-titulos,inherit)}'\n    + '.dce-capa .tag{position:absolute;top:12px;left:12px;padding:6px 10px;border-radius:999px;background:rgba(0,0,0,.6);color:#fff;font:700 11.5px/1 inherit;letter-spacing:.03em}'\n    + '.dce-capa .preco{position:absolute;right:12px;bottom:12px;padding:7px 12px;border-radius:999px;background:var(--e-f);color:var(--e-t);font:800 13px/1 inherit;box-shadow:0 8px 20px -10px rgba(0,0,0,.5)}'\n    + '.dce-capa .vivo{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#E0314B;color:#fff;font:800 11px/1 inherit;letter-spacing:.06em}'\n    + '.dce-capa .vivo i,.dce-vivo-ponto{width:7px;height:7px;border-radius:50%;background:#fff;animation:dceP 1.2s infinite}'\n    + '@keyframes dceP{50%{opacity:.25}}'\n    + '.dce-card-c{display:flex;flex-direction:column;gap:6px;padding:16px 16px 18px;flex:1}'\n    + '.dce-card-c h3{margin:0;font-size:18px;line-height:1.25}.dce-card-c p{margin:0;color:var(--e-ts);font-size:14px;line-height:1.5}'\n    + '.dce-meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--e-ts);font-size:13px;margin-top:auto;padding-top:8px}.dce-meta span{display:inline-flex;align-items:center;gap:5px}.dce-meta svg{width:14px;height:14px}'\n    + '.dce-prog{height:6px;border-radius:99px;background:var(--e-s);overflow:hidden;margin-top:8px}.dce-prog i{display:block;height:100%;background:var(--e-p);border-radius:inherit}'\n    + '.dce-prog-t{font-size:12.5px;color:var(--e-ts);margin-top:4px}'\n    + '.dce-vazio{padding:50px 20px;text-align:center;color:var(--e-ts);border:1px dashed var(--e-b);border-radius:var(--e-r)}'\n    + '.dce-aviso{padding:12px 14px;border-radius:calc(var(--e-r) * .7);background:color-mix(in srgb,var(--e-p) 9%,var(--e-f));border:1px solid color-mix(in srgb,var(--e-p) 25%,transparent);font-size:14px;margin-bottom:16px}'\n    + '.dce-hero{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:28px;align-items:start;margin-bottom:28px}'\n    + '.dce-hero h2{font-size:clamp(28px,4.2vw,44px);line-height:1.08;margin:10px 0 12px}.dce-hero .sub{font-size:17px;color:var(--e-ts);line-height:1.55;margin:0 0 16px}'\n    + '.dce-chips{display:flex;flex-wrap:wrap;gap:8px}.dce-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:var(--e-s);font-size:13px;font-weight:600}.dce-chip svg{width:14px;height:14px;color:var(--e-p)}'\n    + '.dce-compra{position:sticky;top:16px;border-radius:var(--e-r);overflow:hidden;background:var(--e-f);border:1px solid var(--e-b);box-shadow:0 26px 60px -36px rgba(0,0,0,.5)}'\n    + '.dce-compra .dce-capa{font-size:54px}.dce-compra-c{padding:18px}.dce-compra .valor{font:800 30px/1 var(--dia-fonte-titulos,inherit);margin:0 0 14px}'\n    + '.dce-inc{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:9px;font-size:14px}.dce-inc li{display:flex;gap:9px;align-items:flex-start}.dce-inc svg{width:16px;height:16px;flex:0 0 16px;color:var(--e-p);margin-top:2px}'\n    + '.dce-desc{font-size:16px;line-height:1.7;color:var(--e-t);margin:0 0 26px;white-space:pre-line}'\n    + '.dce-mod{border:1px solid var(--e-b);border-radius:var(--e-r);margin-bottom:10px;overflow:hidden;background:var(--e-f)}'\n    + '.dce-mod summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;padding:15px 16px;font-weight:700;background:var(--e-s)}.dce-mod summary::-webkit-details-marker{display:none}'\n    + '.dce-mod summary small{font-weight:500;color:var(--e-ts);white-space:nowrap}'\n    + '.dce-aula-l{display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px;border:0;border-top:1px solid var(--e-b);background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}'\n    + '.dce-aula-l:hover{background:color-mix(in srgb,var(--e-p) 5%,transparent)}.dce-aula-l.actual{background:color-mix(in srgb,var(--e-p) 10%,transparent)}'\n    + '.dce-aula-l .ic{flex:0 0 32px;width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--e-s);color:var(--e-p)}.dce-aula-l .ic svg{width:15px;height:15px}'\n    + '.dce-aula-l.feita .ic{background:var(--e-p);color:var(--e-pt)}'\n    + '.dce-aula-l .nm{flex:1;min-width:0;font-size:14.5px;line-height:1.35}.dce-aula-l .nm small{display:block;color:var(--e-ts);font-size:12.5px;margin-top:2px}'\n    + '.dce-aula-l .lado{display:flex;align-items:center;gap:8px;color:var(--e-ts);font-size:12.5px;white-space:nowrap}.dce-aula-l .lado svg{width:15px;height:15px}'\n    + '.dce-et{display:inline-flex;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700;background:color-mix(in srgb,var(--e-p) 12%,transparent);color:var(--e-p)}.dce-et.vivo{background:#E0314B;color:#fff}'\n    + '.dce-cert{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 18px;border-radius:var(--e-r);margin-bottom:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--e-p) 16%,var(--e-f)),var(--e-f));border:1px solid color-mix(in srgb,var(--e-p) 30%,transparent)}'\n    + '.dce-cert svg{width:30px;height:30px;color:var(--e-p)}.dce-cert b{flex:1;min-width:180px;font-size:16px}'\n    + '.dce-sala{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:22px;align-items:start}'\n    + '.dce-palco{position:relative;aspect-ratio:16/9;border-radius:var(--e-r);overflow:hidden;background:#0d0b12;color:#fff}'\n    + '.dce-palco iframe{position:absolute;inset:0;width:100%;height:100%;border:0}'\n    + '.dce-palco .msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;font-size:15px;line-height:1.55}.dce-palco .msg b{display:block;font-size:20px;margin:10px 0 6px}'\n    + '.dce-palco .msg svg{width:34px;height:34px;color:#fff;opacity:.85}'\n    + '.dce-palco #dce-remoto{position:absolute;inset:0}.dce-palco #dce-remoto video{object-fit:contain!important}'\n    + '.dce-palco .faixa{position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:7px;padding:7px 11px;border-radius:999px;background:#E0314B;color:#fff;font:800 11.5px/1 inherit;letter-spacing:.06em;z-index:2}'\n    + '.dce-ler{padding:26px;border-radius:var(--e-r);background:var(--e-f);border:1px solid var(--e-b);font-size:16.5px;line-height:1.75}.dce-ler p{margin:0 0 14px}.dce-ler ul{margin:0 0 14px;padding-left:22px}'\n    + '.dce-aula-cab{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin:18px 0 6px}'\n    + '.dce-aula-cab h3{margin:0;font-size:clamp(20px,2.8vw,26px);line-height:1.2;flex:1;min-width:220px}'\n    + '.dce-feita{display:inline-flex;align-items:center;gap:8px;min-height:42px;padding:0 15px;border-radius:999px;border:1.5px solid var(--e-b);background:var(--e-f);color:var(--e-t);font:700 13.5px/1 inherit;cursor:pointer}'\n    + '.dce-feita svg{width:16px;height:16px}.dce-feita.on{background:var(--e-p);border-color:var(--e-p);color:var(--e-pt)}'\n    + '.dce-nav{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:16px 0 22px}'\n    + '.dce-bloco{margin-top:24px}.dce-bloco h4{margin:0 0 12px;font-size:17px}'\n    + '.dce-mat{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--e-b);border-radius:calc(var(--e-r) * .7);margin-bottom:8px;text-decoration:none;color:inherit;background:var(--e-f)}'\n    + '.dce-mat:hover{border-color:var(--e-p)}.dce-mat svg{width:18px;height:18px;color:var(--e-p);flex:0 0 18px}.dce-mat span{flex:1;font-size:14.5px}.dce-mat small{color:var(--e-ts)}'\n    + '.dce-com{padding:14px 0;border-top:1px solid var(--e-b)}.dce-com b{font-size:14px}.dce-com small{color:var(--e-ts);margin-left:6px;font-size:12px}.dce-com p{margin:6px 0 0;font-size:14.5px;line-height:1.55;white-space:pre-line}'\n    + '.dce-com .resp{margin:10px 0 0 14px;padding:10px 12px;border-left:3px solid var(--e-p);background:var(--e-s);border-radius:0 10px 10px 0;font-size:14px}.dce-com .resp b{display:block;font-size:12px;color:var(--e-p);margin-bottom:3px}'\n    + '.dce-escrever{display:grid;gap:8px;margin-bottom:8px}.dce-escrever textarea,.dce-m input{width:100%;padding:12px 14px;border-radius:calc(var(--e-r) * .7);border:1.5px solid var(--e-b);background:var(--e-f);color:var(--e-t);font-weight:500;font-size:15px;font-family:inherit;outline:none}'\n    + '.dce-escrever textarea{min-height:84px;resize:vertical}.dce-escrever textarea:focus,.dce-m input:focus{border-color:var(--e-p)}'\n    + '.dce-lado{position:sticky;top:16px;border:1px solid var(--e-b);border-radius:var(--e-r);overflow:hidden;background:var(--e-f);max-height:calc(100vh - 32px);display:flex;flex-direction:column}'\n    + '.dce-lado-cab{padding:16px;border-bottom:1px solid var(--e-b)}.dce-lado-cab b{display:block;font-size:15px;line-height:1.3}'\n    + '.dce-lado-l{overflow:auto}.dce-lado .dce-mod{border:0;border-radius:0;margin:0}'\n    + '.dce-chat{display:flex;flex-direction:column;height:420px;border:1px solid var(--e-b);border-radius:var(--e-r);overflow:hidden;background:var(--e-f);margin-top:14px}'\n    + '.dce-chat-l{flex:1;overflow:auto;padding:12px;display:grid;gap:8px;align-content:start}.dce-chat-l div{font-size:13.5px;line-height:1.45}.dce-chat-l b{font-size:12.5px}.dce-chat-l .dono b{color:var(--e-p)}'\n    + '.dce-chat form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--e-b)}.dce-chat input{flex:1;min-width:0;padding:10px 12px;border-radius:10px;border:1.5px solid var(--e-b);background:var(--e-f);color:var(--e-t);font:inherit}'\n    + '.dce-erro{color:#C0392B;font-size:13.5px;min-height:18px;margin:4px 0}'\n    + '.dce-m{position:fixed;inset:0;z-index:2147482000;display:grid;place-items:center;padding:16px;font-family:var(--dia-fonte-texto,inherit);color:var(--e-t,#16131f)}'\n    + '.dce-m-f{position:absolute;inset:0;background:rgba(10,8,16,.6);backdrop-filter:blur(4px)}'\n    + '.dce-m-c{position:relative;width:min(440px,100%);max-height:calc(100vh - 32px);overflow:auto;padding:26px;border-radius:calc(var(--e-r,16px) + 4px);background:var(--e-f,#fff);box-shadow:0 30px 80px -30px rgba(0,0,0,.6);animation:dceE .3s ease-out}'\n    + '@keyframes dceE{from{opacity:0;transform:translateY(14px)}}'\n    + '.dce-m-c h3{margin:0 0 6px;font-size:22px}.dce-m-c p{margin:0 0 16px;color:var(--e-ts,#5d5868);font-size:14.5px;line-height:1.55}'\n    + '.dce-m-x{position:absolute;top:12px;right:12px;width:36px;height:36px;border-radius:50%;border:0;background:var(--e-s,#f3f3f3);color:inherit;cursor:pointer;display:grid;place-items:center}.dce-m-x svg{width:16px;height:16px}'\n    + '.dce-m .campos{display:grid;gap:10px;margin-bottom:8px}.dce-m .codigo{font:800 26px/1 var(--font-mono,ui-monospace,monospace);letter-spacing:.4em;text-align:center}'\n    + '.dce-m .lig{background:none;border:0;padding:8px 0;color:var(--e-ts,#5d5868);font-weight:600;font-size:13.5px;font-family:inherit;cursor:pointer;text-decoration:underline}'\n    + '.dce-metodos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0 12px}.dce-metodos button{min-height:46px;border-radius:12px;border:1.5px solid var(--e-b,#ddd);background:var(--e-f,#fff);color:inherit;font-weight:700;font-size:14px;font-family:inherit;cursor:pointer}.dce-metodos button.on{border-color:var(--e-p);background:color-mix(in srgb,var(--e-p) 10%,var(--e-f,#fff))}'\n    + '.dce-checkout{position:relative;height:450px;overflow:hidden;border-radius:12px;border:1px solid var(--e-b,#ddd);margin:6px 0 10px}.dce-checkout iframe{position:absolute;left:0;width:100%;border:0}'\n    + '.dce-espera{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--e-ts,#5d5868);margin:8px 0 12px}.dce-espera i{width:16px;height:16px;border-radius:50%;border:2.5px solid var(--e-b,#ddd);border-top-color:var(--e-p);animation:dceG .8s linear infinite}'\n    + '@keyframes dceG{to{transform:rotate(360deg)}}'\n    + '.dce-ok{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:var(--e-p);color:var(--e-pt);margin:0 auto 14px}.dce-ok svg{width:28px;height:28px}'\n    + '@media (max-width:900px){.dce-hero,.dce-sala{grid-template-columns:1fr}.dce-compra,.dce-lado{position:static;max-height:none}}'\n    + '@media (max-width:520px){.dce-btn{width:100%}.dce-nav .dce-btn{width:auto;flex:1}.dce-m-c{padding:22px 18px}.dce-metodos{grid-template-columns:1fr 1fr 1fr}}'\n    + '@media (prefers-reduced-motion:reduce){.dce-card,.dce-m-c{animation:none;transition:none}.dce-capa .vivo i,.dce-vivo-ponto,.dce-espera i{animation:none}}';\n\n  var raiz = null;\n  function iniciais(t){ return String(t || '').split(/\\s+/).filter(Boolean).slice(0, 2).map(function(w){ return w.charAt(0).toUpperCase(); }).join(''); }\n  function capaHtml(c, extra){ return '<div class=\"dce-capa\"' + (c.capa ? ' style=\"background-image:url(\\'' + esc(c.capa) + '\\')\"' : '') + '>' + (c.capa ? '' : esc(iniciais(c.titulo))) + (extra || '') + '</div>'; }\n  function temVivo(c){ return (c.ao_vivo || []).some(function(a){ return a.estado === 'a decorrer'; }); }\n  function quando(iso){\n    var d = new Date(iso); if (isNaN(d)) return '';\n    var h = d.toLocaleTimeString(LANG === 'pt' ? 'pt-PT' : 'en-GB', { hour: '2-digit', minute: '2-digit' });\n    var hoje = new Date(); hoje.setHours(0, 0, 0, 0);\n    var dia = new Date(d); dia.setHours(0, 0, 0, 0);\n    var dif = Math.round((dia - hoje) / 864e5), min = Math.round((d - Date.now()) / 60000);\n    if (min > 0 && min < 60) return t('dentro', { m: min });\n    if (dif === 0) return t('hoje', { h: h });\n    if (dif === 1) return t('amanha', { h: h });\n    return t('dia', { d: d.toLocaleDateString(LANG === 'pt' ? 'pt-PT' : 'en-GB', { day: 'numeric', month: 'long' }), h: h });\n  }\n  function barraTopo(aqui){\n    var s = S.sessao;\n    return '<div class=\"dce-barra\"><div class=\"esq\"><button type=\"button\" class=\"dce-pill' + (aqui === 'cat' ? ' on' : '') + '\" data-ir=\"\">' + esc(t('todos')) + '</button>'\n      + (s ? '<button type=\"button\" class=\"dce-pill' + (aqui === 'meus' ? ' on' : '') + '\" data-ir=\"meus\">' + esc(t('meus')) + '</button>' : '') + '</div>'\n      + (s ? '<button type=\"button\" class=\"dce-pill\" data-sair>' + IC.pessoa + esc(s.aluno.nome || s.aluno.email) + ' · ' + esc(t('sair')) + '</button>' : '<button type=\"button\" class=\"dce-pill\" data-entrar>' + IC.pessoa + esc(t('entrar')) + '</button>') + '</div>'\n      + (PREVIA ? '<div class=\"dce-aviso\">' + esc(t('previaAviso')) + '</div>' : '');\n  }\n  function ligarBarra(){\n    Array.prototype.forEach.call(raiz.querySelectorAll('[data-ir]'), function(b){ b.addEventListener('click', function(){ ir(b.getAttribute('data-ir')); }); });\n    var e = raiz.querySelector('[data-entrar]'); if (e) e.addEventListener('click', function(){ entrar(function(){ rota(); }); });\n    var s = raiz.querySelector('[data-sair]'); if (s) s.addEventListener('click', function(){ post('/ead-sair', {}).catch(function(){}); guardarSessao(null); ir(''); });\n  }\n  function ir(h){ var alvo = h ? '#ead/' + h : '#ead'; if (location.hash === alvo) rota(); else location.hash = alvo; }\n  function ecra(html){\n    pararAoVivo();\n    raiz.innerHTML = html;\n    ligarBarra();\n  }\n  function rolar(){ try { var r = raiz.getBoundingClientRect(); if (r.top < 0 || r.top > innerHeight * 0.6) raiz.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }\n\n  // ---- catálogo ----\n  function cartaoCurso(c){\n    var aulas = c.aulas === 1 ? t('aula1') : t('aulas', { n: c.aulas });\n    return '<a class=\"dce-card\" href=\"#ead/curso/' + esc(c.id) + '\">' + capaHtml(c, (c.nivel ? '<span class=\"tag\">' + esc(c.nivel) + '</span>' : '') + (temVivo(c) ? '<span class=\"vivo\"><i></i>' + esc(t('aoVivoAgora')) + '</span>' : '') + '<span class=\"preco\">' + (c.acesso ? esc(t('inscrito')) : (c.preco ? esc(mzn(c.preco)) : esc(t('gratis')))) + '</span>')\n      + '<div class=\"dce-card-c\"><h3>' + esc(c.titulo) + '</h3>' + (c.subtitulo ? '<p>' + esc(c.subtitulo) + '</p>' : '')\n      + '<div class=\"dce-meta\"><span>' + IC.play + esc(aulas) + '</span>' + (c.minutos ? '<span>' + IC.relogio + esc(duracao(c.minutos)) + '</span>' : '') + (c.professor ? '<span>' + IC.pessoa + esc(c.professor) + '</span>' : '') + '</div>'\n      + (c.acesso ? '<div class=\"dce-prog\"><i style=\"width:' + (c.progresso.pct || 0) + '%\"></i></div><div class=\"dce-prog-t\">' + esc(t('progresso', { f: c.progresso.feitas, t: c.progresso.total })) + '</div>' : '')\n      + '</div></a>';\n  }\n  function catalogo(meus){\n    post('/ead-catalogo', {}).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      if (S.sessao && !r.response.aluno) guardarSessao(null);\n      S.cat = r.response;\n      var l = r.response.cursos.filter(function(c){ return !meus || c.acesso; });\n      ecra(barraTopo(meus ? 'meus' : 'cat') + (l.length ? '<div class=\"dce-grelha\">' + l.map(cartaoCurso).join('') + '</div>' : '<div class=\"dce-vazio\">' + esc(t('semCursos')) + '</div>'));\n    }).catch(function(e){ ecra(barraTopo('cat') + '<div class=\"dce-vazio\">' + esc(e.message || t('erro')) + '</div>'); });\n  }\n\n  // ---- curso ----\n  function iconeAula(a){ return a.tipo === 'texto' ? IC.livro : (a.tipo === 'ao_vivo' ? IC.vivo : IC.play); }\n  function linhaAula(cursoId, a, actual){\n    var lado = a.feita ? '' : (a.aberta ? (a.previa ? '<span class=\"dce-et\">' + esc(t('previa')) + '</span>' : '') : IC.cadeado);\n    if (a.tipo === 'ao_vivo' && a.estado === 'a decorrer') lado = '<span class=\"dce-et vivo\">' + esc(t('aoVivo')) + '</span>' + lado;\n    var sub = a.tipo === 'ao_vivo' ? (a.inicio && a.estado !== 'terminada' ? quando(a.inicio) : t('aoVivo')) : (a.minutos ? duracao(a.minutos) : (a.tipo === 'texto' ? t('texto') : t('video')));\n    return '<button type=\"button\" class=\"dce-aula-l' + (a.feita ? ' feita' : '') + (actual === a.id ? ' actual' : '') + '\" data-aula=\"' + esc(a.id) + '\" data-aberta=\"' + (a.aberta ? 1 : 0) + '\"><span class=\"ic\">' + (a.feita ? IC.certo : iconeAula(a)) + '</span><span class=\"nm\">' + esc(a.titulo) + '<small>' + esc(sub) + '</small></span><span class=\"lado\">' + lado + '</span></button>';\n  }\n  function curriculoHtml(c, actual){\n    if (!c.curriculo.length || !c.aulas) return '<div class=\"dce-vazio\">' + esc(t('semAulas')) + '</div>';\n    return c.curriculo.map(function(m, i){\n      var temActual = m.aulas.some(function(a){ return a.id === actual; });\n      return '<details class=\"dce-mod\"' + (i === 0 || temActual || !actual ? ' open' : '') + '><summary><span>' + esc(m.titulo) + '</span><small>' + esc(m.aulas.length === 1 ? t('aula1') : t('aulas', { n: m.aulas.length })) + '</small></summary>' + m.aulas.map(function(a){ return linhaAula(c.id, a, actual); }).join('') + '</details>';\n    }).join('');\n  }\n  function ligarAulas(c){\n    Array.prototype.forEach.call(raiz.querySelectorAll('[data-aula]'), function(b){\n      b.addEventListener('click', function(){\n        if (b.getAttribute('data-aberta') === '1') ir('aula/' + c.id + '/' + b.getAttribute('data-aula'));\n        else accaoCurso(c);\n      });\n    });\n  }\n  function primeiraAula(c){\n    var todas = []; c.curriculo.forEach(function(m){ m.aulas.forEach(function(a){ todas.push(a); }); });\n    var por = todas.filter(function(a){ return a.aberta && !a.feita; })[0] || todas.filter(function(a){ return a.aberta; })[0];\n    return por ? por.id : '';\n  }\n  function curso(id){\n    post('/ead-curso', { curso_id: id }).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      var c = S.curso = r.response;\n      var btn = c.acesso ? t(c.progresso.feitas ? 'continuarCurso' : 'comecar') : (c.preco ? t('comprar', { v: mzn(c.preco) }) : t('inscreverGratis'));\n      ecra(barraTopo('') + (c.certificado_url ? '<div class=\"dce-cert\">' + IC.trofeu + '<b>' + esc(t('parabens')) + '</b><a class=\"dce-btn\" href=\"' + esc(c.certificado_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.baixar + esc(t('baixarCert')) + '</a></div>' : '')\n        + '<div class=\"dce-hero\"><div>'\n        + (temVivo(c) ? '<span class=\"dce-et vivo\">' + esc(t('aoVivoAgora')) + '</span>' : (c.nivel ? '<span class=\"dce-et\">' + esc(c.nivel) + '</span>' : ''))\n        + '<h2>' + esc(c.titulo) + '</h2>' + (c.subtitulo ? '<p class=\"sub\">' + esc(c.subtitulo) + '</p>' : '')\n        + '<div class=\"dce-chips\"><span class=\"dce-chip\">' + IC.play + esc(c.aulas === 1 ? t('aula1') : t('aulas', { n: c.aulas })) + '</span>' + (c.minutos ? '<span class=\"dce-chip\">' + IC.relogio + esc(duracao(c.minutos)) + '</span>' : '') + (c.professor ? '<span class=\"dce-chip\">' + IC.pessoa + esc(c.professor) + '</span>' : '') + '</div>'\n        + (c.acesso ? '<div class=\"dce-prog\" style=\"margin-top:16px\"><i style=\"width:' + c.progresso.pct + '%\"></i></div><div class=\"dce-prog-t\">' + esc(t('progresso', { f: c.progresso.feitas, t: c.progresso.total })) + '</div>' : '')\n        + '</div><aside class=\"dce-compra\">' + capaHtml(c) + '<div class=\"dce-compra-c\">' + (c.acesso ? '' : '<p class=\"valor\">' + esc(c.preco ? mzn(c.preco) : t('gratis')) + '</p>')\n        + '<button type=\"button\" class=\"dce-btn lg\" id=\"dce-accao\">' + esc(btn) + IC.seta + '</button>'\n        + '<ul class=\"dce-inc\"><li>' + IC.certo + esc(t('inclui1')) + '</li><li>' + IC.certo + esc(t('inclui2')) + '</li>' + (c.certificado ? '<li>' + IC.certo + esc(t('inclui3')) + '</li>' : '') + '<li>' + IC.certo + esc(t('inclui4')) + '</li></ul></div></aside></div>'\n        + (c.descricao ? '<p class=\"dce-desc\">' + esc(c.descricao) + '</p>' : '')\n        + '<h3 style=\"font-size:22px;margin:0 0 12px\">' + esc(t('curriculo')) + '</h3>' + curriculoHtml(c, ''));\n      raiz.querySelector('#dce-accao').addEventListener('click', function(){ accaoCurso(c); });\n      ligarAulas(c);\n      rolar();\n    }).catch(function(e){ ecra(barraTopo('') + '<div class=\"dce-vazio\">' + esc(e.message || t('erro')) + '</div>'); });\n  }\n  function accaoCurso(c){\n    if (c.acesso) { var a = primeiraAula(c); if (a) ir('aula/' + c.id + '/' + a); return; }\n    if (PREVIA) { aviso(t('previaAviso')); return; }\n    if (!S.sessao) return entrar(function(){ post('/ead-curso', { curso_id: c.id }).then(function(r){ if (r.status === 'success' && r.response.acesso) ir('curso/' + c.id + '?' + Date.now()); else if (r.status === 'success') { S.curso = r.response; accaoCurso(r.response); } }); });\n    if (!c.preco) {\n      post('/ead-inscrever', { curso_id: c.id }).then(function(r){\n        if (r.status !== 'success') throw new Error(r.message);\n        aviso(t('bemVindo'), true); curso(c.id);\n      }).catch(function(e){ aviso(e.message || t('erro')); });\n      return;\n    }\n    comprar(c);\n  }\n\n  // ---- aula ----\n  function textoAula(txt){\n    var blocos = String(txt || '').split(/\\n{2,}/);\n    return blocos.map(function(b){\n      var ls = b.split('\\n');\n      if (ls.every(function(l){ return /^\\s*[-•*]\\s+/.test(l); })) return '<ul>' + ls.map(function(l){ return '<li>' + fmt(l.replace(/^\\s*[-•*]\\s+/, '')) + '</li>'; }).join('') + '</ul>';\n      return '<p>' + ls.map(fmt).join('<br>') + '</p>';\n    }).join('');\n    function fmt(s){ return esc(s).replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>').replace(/(https?:\\/\\/[^\\s<]+)/g, '<a href=\"$1\" target=\"_blank\" rel=\"noopener nofollow\">$1</a>'); }\n  }\n  function todasAulas(c){ var l = []; c.curriculo.forEach(function(m){ m.aulas.forEach(function(a){ l.push(a); }); }); return l; }\n  function aula(cursoId, aulaId){\n    var pc = S.curso && S.curso.id === cursoId ? Promise.resolve({ status: 'success', response: S.curso }) : post('/ead-curso', { curso_id: cursoId });\n    pc.then(function(rc){\n      if (rc.status !== 'success') throw new Error(rc.message);\n      S.curso = rc.response;\n      return post('/ead-aula', { curso_id: cursoId, aula_id: aulaId }).then(function(r){\n        if (r.status !== 'success') { if (r.codigo === 'entrar') return entrar(function(){ S.curso = null; rota(); }); if (r.codigo === 'sem_acesso') { ir('curso/' + cursoId); return; } throw new Error(r.message); }\n        desenharAula(S.curso, r.response);\n      });\n    }).catch(function(e){ ecra(barraTopo('') + '<div class=\"dce-vazio\">' + esc(e.message || t('erro')) + '</div>'); });\n  }\n  function palcoHtml(a){\n    if (a.tipo === 'texto') return '<div class=\"dce-ler\">' + textoAula(a.texto) + '</div>';\n    if (a.tipo === 'ao_vivo') {\n      var v = a.ao_vivo || {};\n      if (v.estado === 'a decorrer') return '<div class=\"dce-palco\" id=\"dce-palco\"><div class=\"msg\"><div>' + IC.vivo + '<b>' + esc(t('aoVivoAgora')) + '</b><button type=\"button\" class=\"dce-btn\" id=\"dce-vivo-entrar\">' + esc(t('entrarAoVivo')) + '</button></div></div></div><div class=\"dce-chat\" id=\"dce-chat\" hidden><div class=\"dce-chat-l\" id=\"dce-chat-l\"></div><form id=\"dce-chat-f\"><input maxlength=\"500\" placeholder=\"' + esc(t('escreverChat')) + '\" aria-label=\"' + esc(t('chat')) + '\"><button type=\"submit\" class=\"dce-btn\" style=\"min-height:42px;padding:0 14px\">' + esc(t('enviar')) + '</button></form></div>';\n      if (v.estado === 'terminada' && a.video_url) return '<div class=\"dce-palco\"><iframe src=\"' + esc(a.video_url) + '\" loading=\"lazy\" allow=\"accelerometer;gyroscope;autoplay;encrypted-media;picture-in-picture\" allowfullscreen title=\"' + esc(a.titulo) + '\"></iframe></div>';\n      return '<div class=\"dce-palco\"><div class=\"msg\"><div>' + IC.vivo + '<b>' + esc(t('aoVivo')) + '</b>' + esc(v.estado === 'terminada' ? t('aoVivoTerminou') : t('aoVivoEm', { q: quando(v.inicio) || '' })) + '</div></div></div>';\n    }\n    if (!a.video_url) return '<div class=\"dce-palco\"><div class=\"msg\"><div>' + IC.relogio + '<b>' + esc(t('video')) + '</b>' + esc(t('videoPreparar')) + '</div></div></div>';\n    return '<div class=\"dce-palco\"><iframe src=\"' + esc(a.video_url) + '\" allow=\"accelerometer;gyroscope;autoplay;encrypted-media;picture-in-picture\" allowfullscreen title=\"' + esc(a.titulo) + '\"></iframe></div>';\n  }\n  function comentarioHtml(c){ return '<div class=\"dce-com\"><b>' + esc(c.nome) + '</b><small>' + esc(new Date(c.quando).toLocaleDateString(LANG === 'pt' ? 'pt-PT' : 'en-GB')) + '</small><p>' + esc(c.texto) + '</p>' + (c.resposta && c.resposta.texto ? '<div class=\"resp\"><b>' + esc(t('resposta')) + '</b>' + esc(c.resposta.texto) + '</div>' : '') + '</div>'; }\n  function desenharAula(c, a){\n    S.aula = a;\n    var l = todasAulas(c), i = l.findIndex(function(x){ return x.id === a.id; });\n    var ant = l.slice(0, Math.max(0, i)).reverse().filter(function(x){ return x.aberta; })[0], prox = l.slice(i + 1).filter(function(x){ return x.aberta; })[0];\n    ecra(barraTopo('') + '<div class=\"dce-sala\"><div>'\n      + palcoHtml(a)\n      + '<div class=\"dce-aula-cab\"><h3>' + esc(a.titulo) + '</h3>' + (S.sessao && c.acesso ? '<button type=\"button\" class=\"dce-feita' + (a.feita ? ' on' : '') + '\" id=\"dce-feita\">' + IC.certo + '<span>' + esc(a.feita ? t('concluida') : t('marcarConcluida')) + '</span></button>' : '') + '</div>'\n      + '<div class=\"dce-nav\">' + (ant ? '<button type=\"button\" class=\"dce-btn sec\" data-ir=\"aula/' + esc(c.id) + '/' + esc(ant.id) + '\">' + IC.voltar + esc(t('anterior')) + '</button>' : '<span></span>') + (prox ? '<button type=\"button\" class=\"dce-btn\" data-ir=\"aula/' + esc(c.id) + '/' + esc(prox.id) + '\">' + esc(t('proxima')) + IC.seta + '</button>' : '') + '</div>'\n      + (a.materiais && a.materiais.length ? '<div class=\"dce-bloco\"><h4>' + esc(t('materiais')) + '</h4>' + a.materiais.map(function(m){ return '<a class=\"dce-mat\" href=\"' + esc(m.url) + '\" target=\"_blank\" rel=\"noopener\" download>' + IC.doc + '<span>' + esc(m.nome) + '</span><small>' + (m.tamanho ? Math.max(1, Math.round(m.tamanho / 1024)) + ' KB' : '') + '</small>' + IC.baixar + '</a>'; }).join('') + '</div>' : '')\n      + '<div class=\"dce-bloco\"><h4>' + esc(t('comentarios')) + '</h4>'\n      + (a.pode_comentar ? '<form class=\"dce-escrever\" id=\"dce-com-f\"><textarea maxlength=\"1500\" placeholder=\"' + esc(t('comentar')) + '\" aria-label=\"' + esc(t('comentar')) + '\"></textarea><div class=\"dce-erro\" id=\"dce-com-erro\"></div><div><button type=\"submit\" class=\"dce-btn\">' + esc(t('enviar')) + '</button></div></form>' : '<p style=\"color:var(--e-ts);font-size:14px\">' + esc(t('paraComentar')) + '</p>')\n      + '<div id=\"dce-coms\">' + (a.comentarios.length ? a.comentarios.slice().reverse().map(comentarioHtml).join('') : '<p style=\"color:var(--e-ts);font-size:14px\" id=\"dce-sem-com\">' + esc(t('semComentarios')) + '</p>') + '</div></div>'\n      + '</div><aside class=\"dce-lado\"><div class=\"dce-lado-cab\"><b>' + esc(c.titulo) + '</b>' + (c.acesso ? '<div class=\"dce-prog\"><i id=\"dce-prog-i\" style=\"width:' + c.progresso.pct + '%\"></i></div><div class=\"dce-prog-t\" id=\"dce-prog-t\">' + esc(t('progresso', { f: c.progresso.feitas, t: c.progresso.total })) + '</div>' : '') + '<div id=\"dce-cert-lado\">' + (c.certificado_url ? '<a class=\"dce-btn lg\" style=\"margin-top:12px\" href=\"' + esc(c.certificado_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.baixar + esc(t('baixarCert')) + '</a>' : '') + '</div></div><div class=\"dce-lado-l\">' + curriculoHtml(c, a.id) + '</div></aside></div>');\n    ligarAulas(c);\n    var bf = raiz.querySelector('#dce-feita');\n    if (bf) bf.addEventListener('click', function(){\n      var desfazer = bf.classList.contains('on'); bf.disabled = true;\n      post('/ead-concluir', { curso_id: c.id, aula_id: a.id, desfazer: desfazer }).then(function(r){\n        bf.disabled = false;\n        if (r.status !== 'success') throw new Error(r.message);\n        a.feita = !desfazer; bf.classList.toggle('on', a.feita); bf.querySelector('span').textContent = a.feita ? t('concluida') : t('marcarConcluida');\n        l.forEach(function(x){ if (x.id === a.id) x.feita = a.feita; });\n        c.progresso = r.response.progresso;\n        var pi = raiz.querySelector('#dce-prog-i'), pt = raiz.querySelector('#dce-prog-t');\n        if (pi) pi.style.width = c.progresso.pct + '%'; if (pt) pt.textContent = t('progresso', { f: c.progresso.feitas, t: c.progresso.total });\n        var linha = raiz.querySelector('.dce-lado [data-aula=\"' + a.id + '\"]'); if (linha) { linha.classList.toggle('feita', a.feita); linha.querySelector('.ic').innerHTML = a.feita ? IC.certo : iconeAula(a); }\n        if (r.response.certificado_url) { c.certificado_url = r.response.certificado_url; raiz.querySelector('#dce-cert-lado').innerHTML = '<a class=\"dce-btn lg\" style=\"margin-top:12px\" href=\"' + esc(c.certificado_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.baixar + esc(t('baixarCert')) + '</a>'; }\n        if (r.response.novo_certificado) aviso(t('parabens'), true, c.certificado_url);\n      }).catch(function(e){ bf.disabled = false; aviso(e.message || t('erro')); });\n    });\n    var fc = raiz.querySelector('#dce-com-f');\n    if (fc) fc.addEventListener('submit', function(e){\n      e.preventDefault();\n      var ta = fc.querySelector('textarea'), txt = ta.value.trim(), b = fc.querySelector('button'), er = raiz.querySelector('#dce-com-erro');\n      if (txt.length < 2) return; b.disabled = true; er.textContent = '';\n      post('/ead-comentar', { curso_id: c.id, aula_id: a.id, texto: txt }).then(function(r){\n        b.disabled = false;\n        if (r.status !== 'success') { er.textContent = r.message || t('erro'); return; }\n        ta.value = ''; var sem = raiz.querySelector('#dce-sem-com'); if (sem) sem.remove();\n        raiz.querySelector('#dce-coms').insertAdjacentHTML('afterbegin', comentarioHtml(r.response.comentario));\n      }).catch(function(){ b.disabled = false; er.textContent = t('erro'); });\n    });\n    var bv = raiz.querySelector('#dce-vivo-entrar');\n    if (bv) bv.addEventListener('click', function(){ entrarAoVivo(c, a); });\n    rolar();\n  }\n\n  // ---- ao vivo (Agora) ----\n  function carregarAgora(){\n    if (window.AgoraRTC) return Promise.resolve(window.AgoraRTC);\n    return new Promise(function(ok, falha){ var s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.20.0/AgoraRTC_N-production.js'; s.onload = function(){ ok(window.AgoraRTC); }; s.onerror = falha; document.head.appendChild(s); });\n  }\n  function pararAoVivo(){\n    clearInterval(S.chatPoll); S.chatPoll = null;\n    if (S.agora) { try { S.agora.leave(); } catch (e) {} S.agora = null; }\n  }\n  function entrarAoVivo(c, a){\n    var palco = raiz.querySelector('#dce-palco'), b = raiz.querySelector('#dce-vivo-entrar');\n    b.disabled = true;\n    post('/ead-ao-vivo', { curso_id: c.id, aula_id: a.id }).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      if (r.response.estado !== 'a decorrer') { a.ao_vivo.estado = r.response.estado; desenharAula(c, a); return; }\n      return carregarAgora().then(function(Agora){\n        var cli = Agora.createClient({ mode: 'live', codec: 'vp8' });\n        S.agora = cli;\n        cli.setClientRole('audience', { level: 1 });\n        palco.innerHTML = '<span class=\"faixa\"><i class=\"dce-vivo-ponto\"></i>' + esc(t('aoVivoAgora')) + '</span><div id=\"dce-remoto\"></div><div class=\"msg\" id=\"dce-aguarda\"><div>' + IC.vivo + '<b>' + esc(t('aoVivoLigado')) + '</b>' + esc(t('aguardarProf')) + '</div></div>';\n        cli.on('user-published', function(user, tipo){\n          cli.subscribe(user, tipo).then(function(){\n            if (tipo === 'video') { var ag = raiz.querySelector('#dce-aguarda'); if (ag) ag.remove(); user.videoTrack.play(raiz.querySelector('#dce-remoto')); }\n            if (tipo === 'audio') user.audioTrack.play();\n          });\n        });\n        return cli.join(r.response.app_id, r.response.canal, r.response.token || null, r.response.uid);\n      }).then(function(){ abrirChat(a); });\n    }).catch(function(e){ b.disabled = false; aviso((e && e.message) || t('erro')); });\n  }\n  function abrirChat(a){\n    var box = raiz.querySelector('#dce-chat'); if (!box) return;\n    box.hidden = false;\n    var lista = raiz.querySelector('#dce-chat-l'), desde = 0;\n    function puxar(texto){\n      return post('/ead-chat', { aula_id: a.id, desde: desde, texto: texto || '' }).then(function(r){\n        if (r.status !== 'success') return;\n        r.response.mensagens.forEach(function(m){ if (m.quando <= desde) return; lista.insertAdjacentHTML('beforeend', '<div class=\"' + (m.dono ? 'dono' : '') + '\"><b>' + esc(m.nome) + '</b> ' + esc(m.texto) + '</div>'); desde = Math.max(desde, m.quando); });\n        lista.scrollTop = lista.scrollHeight;\n      }).catch(function(){});\n    }\n    puxar();\n    S.chatPoll = setInterval(puxar, 3500);\n    raiz.querySelector('#dce-chat-f').addEventListener('submit', function(e){ e.preventDefault(); var i = this.querySelector('input'), v = i.value.trim(); if (!v) return; i.value = ''; puxar(v); });\n  }\n\n  // ---- janelas: entrar, comprar, avisos ----\n  function janela(html){\n    var m = document.createElement('div');\n    m.className = 'dce-m'; m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');\n    m.innerHTML = '<div class=\"dce-m-f\"></div><div class=\"dce-m-c dce\">' + '<button type=\"button\" class=\"dce-m-x\" aria-label=\"' + esc(t('fechar')) + '\">' + IC.x + '</button>' + html + '</div>';\n    document.body.appendChild(m);\n    function fechar(){ m.remove(); document.removeEventListener('keydown', tecla); if (m.__fim) m.__fim(); }\n    function tecla(e){ if (e.key === 'Escape') fechar(); }\n    m.querySelector('.dce-m-x').addEventListener('click', fechar);\n    m.querySelector('.dce-m-f').addEventListener('click', fechar);\n    document.addEventListener('keydown', tecla);\n    m.fechar = fechar;\n    var foco = m.querySelector('input,button.dce-btn'); if (foco) setTimeout(function(){ foco.focus(); }, 50);\n    return m;\n  }\n  function aviso(texto, ok, link){\n    var m = janela((ok ? '<div class=\"dce-ok\">' + IC.certo + '</div>' : '') + '<p style=\"text-align:center;font-size:16px;color:inherit\">' + esc(texto) + '</p>' + (link ? '<a class=\"dce-btn lg\" href=\"' + esc(link) + '\" target=\"_blank\" rel=\"noopener\" style=\"margin-bottom:8px\">' + IC.baixar + esc(t('baixarCert')) + '</a>' : '') + '<button type=\"button\" class=\"dce-btn ' + (link ? 'sec ' : '') + 'lg\" data-ok>' + esc(t('fechar')) + '</button>');\n    m.querySelector('[data-ok]').addEventListener('click', m.fechar);\n  }\n  function entrar(depois){\n    var email = '';\n    var m = janela('<h3>' + esc(t('entrarTit')) + '</h3><p>' + esc(t('entrarSub')) + '</p><form id=\"dce-f1\"><div class=\"campos\"><input type=\"email\" required autocomplete=\"email\" placeholder=\"' + esc(t('email')) + '\" aria-label=\"' + esc(t('email')) + '\" id=\"dce-em\"><input type=\"text\" autocomplete=\"name\" maxlength=\"80\" placeholder=\"' + esc(t('nome')) + '\" aria-label=\"' + esc(t('nome')) + '\" id=\"dce-nm\"></div><div class=\"dce-erro\" id=\"dce-er\"></div><button type=\"submit\" class=\"dce-btn lg\">' + esc(t('receberCodigo')) + '</button></form>');\n    var er = m.querySelector('#dce-er');\n    m.querySelector('#dce-f1').addEventListener('submit', function(e){\n      e.preventDefault();\n      email = m.querySelector('#dce-em').value.trim(); var nome = m.querySelector('#dce-nm').value.trim(), b = this.querySelector('button');\n      er.textContent = ''; b.disabled = true;\n      post('/ead-entrar', { email: email, nome: nome }).then(function(r){\n        b.disabled = false;\n        if (r.status !== 'success') { er.textContent = r.message || t('erro'); return; }\n        passo2(nome);\n      }).catch(function(){ b.disabled = false; er.textContent = t('erro'); });\n    });\n    function passo2(nome){\n      var c = m.querySelector('.dce-m-c');\n      c.innerHTML = '<button type=\"button\" class=\"dce-m-x\" aria-label=\"' + esc(t('fechar')) + '\">' + IC.x + '</button><h3>' + esc(t('codigoTit')) + '</h3><p>' + esc(t('codigoSub', { e: email })) + '</p><form id=\"dce-f2\"><div class=\"campos\"><input class=\"codigo\" inputmode=\"numeric\" autocomplete=\"one-time-code\" maxlength=\"7\" placeholder=\"000000\" aria-label=\"' + esc(t('codigoTit')) + '\" id=\"dce-cd\"></div><div class=\"dce-erro\" id=\"dce-er2\"></div><button type=\"submit\" class=\"dce-btn lg\">' + esc(t('entrarBtn')) + '</button></form><button type=\"button\" class=\"lig\" id=\"dce-outro\">' + esc(t('outroEmail')) + '</button>';\n      c.querySelector('.dce-m-x').addEventListener('click', m.fechar);\n      c.querySelector('#dce-outro').addEventListener('click', function(){ m.fechar(); entrar(depois); });\n      var cd = c.querySelector('#dce-cd'); cd.focus();\n      cd.addEventListener('input', function(){ if (cd.value.replace(/\\D/g, '').length === 6) c.querySelector('#dce-f2 button').click(); });\n      c.querySelector('#dce-f2').addEventListener('submit', function(e){\n        e.preventDefault();\n        var b = this.querySelector('button'), er2 = c.querySelector('#dce-er2'); er2.textContent = ''; b.disabled = true;\n        post('/ead-codigo', { email: email, codigo: cd.value, nome: nome }).then(function(r){\n          b.disabled = false;\n          if (r.status !== 'success') { er2.textContent = r.message || t('erro'); if (r.codigo === 'expirou') { m.fechar(); entrar(depois); } return; }\n          guardarSessao({ aluno: r.response.aluno, token: r.response.token });\n          m.fechar();\n          if (depois) depois();\n        }).catch(function(){ b.disabled = false; er2.textContent = t('erro'); });\n      });\n    }\n  }\n  function comprar(c){\n    var metodo = '';\n    var online = !S.curso || S.curso.pagamentos !== false;\n    var m = janela('<h3>' + esc(t('pagarTit')) + '</h3><p><b style=\"color:inherit\">' + esc(c.titulo) + '</b> · ' + esc(mzn(c.preco)) + '</p>'\n      + (online ? '<p style=\"margin:0 0 4px;font-weight:700;color:inherit\">' + esc(t('comoPagar')) + '</p><div class=\"dce-metodos\"><button type=\"button\" data-m=\"mpesa\">M-Pesa</button><button type=\"button\" data-m=\"emola\">e-Mola</button><button type=\"button\" data-m=\"cartao\">' + esc(t('cartao')) + '</button></div>' : '')\n      + '<div class=\"campos\"><input type=\"tel\" inputmode=\"tel\" autocomplete=\"tel\" placeholder=\"' + esc(t('telefone')) + '\" aria-label=\"' + esc(t('telefone')) + '\" id=\"dce-tel\"></div><div class=\"dce-erro\" id=\"dce-perr\"></div><button type=\"button\" class=\"dce-btn lg\" id=\"dce-pagar\">' + esc(t('pagar', { v: mzn(c.preco) })) + '</button>');\n    var tel = m.querySelector('#dce-tel'), er = m.querySelector('#dce-perr');\n    Array.prototype.forEach.call(m.querySelectorAll('[data-m]'), function(b){ b.addEventListener('click', function(){ metodo = b.getAttribute('data-m'); Array.prototype.forEach.call(m.querySelectorAll('[data-m]'), function(x){ x.classList.toggle('on', x === b); }); }); });\n    tel.addEventListener('input', function(){ var op = operadora(tel.value); if (op && metodo !== 'cartao') { var b = m.querySelector('[data-m=\"' + op + '\"]'); if (b) b.click(); } });\n    m.querySelector('#dce-pagar').addEventListener('click', function(){\n      var b = this; er.textContent = '';\n      if (online && !metodo) { er.textContent = t('escolheMetodo'); return; }\n      if (metodo !== 'cartao' && soDigitos(tel.value).length < 9) { er.textContent = t('telefone'); return; }\n      if (online && metodo !== 'cartao' && operadora(tel.value) !== metodo) { er.textContent = t('numeroErrado'); return; }\n      b.disabled = true;\n      post('/ead-inscrever', { curso_id: c.id, telefone: tel.value, metodo: metodo }).then(function(r){\n        if (r.status !== 'success') throw new Error(r.message);\n        if (r.response.acesso) { m.fechar(); aviso(t('bemVindo'), true); curso(c.id); return; }\n        if (r.response.manual) {\n          var wa = r.response.whatsapp ? 'https://wa.me/' + r.response.whatsapp + '?text=' + encodeURIComponent((c.titulo || '') + ' - ' + (S.sessao ? S.sessao.aluno.email : '')) : '';\n          m.querySelector('.dce-m-c').innerHTML = '<div class=\"dce-ok\">' + IC.certo + '</div><h3 style=\"text-align:center\">' + esc(t('manualTit')) + '</h3><p style=\"text-align:center\">' + esc(t('manualSub')) + '</p>' + (wa ? '<a class=\"dce-btn lg\" href=\"' + esc(wa) + '\" target=\"_blank\" rel=\"noopener\" style=\"margin-bottom:8px\">' + esc(t('whatsapp')) + '</a>' : '') + '<button type=\"button\" class=\"dce-btn sec lg\" data-ok>' + esc(t('fechar')) + '</button>';\n          m.querySelector('[data-ok]').addEventListener('click', m.fechar);\n          return;\n        }\n        return post('/loja-pagar', { encomenda_id: r.response.encomenda_id, metodo: metodo, telefone: tel.value }).then(function(rp){\n          if (rp.status !== 'success') throw new Error(rp.message);\n          checkout(m, c, rp.response);\n        });\n      }).catch(function(e){ b.disabled = false; er.textContent = e.message || t('erro'); });\n    });\n  }\n  function checkout(m, c, resp){\n    var url = resp.checkout_url || '', alt = Number(resp.altura) || 450, corte = Math.max(0, Number(resp.corte) || 0), dentro = url && resp.embutivel !== false;\n    var cx = m.querySelector('.dce-m-c');\n    cx.style.width = 'min(520px,100%)';\n    cx.innerHTML = '<h3>' + esc(t('pagarTit')) + '</h3>'\n      + (dentro ? '<div class=\"dce-checkout\" style=\"height:' + alt + 'px\"><iframe scrolling=\"no\" sandbox=\"allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox\" allow=\"payment\" style=\"top:' + (-corte) + 'px;height:' + (alt + corte) + 'px\" src=\"' + esc(url) + '\" title=\"' + esc(t('pagarTit')) + '\"></iframe></div><a class=\"lig\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(t('abrirSeparador')) + '</a>' : (url ? '<a class=\"dce-btn lg\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(t('pagar', { v: mzn(c.preco) })) + '</a>' : ''))\n      + '<div class=\"dce-espera\"><i></i><span id=\"dce-esp\">' + esc(t('esperaPag')) + '</span></div><div style=\"display:grid;grid-template-columns:1fr 1fr;gap:8px\"><button type=\"button\" class=\"dce-btn\" id=\"dce-ja\">' + esc(t('jaPaguei')) + '</button><button type=\"button\" class=\"dce-btn sec\" id=\"dce-canc\">' + esc(t('cancelar')) + '</button></div>';\n    var parar = false;\n    m.__fim = function(){ parar = true; clearTimeout(S.poll); };\n    function ver(manual){\n      clearTimeout(S.poll); if (parar) return;\n      post('/ead-estado', { curso_id: c.id }).then(function(r){\n        if (parar) return;\n        if (r.status === 'success' && r.response.acesso) { parar = true; m.fechar(); aviso(t('bemVindo'), true); curso(c.id); return; }\n        if (manual) cx.querySelector('#dce-esp').textContent = t('aindaNao');\n        S.poll = setTimeout(function(){ ver(false); }, 4000);\n      }).catch(function(){ S.poll = setTimeout(function(){ ver(false); }, 6000); });\n    }\n    cx.querySelector('#dce-ja').addEventListener('click', function(){ ver(true); });\n    cx.querySelector('#dce-canc').addEventListener('click', m.fechar);\n    window.addEventListener('message', function(e){ if (e.data && e.data.daniel === 'pagamento') ver(false); });\n    ver(false);\n  }\n\n  // ---- rotas ----\n  function rota(){\n    var h = (location.hash || '').replace(/^#/, '');\n    if (h.indexOf('ead') !== 0) { if (!raiz.__iniciado) { raiz.__iniciado = true; catalogo(false); } return; }\n    raiz.__iniciado = true;\n    var p = h.replace(/^ead\\/?/, '').replace(/\\?.*$/, '').split('/');\n    if (p[0] === 'curso' && p[1]) return curso(p[1]);\n    if (p[0] === 'aula' && p[1] && p[2]) return aula(p[1], p[2]);\n    if (p[0] === 'meus') return S.sessao ? catalogo(true) : entrar(function(){ catalogo(true); });\n    catalogo(false);\n  }\n  function arrancar(){\n    raiz = document.getElementById('daniel-ia-cursos');\n    if (!raiz) {\n      raiz = document.createElement('section');\n      raiz.id = 'daniel-ia-cursos';\n      var rod = document.querySelector('footer');\n      if (rod && rod.parentNode) rod.parentNode.insertBefore(raiz, rod); else document.body.appendChild(raiz);\n    }\n    var st = document.createElement('style'); st.setAttribute('data-daniel-ia', 'cursos'); st.textContent = CSS; document.head.appendChild(st);\n    raiz.classList.add('dce');\n    raiz.innerHTML = '<div class=\"dce-vazio\">…</div>';\n    window.addEventListener('hashchange', rota);\n    rota();\n  }\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();\n})();\n";
+
+// ======================================================
+// Plataformas de cursos (EAD) - 1.79.0
+// ------------------------------------------------------
+// Tipo de site "Curso": a IA cria a landing page e o site leva o /ead.js,
+// que mostra o catálogo, o curso, as aulas e a área do aluno.
+//  - Só a partir do plano Pro (EAD_PLANO_MINIMO, por omissão "pro").
+//  - Tudo no Storage: ead/<siteId>/config.json (cursos, módulos, aulas),
+//    ead/<siteId>/alunos.json (índice) e ead/<siteId>/alunos/<id>.json,
+//    ead/<siteId>/comentarios/<aulaId>.json, ead/certificados/<codigo>.json.
+//  - Aulas: vídeo (Bunny Stream, enviado por TUS), texto, ao vivo (Agora).
+//  - Alunos entram com email + código de 6 dígitos (sem palavra-passe).
+//  - Cursos pagos: encomenda como nas lojas (Notas "ead:<site>:<curso>:<aluno>"),
+//    M-Pesa / e-Mola / cartão; o webhook liberta o acesso. Sem pagamentos
+//    online (KYC por aprovar), a inscrição fica pendente e o dono dá acesso.
+//  - Progresso, materiais para descarregar, comentários e certificado em PDF.
+// ======================================================
+const zlib = require('zlib');
+const EAD_PLANO_MINIMO = (clean(process.env.EAD_PLANO_MINIMO) || 'pro').toLowerCase();
+const AGORA_APP_ID = clean(process.env.AGORA_APP_ID);
+const AGORA_APP_CERTIFICATE = clean(process.env.AGORA_APP_CERTIFICATE);
+const STREAM_TOKEN_KEY = clean(process.env.STREAM_TOKEN_KEY); // "Embed view token authentication" da biblioteca (opcional)
+const MSG_EAD_SO_PRO = 'As plataformas de cursos fazem parte do plano Pro e superiores. Sobe de plano para criares a tua.';
+const EAD_SESSAO_DIAS = 60;
+const eadCacheCfg = new Map();
+const eadFilas = new Map();
+const eadCodigos = new Map();      // site:email -> { h, exp, n, nome }
+const eadChats = new Map();        // site:aula -> [{ id, nome, texto, quando, dono }]
+
+function eadId() { return crypto.randomBytes(6).toString('hex'); }
+function eadTexto(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').replace(/[ \t]+/g, ' ').trim().slice(0, max); }
+function eadTextoLongo(v, max) { return String(v == null ? '' : v).replace(/[<>]/g, '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, max); }
+function eadEmail(v) { const e = String(v || '').trim().toLowerCase().slice(0, 150); return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) ? e : ''; }
+function eadHash(t) { return crypto.createHash('sha256').update(String(t)).digest('hex'); }
+function eadFila(chave, fn) {
+  const ant = eadFilas.get(chave) || Promise.resolve();
+  const p = ant.then(fn, fn);
+  eadFilas.set(chave, p.catch(() => {}));
+  return p;
+}
+
+// ---- plano ----
+let eadPlanosCache = null;
+async function eadPlanoMinimoPreco() {
+  if (eadPlanosCache && Date.now() - eadPlanosCache.t < 600000) return eadPlanosCache.v;
+  let v = 0;
+  try {
+    const planos = await bubbleList('plan', [{ key: 'Is Active', constraint_type: 'equals', value: true }]);
+    const p = planos.find(x => String(x['Name'] || '').trim().toLowerCase() === EAD_PLANO_MINIMO);
+    v = p ? Number(p['Price MZN']) || 0 : 0;
+  } catch (e) { v = 0; }
+  eadPlanosCache = { t: Date.now(), v };
+  return v;
+}
+async function eadPermitidoPlano(plano) {
+  if (!plano || String(plano['Name'] || '').trim().toLowerCase() === 'free' || !(Number(plano['Price MZN']) > 0)) return false;
+  return Number(plano['Price MZN']) >= await eadPlanoMinimoPreco();
+}
+async function eadContaDono(owner) {
+  const user = await bubbleGet('user', owner).catch(() => null);
+  const pid = user ? await garantirPlano(owner, user).catch(() => null) : null;
+  const plano = pid ? await bubbleGet('plan', pid).catch(() => null) : null;
+  return { permitido: await eadPermitidoPlano(plano), plano: (plano && plano['Name']) || '', minimo: EAD_PLANO_MINIMO.charAt(0).toUpperCase() + EAD_PLANO_MINIMO.slice(1) };
+}
+
+// ---- configuração dos cursos ----
+function eadLimparAula(a, ant) {
+  ant = ant || {};
+  const tipo = ['video', 'texto', 'ao_vivo'].includes(a.tipo) ? a.tipo : 'video';
+  const out = {
+    id: /^[a-f0-9]{12}$/.test(String(a.id || '')) ? a.id : eadId(),
+    titulo: eadTexto(a.titulo, 140) || 'Aula sem título',
+    tipo,
+    previa: a.previa === true,
+    duracao_min: Math.max(0, Math.min(600, Math.round(Number(a.duracao_min) || 0))),
+    texto: eadTextoLongo(a.texto, 20000),
+    video_id: /^[a-f0-9-]{36}$/i.test(String(a.video_id || '')) ? String(a.video_id) : '',
+    materiais: (Array.isArray(a.materiais) ? a.materiais : []).slice(0, 20).map(m => ({ nome: eadTexto(m.nome, 120) || 'Material', url: /^https:\/\/[^\s"'<>]{5,400}$/.test(String(m.url || '')) ? String(m.url) : '', tamanho: Math.max(0, Number(m.tamanho) || 0) })).filter(m => m.url),
+    ao_vivo: null
+  };
+  if (tipo === 'ao_vivo') {
+    const v = a.ao_vivo || {};
+    const ini = Date.parse(v.inicio || '');
+    out.ao_vivo = { inicio: Number.isFinite(ini) ? new Date(ini).toISOString() : '', duracao_min: Math.max(15, Math.min(480, Math.round(Number(v.duracao_min) || 60))), estado: ['agendada', 'a decorrer', 'terminada'].includes(ant.ao_vivo && ant.ao_vivo.estado) ? ant.ao_vivo.estado : 'agendada', gravacao_video_id: /^[a-f0-9-]{36}$/i.test(String(v.gravacao_video_id || '')) ? String(v.gravacao_video_id) : '' };
+  }
+  return out;
+}
+function eadLimparConfig(c, ant) {
+  c = c || {}; ant = ant || { cursos: [] };
+  const aulasAnt = {};
+  (ant.cursos || []).forEach(cu => (cu.modulos || []).forEach(m => (m.aulas || []).forEach(a => { aulasAnt[a.id] = a; })));
+  const cursos = (Array.isArray(c.cursos) ? c.cursos : []).slice(0, 50).map(cu => ({
+    id: /^[a-f0-9]{12}$/.test(String(cu.id || '')) ? cu.id : eadId(),
+    titulo: eadTexto(cu.titulo, 120) || 'Curso sem título',
+    subtitulo: eadTexto(cu.subtitulo, 200),
+    descricao: eadTextoLongo(cu.descricao, 4000),
+    capa: /^https:\/\/[^\s"'<>]{5,400}$/.test(String(cu.capa || '')) ? String(cu.capa) : '',
+    preco: Math.max(0, Math.min(1000000, Math.round(Number(cu.preco) || 0))),
+    nivel: eadTexto(cu.nivel, 40),
+    professor: eadTexto(cu.professor, 80),
+    publicado: cu.publicado !== false,
+    certificado: cu.certificado !== false,
+    modulos: (Array.isArray(cu.modulos) ? cu.modulos : []).slice(0, 40).map(m => ({
+      id: /^[a-f0-9]{12}$/.test(String(m.id || '')) ? m.id : eadId(),
+      titulo: eadTexto(m.titulo, 120) || 'Módulo',
+      aulas: (Array.isArray(m.aulas) ? m.aulas : []).slice(0, 80).map(a => eadLimparAula(a, aulasAnt[a.id]))
+    }))
+  }));
+  return { v: 1, cursos, escola: eadTexto(c.escola, 80), assinatura: eadTexto(c.assinatura, 80), email: eadEmail(c.email) };
+}
+const EAD_DEMO = eadLimparConfig({ cursos: [{ titulo: 'O meu primeiro curso', subtitulo: 'Aprende passo a passo, ao teu ritmo.', descricao: 'Este é um curso de exemplo. No painel da Daniel IA, em "Gerir cursos", mudas o título, a capa, o preço e juntas as tuas aulas em vídeo, texto ou ao vivo.', preco: 0, modulos: [{ titulo: 'Começar', aulas: [{ titulo: 'Boas-vindas', tipo: 'texto', previa: true, duracao_min: 3, texto: 'Bem-vindo ao curso! Aqui vais encontrar as aulas, os materiais e o teu progresso.' }, { titulo: 'Primeira aula em vídeo', tipo: 'video', duracao_min: 12 }] }] }] });
+async function eadLer(siteId) {
+  const c = eadCacheCfg.get(siteId);
+  if (c && Date.now() - c.t < 30000) return c.v;
+  const j = await lerJsonStorage('ead/' + siteId + '/config.json');
+  const v = j ? eadLimparConfig(j, j) : null;
+  eadCacheCfg.set(siteId, { t: Date.now(), v });
+  return v;
+}
+async function eadLerOuDemo(siteId) { return (await eadLer(siteId)) || EAD_DEMO; }
+async function eadGravar(siteId, cfg) {
+  await gravarJsonStorage('ead/' + siteId + '/config.json', cfg);
+  eadCacheCfg.set(siteId, { t: Date.now(), v: cfg });
+}
+function eadAulas(curso) { const l = []; (curso.modulos || []).forEach(m => (m.aulas || []).forEach(a => l.push(a))); return l; }
+function eadAcharAula(cfg, cursoId, aulaId) {
+  const curso = (cfg.cursos || []).find(c => c.id === cursoId);
+  if (!curso) return {};
+  const aula = eadAulas(curso).find(a => a.id === aulaId);
+  return { curso, aula };
+}
+
+// ---- alunos ----
+async function eadIndiceAlunos(siteId) { return (await lerJsonStorage('ead/' + siteId + '/alunos.json')) || { porEmail: {}, lista: [] }; }
+async function eadLerAluno(siteId, id) { return /^[a-f0-9]{12}$/.test(String(id || '')) ? await lerJsonStorage('ead/' + siteId + '/alunos/' + id + '.json') : null; }
+async function eadGravarAluno(siteId, a) { await gravarJsonStorage('ead/' + siteId + '/alunos/' + a.id + '.json', a); }
+async function eadAlunoPorEmail(siteId, email, nome, criar) {
+  return eadFila('alunos:' + siteId, async () => {
+    const ind = await eadIndiceAlunos(siteId);
+    let id = ind.porEmail[email];
+    let a = id ? await eadLerAluno(siteId, id) : null;
+    if (!a) {
+      if (!criar) return null;
+      id = eadId();
+      a = { id, email, nome: eadTexto(nome, 80) || email.split('@')[0], criado: new Date().toISOString(), cursos: {}, progresso: {}, certificados: {}, sessoes: [] };
+      ind.porEmail[email] = id;
+      ind.lista.unshift({ id, email, nome: a.nome, criado: a.criado });
+      ind.lista = ind.lista.slice(0, 20000);
+      await gravarJsonStorage('ead/' + siteId + '/alunos.json', ind);
+      await eadGravarAluno(siteId, a);
+    } else if (nome && !a.nome) { a.nome = eadTexto(nome, 80); await eadGravarAluno(siteId, a); }
+    return a;
+  });
+}
+async function eadSessao(siteId, alunoId, token) {
+  if (!token) return null;
+  const a = await eadLerAluno(siteId, alunoId);
+  if (!a) return null;
+  const h = eadHash(token), agora = Date.now();
+  return (a.sessoes || []).some(s => s.h === h && Date.parse(s.exp) > agora) ? a : null;
+}
+function eadTemAcesso(aluno, cursoId) { const c = aluno && aluno.cursos && aluno.cursos[cursoId]; return !!(c && c.estado === 'activo'); }
+function eadProgresso(aluno, curso) {
+  const aulas = eadAulas(curso);
+  if (!aulas.length || !aluno) return { feitas: 0, total: aulas.length, pct: 0 };
+  const feitas = aulas.filter(a => aluno.progresso && aluno.progresso[a.id]).length;
+  return { feitas, total: aulas.length, pct: Math.round(feitas / aulas.length * 100) };
+}
+
+// ---- site ----
+async function eadSitePublico(siteId) {
+  if (!ID_VALIDO.test(String(siteId || ''))) return null;
+  const s = await bubbleGet('site', siteId).catch(() => null);
+  return s && s['Tipo'] === 'Curso' ? s : null;
+}
+function eadNomeSite(site, cfg) { return (cfg && cfg.escola) || (site && site['Nome']) || 'Cursos'; }
+function eadUrlSite(site) { return site['Dominio Personalizado'] && site['Dominio Estado'] === 'Activo' ? 'https://' + site['Dominio Personalizado'] + '/' : String(site['CDN URL'] || ''); }
+async function eadEmailDono(site, cfg) { return (cfg && cfg.email) || await emailDonoLoja(site, configLoja(site)); }
+function eadLinkPainel(siteId) { try { return new URL(APP_URL).origin + '/cursos/?site=' + encodeURIComponent(siteId); } catch (e) { return APP_URL; } }
+
+// ---- vídeo protegido (Bunny Stream) ----
+function eadEmbedVideo(videoId) {
+  if (!videoId || !STREAM_LIBRARY) return '';
+  let u = `https://iframe.mediadelivery.net/embed/${STREAM_LIBRARY}/${videoId}?autoplay=false&preload=true&responsive=true`;
+  if (STREAM_TOKEN_KEY) {
+    const exp = Math.floor(Date.now() / 1000) + 4 * 3600;
+    u += '&token=' + eadHash(STREAM_TOKEN_KEY + videoId + exp) + '&expires=' + exp;
+  }
+  return u;
+}
+
+// ---- Agora (AccessToken2, versão "007") ----
+function agoraBuf() {
+  const partes = [];
+  const b = {
+    u16(v) { const x = Buffer.alloc(2); x.writeUInt16LE(v >>> 0); partes.push(x); return b; },
+    u32(v) { const x = Buffer.alloc(4); x.writeUInt32LE(v >>> 0); partes.push(x); return b; },
+    bytes(buf) { b.u16(buf.length); partes.push(buf); return b; },
+    str(s) { return b.bytes(Buffer.from(String(s), 'utf8')); },
+    mapa(m) { const ks = Object.keys(m).map(Number).sort((x, y) => x - y); b.u16(ks.length); ks.forEach(k => { b.u16(k); b.u32(m[k]); }); return b; },
+    pack() { return Buffer.concat(partes); }
+  };
+  return b;
+}
+function agoraToken({ appId, certificado, canal, uid, publicar, segundos }) {
+  if (!appId || !certificado) return null; // projecto em "modo de testes" (só App ID): entra sem token
+  const emitido = Math.floor(Date.now() / 1000), expira = segundos || 3 * 3600;
+  const sal = crypto.randomInt(1, 99999999);
+  const hmac = (k, m) => crypto.createHmac('sha256', k).update(m).digest();
+  let assinatura = hmac(agoraBuf().u32(emitido).pack(), Buffer.from(certificado, 'utf8'));
+  assinatura = hmac(agoraBuf().u32(sal).pack(), assinatura);
+  const priv = { 1: expira };
+  if (publicar) { priv[2] = expira; priv[3] = expira; priv[4] = expira; }
+  const servico = Buffer.concat([agoraBuf().u16(1).mapa(priv).pack(), agoraBuf().str(canal).str(uid ? String(uid) : '').pack()]);
+  const info = Buffer.concat([agoraBuf().str(appId).u32(emitido).u32(expira).u32(sal).u16(1).pack(), servico]);
+  const assinado = hmac(assinatura, info);
+  return '007' + zlib.deflateSync(Buffer.concat([agoraBuf().bytes(assinado).pack(), info])).toString('base64');
+}
+function eadCanal(siteId, aulaId) { return ('ead' + siteId + aulaId).replace(/[^A-Za-z0-9]/g, '').slice(0, 60); }
+function eadAoVivoAberto(aula) {
+  if (!aula || aula.tipo !== 'ao_vivo' || !aula.ao_vivo) return false;
+  return aula.ao_vivo.estado === 'a decorrer';
+}
+
+// ---- respostas públicas ----
+function eadCursoResumo(curso, aluno) {
+  const aulas = eadAulas(curso);
+  const minutos = aulas.reduce((s, a) => s + (a.tipo === 'ao_vivo' ? (a.ao_vivo ? a.ao_vivo.duracao_min : 0) : a.duracao_min), 0);
+  const insc = aluno && aluno.cursos && aluno.cursos[curso.id];
+  return { id: curso.id, titulo: curso.titulo, subtitulo: curso.subtitulo, capa: curso.capa, preco: curso.preco, nivel: curso.nivel, professor: curso.professor, aulas: aulas.length, modulos: curso.modulos.length, minutos,
+    ao_vivo: aulas.filter(a => a.tipo === 'ao_vivo' && a.ao_vivo && a.ao_vivo.estado !== 'terminada').map(a => ({ id: a.id, titulo: a.titulo, inicio: a.ao_vivo.inicio, estado: a.ao_vivo.estado })).slice(0, 3),
+    acesso: eadTemAcesso(aluno, curso.id), inscricao: insc ? insc.estado : '', progresso: eadProgresso(aluno, curso), certificado: curso.certificado };
+}
+function eadAlunoPublico(a) { return a ? { id: a.id, nome: a.nome, email: a.email } : null; }
+async function eadAuth(b) {
+  if (!b.aluno_id || !b.token) return null;
+  return eadSessao(b.site_id, b.aluno_id, b.token);
+}
+function eadPagamentoOnline(site) { return modoEfectivoLoja(site).then(x => x.modo === 'daniel').catch(() => false); }
+
+app.post('/ead-catalogo', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!contar('ead-cat:' + ipDe(req), 240, MIN)) return res.json({ status: 'error', message: 'Muitos pedidos. Espera um pouco.' });
+    if (b.site_id === 'previa') return res.json({ status: 'success', response: { escola: 'A tua escola', cursos: EAD_DEMO.cursos.map(c => eadCursoResumo(c, null)), aluno: null, pagamentos: true, previa: true } });
+    const site = await eadSitePublico(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Plataforma não encontrada.' });
+    const cfg = await eadLerOuDemo(site._id);
+    const aluno = await eadAuth(b);
+    return res.json({ status: 'success', response: { escola: eadNomeSite(site, cfg), cursos: cfg.cursos.filter(c => c.publicado).map(c => eadCursoResumo(c, aluno)), aluno: eadAlunoPublico(aluno), pagamentos: await eadPagamentoOnline(site) } });
+  } catch (e) { console.error('[ead] catálogo:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível abrir os cursos.' }); }
+});
+app.post('/ead-curso', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const site = b.site_id === 'previa' ? null : await eadSitePublico(b.site_id);
+    if (b.site_id !== 'previa' && !site) return res.json({ status: 'error', message: 'Plataforma não encontrada.' });
+    const cfg = site ? await eadLerOuDemo(site._id) : EAD_DEMO;
+    const curso = cfg.cursos.find(c => c.id === b.curso_id && c.publicado) || (b.site_id === 'previa' ? cfg.cursos[0] : null);
+    if (!curso) return res.json({ status: 'error', message: 'Curso não encontrado.' });
+    const aluno = site ? await eadAuth(b) : null;
+    const acesso = eadTemAcesso(aluno, curso.id);
+    const cert = aluno && aluno.certificados && aluno.certificados[curso.id];
+    return res.json({ status: 'success', response: Object.assign(eadCursoResumo(curso, aluno), {
+      descricao: curso.descricao,
+      curriculo: curso.modulos.map(m => ({ id: m.id, titulo: m.titulo, aulas: m.aulas.map(a => ({ id: a.id, titulo: a.titulo, tipo: a.tipo, minutos: a.tipo === 'ao_vivo' ? (a.ao_vivo ? a.ao_vivo.duracao_min : 0) : a.duracao_min, previa: a.previa, aberta: acesso || a.previa, feita: !!(aluno && aluno.progresso && aluno.progresso[a.id]), inicio: a.ao_vivo ? a.ao_vivo.inicio : '', estado: a.ao_vivo ? a.ao_vivo.estado : '' })) })),
+      certificado_url: cert ? `${SELF_URL}/ead-certificado.pdf?c=${cert.codigo}` : '',
+      escola: eadNomeSite(site, cfg), pagamentos: site ? await eadPagamentoOnline(site) : true
+    }) });
+  } catch (e) { console.error('[ead] curso:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível abrir o curso.' }); }
+});
+app.post('/ead-aula', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const site = await eadSitePublico(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Plataforma não encontrada.' });
+    const cfg = await eadLerOuDemo(site._id);
+    const { curso, aula } = eadAcharAula(cfg, b.curso_id, b.aula_id);
+    if (!curso || !aula || !curso.publicado) return res.json({ status: 'error', message: 'Aula não encontrada.' });
+    const aluno = await eadAuth(b);
+    if (!aula.previa && !eadTemAcesso(aluno, curso.id)) return res.json({ status: 'error', codigo: aluno ? 'sem_acesso' : 'entrar', message: aluno ? 'Esta aula faz parte do curso. Inscreve-te para a veres.' : 'Entra com o teu email para veres esta aula.' });
+    const coms = (await lerJsonStorage('ead/' + site._id + '/comentarios/' + aula.id + '.json')) || [];
+    const gravacao = aula.tipo === 'ao_vivo' && aula.ao_vivo && aula.ao_vivo.gravacao_video_id ? eadEmbedVideo(aula.ao_vivo.gravacao_video_id) : '';
+    return res.json({ status: 'success', response: {
+      id: aula.id, titulo: aula.titulo, tipo: aula.tipo, minutos: aula.duracao_min, texto: aula.texto, materiais: aula.materiais,
+      video_url: aula.tipo === 'video' ? eadEmbedVideo(aula.video_id) : gravacao, video_pronto: aula.tipo === 'video' ? !!aula.video_id : !!gravacao,
+      ao_vivo: aula.tipo === 'ao_vivo' ? { inicio: aula.ao_vivo.inicio, duracao_min: aula.ao_vivo.duracao_min, estado: aula.ao_vivo.estado, disponivel: !!AGORA_APP_ID } : null,
+      feita: !!(aluno && aluno.progresso && aluno.progresso[aula.id]),
+      comentarios: coms.slice(-100).map(c => ({ id: c.id, nome: c.nome, texto: c.texto, quando: c.quando, resposta: c.resposta || null, meu: !!(aluno && c.aluno === aluno.id) })),
+      pode_comentar: eadTemAcesso(aluno, curso.id)
+    } });
+  } catch (e) { console.error('[ead] aula:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível abrir a aula.' }); }
+});
+
+// ---- entrar com email + código ----
+app.post('/ead-entrar', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const email = eadEmail(b.email);
+    if (!email) return res.json({ status: 'error', message: 'Escreve um email válido.' });
+    if (b.site_id === 'previa') return res.json({ status: 'error', message: 'Isto é só uma pré-visualização - no teu site o aluno recebe o código por email.' });
+    const site = await eadSitePublico(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Plataforma não encontrada.' });
+    if (!contar('ead-entrar:' + ipDe(req), 12, 15 * MIN) || !contar('ead-entrar:' + site._id + ':' + email, 5, 60 * MIN)) return res.json({ status: 'error', message: 'Pediste muitos códigos. Espera um pouco e tenta outra vez.' });
+    const cfg = await eadLerOuDemo(site._id);
+    const codigo = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    eadCodigos.set(site._id + ':' + email, { h: eadHash(codigo), exp: Date.now() + 15 * MIN, n: 0, nome: eadTexto(b.nome, 80) });
+    const ind = await eadIndiceAlunos(site._id);
+    await enviarEmail(email, codigo + ' é o teu código - ' + eadNomeSite(site, cfg), templateEmailAgenda({ negocio: eadNomeSite(site, cfg), titulo: 'O teu código de acesso', nome: '', texto: 'Usa este código para entrares nos cursos. É válido durante 15 minutos.', linhas: [['Código', codigo.slice(0, 3) + ' ' + codigo.slice(3)]], nota: 'Se não foste tu a pedir, ignora este email.' }));
+    return res.json({ status: 'success', response: { enviado: true, novo: !ind.porEmail[email] } });
+  } catch (e) { console.error('[ead] entrar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível enviar o código. Tenta outra vez.' }); }
+});
+app.post('/ead-codigo', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const email = eadEmail(b.email);
+    const site = await eadSitePublico(b.site_id);
+    if (!site || !email) return res.json({ status: 'error', message: 'Pedido inválido.' });
+    const k = site._id + ':' + email, c = eadCodigos.get(k);
+    if (!c || c.exp < Date.now()) return res.json({ status: 'error', codigo: 'expirou', message: 'O código expirou. Pede outro.' });
+    if (++c.n > 6) { eadCodigos.delete(k); return res.json({ status: 'error', codigo: 'expirou', message: 'Erraste o código muitas vezes. Pede outro.' }); }
+    if (eadHash(String(b.codigo || '').replace(/\D/g, '')) !== c.h) return res.json({ status: 'error', message: 'Código errado. Confirma no teu email.' });
+    eadCodigos.delete(k);
+    const a = await eadAlunoPorEmail(site._id, email, b.nome || c.nome, true);
+    const token = crypto.randomBytes(24).toString('hex');
+    await eadFila('aluno:' + a.id, async () => {
+      const x = await eadLerAluno(site._id, a.id);
+      const agora = Date.now();
+      x.sessoes = (x.sessoes || []).filter(s => Date.parse(s.exp) > agora).slice(-4);
+      x.sessoes.push({ h: eadHash(token), exp: new Date(agora + EAD_SESSAO_DIAS * 864e5).toISOString() });
+      if (b.nome && eadTexto(b.nome, 80).length >= 2) x.nome = eadTexto(b.nome, 80);
+      await eadGravarAluno(site._id, x);
+      Object.assign(a, x);
+    });
+    return res.json({ status: 'success', response: { aluno: eadAlunoPublico(a), token } });
+  } catch (e) { console.error('[ead] código:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível entrar. Tenta outra vez.' }); }
+});
+app.post('/ead-sair', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const a = await eadAuth(b);
+    if (a) await eadFila('aluno:' + a.id, async () => { const x = await eadLerAluno(b.site_id, a.id); x.sessoes = (x.sessoes || []).filter(s => s.h !== eadHash(b.token)); await eadGravarAluno(b.site_id, x); });
+    return res.json({ status: 'success', response: { saiu: true } });
+  } catch (e) { return res.json({ status: 'success', response: { saiu: true } }); }
+});
+
+// ---- inscrição e pagamento ----
+async function eadDarAcesso(siteId, alunoId, cursoId, dados) {
+  return eadFila('aluno:' + alunoId, async () => {
+    const a = await eadLerAluno(siteId, alunoId);
+    if (!a) return null;
+    a.cursos = a.cursos || {};
+    a.cursos[cursoId] = Object.assign({}, a.cursos[cursoId] || {}, { estado: 'activo', desde: (a.cursos[cursoId] && a.cursos[cursoId].estado === 'activo' && a.cursos[cursoId].desde) || new Date().toISOString() }, dados || {});
+    await eadGravarAluno(siteId, a);
+    return a;
+  });
+}
+app.post('/ead-inscrever', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const site = await eadSitePublico(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Plataforma não encontrada.' });
+    const aluno = await eadAuth(b);
+    if (!aluno) return res.json({ status: 'error', codigo: 'entrar', message: 'Entra com o teu email primeiro.' });
+    const cfg = await eadLerOuDemo(site._id);
+    const curso = cfg.cursos.find(c => c.id === b.curso_id && c.publicado);
+    if (!curso) return res.json({ status: 'error', message: 'Curso não encontrado.' });
+    if (eadTemAcesso(aluno, curso.id)) return res.json({ status: 'success', response: { acesso: true } });
+    if (!curso.preco) {
+      await eadDarAcesso(site._id, aluno.id, curso.id, { pago: 0, origem: 'gratis' });
+      eadAvisarInscricao(site, cfg, curso, aluno, 0).catch(() => {});
+      return res.json({ status: 'success', response: { acesso: true } });
+    }
+    if (!(await eadPagamentoOnline(site))) {
+      await eadFila('aluno:' + aluno.id, async () => { const x = await eadLerAluno(site._id, aluno.id); x.cursos[curso.id] = { estado: 'pendente', pedido: new Date().toISOString(), valor: curso.preco }; await eadGravarAluno(site._id, x); });
+      eadAvisarPedidoManual(site, cfg, curso, aluno, b.telefone).catch(() => {});
+      return res.json({ status: 'success', response: { acesso: false, manual: true, valor: curso.preco, whatsapp: configLoja(site).whatsapp || '' } });
+    }
+    const tel = soDigitos(b.telefone);
+    if (tel.length < 9 && b.metodo !== 'cartao') return res.json({ status: 'error', message: 'Escreve o número de telefone para pagar.' });
+    const encomendaId = await bubbleCreate('encomenda', {
+      'Site': site._id, 'Produtos Json': JSON.stringify([{ nome: 'Curso: ' + curso.titulo, preco_unitario: curso.preco, quantidade: 1 }]),
+      'Cliente Nome': aluno.nome, 'Cliente Telefone': tel, 'Cliente Email': aluno.email,
+      'Valor Total': curso.preco, 'Metodo': '', 'ID Pagamento': '', 'Estado': 'Pendente', 'Transaction ID': '', 'Webhook Processado': false,
+      'Notas': 'ead:' + site._id + ':' + curso.id + ':' + aluno.id
+    });
+    await eadFila('aluno:' + aluno.id, async () => { const x = await eadLerAluno(site._id, aluno.id); x.cursos[curso.id] = { estado: 'por pagar', encomenda: encomendaId, valor: curso.preco, pedido: new Date().toISOString() }; await eadGravarAluno(site._id, x); });
+    return res.json({ status: 'success', response: { acesso: false, encomenda_id: encomendaId, valor: curso.preco } });
+  } catch (e) { console.error('[ead] inscrever:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível fazer a inscrição. Tenta outra vez.' }); }
+});
+app.post('/ead-estado', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const aluno = await eadAuth(b);
+    if (!aluno) return res.json({ status: 'error', codigo: 'entrar', message: 'Entra outra vez.' });
+    const c = aluno.cursos && aluno.cursos[b.curso_id];
+    return res.json({ status: 'success', response: { acesso: eadTemAcesso(aluno, b.curso_id), estado: c ? c.estado : '' } });
+  } catch (e) { return res.json({ status: 'error', message: 'Sem ligação.' }); }
+});
+async function eadPagamentoConfirmado(encomenda) {
+  const [, siteId, cursoId, alunoId] = String(encomenda['Notas'] || '').split(':');
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  if (!site) return;
+  const a = await eadDarAcesso(siteId, alunoId, cursoId, { pago: Number(encomenda['Valor Total']) || 0, encomenda: encomenda._id, origem: 'pagamento' });
+  if (!a) return;
+  const cfg = await eadLerOuDemo(siteId);
+  const curso = cfg.cursos.find(c => c.id === cursoId) || { titulo: 'Curso', id: cursoId };
+  await eadAvisarInscricao(site, cfg, curso, a, Number(encomenda['Valor Total']) || 0);
+}
+async function eadAvisarInscricao(site, cfg, curso, aluno, valor) {
+  const escola = eadNomeSite(site, cfg), url = eadUrlSite(site);
+  await enviarEmail(aluno.email, 'Já tens acesso: ' + curso.titulo, templateEmailAgenda({ negocio: escola, titulo: 'Bem-vindo ao curso!', nome: aluno.nome, texto: 'A tua inscrição está feita. Entra com este email e começa já.', linhas: [['Curso', curso.titulo], ['Valor', valor ? valor.toLocaleString('pt-PT') + ' MZN' : 'Grátis']], botao: url ? { texto: 'Começar o curso', url: url + '#ead/curso/' + curso.id } : null })).catch(() => {});
+  const dono = await eadEmailDono(site, cfg).catch(() => '');
+  if (dono) await enviarEmail(dono, (valor ? 'Nova venda: ' : 'Novo aluno: ') + curso.titulo, templateEmailAgenda({ negocio: escola, titulo: valor ? 'Vendeste um curso!' : 'Tens um aluno novo', nome: '', texto: aluno.nome + ' inscreveu-se no curso.', linhas: [['Curso', curso.titulo], ['Aluno', aluno.nome], ['Email', aluno.email], ['Valor', valor ? valor.toLocaleString('pt-PT') + ' MZN' : 'Grátis']], botao: { texto: 'Ver alunos', url: eadLinkPainel(site._id) } })).catch(() => {});
+}
+async function eadAvisarPedidoManual(site, cfg, curso, aluno, telefone) {
+  const dono = await eadEmailDono(site, cfg).catch(() => '');
+  if (dono) await enviarEmail(dono, 'Pedido de inscrição: ' + curso.titulo, templateEmailAgenda({ negocio: eadNomeSite(site, cfg), titulo: 'Alguém quer comprar um curso', nome: '', texto: 'Os pagamentos online ainda não estão activos na tua conta (KYC). Combina o pagamento com o aluno e, depois de receberes, carrega em "Dar acesso".', linhas: [['Curso', curso.titulo], ['Aluno', aluno.nome], ['Email', aluno.email], ['Telefone', soDigitos(telefone)], ['Valor', curso.preco.toLocaleString('pt-PT') + ' MZN']], botao: { texto: 'Dar acesso', url: eadLinkPainel(site._id) + '#alunos' } })).catch(() => {});
+}
+
+// ---- progresso e certificado ----
+app.post('/ead-concluir', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const aluno = await eadAuth(b);
+    if (!aluno) return res.json({ status: 'error', codigo: 'entrar', message: 'Entra outra vez.' });
+    const site = await eadSitePublico(b.site_id);
+    const cfg = await eadLerOuDemo(b.site_id);
+    const { curso, aula } = eadAcharAula(cfg, b.curso_id, b.aula_id);
+    if (!site || !curso || !aula || (!aula.previa && !eadTemAcesso(aluno, curso.id))) return res.json({ status: 'error', message: 'Aula não encontrada.' });
+    let cert = null;
+    const a = await eadFila('aluno:' + aluno.id, async () => {
+      const x = await eadLerAluno(b.site_id, aluno.id);
+      x.progresso = x.progresso || {};
+      if (b.desfazer) delete x.progresso[aula.id]; else x.progresso[aula.id] = new Date().toISOString();
+      x.ultima = { curso: curso.id, aula: aula.id, quando: new Date().toISOString() };
+      const p = eadProgresso(x, curso);
+      if (p.pct === 100 && curso.certificado && eadTemAcesso(x, curso.id) && !(x.certificados && x.certificados[curso.id])) {
+        const codigo = crypto.randomBytes(5).toString('hex').toUpperCase();
+        const minutos = eadAulas(curso).reduce((s, l) => s + (l.tipo === 'ao_vivo' ? (l.ao_vivo ? l.ao_vivo.duracao_min : 0) : l.duracao_min), 0);
+        cert = { codigo, data: new Date().toISOString() };
+        x.certificados = x.certificados || {};
+        x.certificados[curso.id] = cert;
+        await gravarJsonStorage('ead/certificados/' + codigo + '.json', { codigo, site: b.site_id, curso: curso.id, curso_titulo: curso.titulo, aluno: x.id, nome: x.nome, escola: eadNomeSite(site, cfg), assinatura: cfg.assinatura || curso.professor || '', horas: Math.max(1, Math.round(minutos / 60)), data: cert.data });
+      }
+      await eadGravarAluno(b.site_id, x);
+      return x;
+    });
+    if (cert) enviarEmail(a.email, 'O teu certificado: ' + curso.titulo, templateEmailAgenda({ negocio: eadNomeSite(site, cfg), titulo: 'Parabéns, terminaste o curso!', nome: a.nome, texto: 'Aqui está o teu certificado de conclusão.', linhas: [['Curso', curso.titulo], ['Código', cert.codigo]], botao: { texto: 'Descarregar o certificado', url: `${SELF_URL}/ead-certificado.pdf?c=${cert.codigo}` } })).catch(() => {});
+    const certificado = a.certificados && a.certificados[curso.id];
+    return res.json({ status: 'success', response: { progresso: eadProgresso(a, curso), certificado_url: certificado ? `${SELF_URL}/ead-certificado.pdf?c=${certificado.codigo}` : '', novo_certificado: !!cert } });
+  } catch (e) { console.error('[ead] concluir:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível guardar o progresso.' }); }
+});
+
+// PDF A4 deitado, feito à mão (fontes padrão do PDF, acentos em WinAnsi)
+function pdfTexto(t) {
+  const b = Buffer.from(String(t).normalize('NFC').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/–|—/g, '-'), 'latin1');
+  let s = '';
+  for (const c of b) s += (c === 40 || c === 41 || c === 92) ? '\\' + String.fromCharCode(c) : (c < 32 || c > 126 ? '\\' + c.toString(8).padStart(3, '0') : String.fromCharCode(c));
+  return '(' + s + ')';
+}
+function pdfLargura(t, tam, negrito) { // aproximada (Helvetica): chega para centrar
+  let w = 0;
+  for (const ch of String(t)) w += /[ilI.,;:'!|]/.test(ch) ? 0.28 : /[mwMW]/.test(ch) ? 0.85 : /[A-Z]/.test(ch) ? 0.68 : ch === ' ' ? 0.28 : 0.55;
+  return w * tam * (negrito ? 1.06 : 1);
+}
+function certificadoPdf(c) {
+  const W = 842, H = 595;
+  const linhas = [];
+  const centro = (txt, y, tam, fonte, cor) => { const x = (W - pdfLargura(txt, tam, fonte === 'F2')) / 2; linhas.push(`${cor || '0.10 0.04 0.15'} rg BT /${fonte} ${tam} Tf ${x.toFixed(1)} ${y} Td ${pdfTexto(txt)} Tj ET`); };
+  const data = new Date(Date.parse(c.data) + 2 * 3600000);
+  const meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  linhas.push('0.98 0.97 0.99 rg 0 0 ' + W + ' ' + H + ' re f');
+  linhas.push('0.26 0.04 0.38 rg 0 0 ' + W + ' 14 re f 0 ' + (H - 14) + ' ' + W + ' 14 re f');
+  linhas.push('0.54 0.78 0.02 rg 0 14 ' + W + ' 4 re f 0 ' + (H - 18) + ' ' + W + ' 4 re f');
+  linhas.push('0.26 0.04 0.38 RG 1.2 w 36 36 ' + (W - 72) + ' ' + (H - 72) + ' re S');
+  linhas.push('0.85 0.80 0.90 RG 0.6 w 44 44 ' + (W - 88) + ' ' + (H - 88) + ' re S');
+  centro(String(c.escola || '').toUpperCase(), 490, 13, 'F2', '0.33 0.55 0.02');
+  centro('CERTIFICADO DE CONCLUSÃO', 440, 30, 'F2', '0.26 0.04 0.38');
+  centro('Certificamos que', 395, 14, 'F1', '0.40 0.35 0.45');
+  centro(c.nome, 345, 34, 'F3');
+  linhas.push('0.54 0.78 0.02 RG 1.5 w ' + (W / 2 - 160) + ' 330 m ' + (W / 2 + 160) + ' 330 l S');
+  centro('concluiu com sucesso o curso', 300, 14, 'F1', '0.40 0.35 0.45');
+  centro(c.curso_titulo, 262, 22, 'F2');
+  centro('Carga horária: ' + c.horas + (c.horas === 1 ? ' hora' : ' horas') + '  ·  ' + data.getUTCDate() + ' de ' + meses[data.getUTCMonth()] + ' de ' + data.getUTCFullYear(), 228, 12, 'F1', '0.40 0.35 0.45');
+  if (c.assinatura) { linhas.push('0.40 0.35 0.45 RG 0.8 w ' + (W / 2 - 110) + ' 150 m ' + (W / 2 + 110) + ' 150 l S'); centro(c.assinatura, 132, 12, 'F2'); centro('Formador', 116, 10, 'F1', '0.40 0.35 0.45'); }
+  centro('Código de verificação: ' + c.codigo + '  ·  ' + SELF_URL.replace(/^https?:\/\//, '') + '/ead-certificado?c=' + c.codigo, 62, 9, 'F1', '0.50 0.45 0.55');
+  const conteudo = Buffer.from(linhas.join('\n'), 'latin1');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>`,
+    null,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic /Encoding /WinAnsiEncoding >>',
+    `<< /Title ${pdfTexto('Certificado - ' + c.curso_titulo)} /Producer (Daniel IA) >>`
+  ];
+  const partes = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1')];
+  const offs = [];
+  let pos = partes[0].length;
+  objs.forEach((o, i) => {
+    const corpo = o === null ? Buffer.concat([Buffer.from(`${i + 1} 0 obj\n<< /Length ${conteudo.length} >>\nstream\n`, 'latin1'), conteudo, Buffer.from('\nendstream\nendobj\n', 'latin1')]) : Buffer.from(`${i + 1} 0 obj\n${o}\nendobj\n`, 'latin1');
+    offs.push(pos); partes.push(corpo); pos += corpo.length;
+  });
+  const xref = 'xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' + offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info ${objs.length} 0 R >>\nstartxref\n${pos}\n%%EOF\n`;
+  partes.push(Buffer.from(xref, 'latin1'));
+  return Buffer.concat(partes);
+}
+async function eadCertificadoPorCodigo(c) { return /^[A-F0-9]{10}$/.test(String(c || '')) ? await lerJsonStorage('ead/certificados/' + c + '.json') : null; }
+app.get('/ead-certificado.pdf', async (req, res) => {
+  try {
+    const c = await eadCertificadoPorCodigo(req.query.c);
+    if (!c) return res.status(404).send('Certificado não encontrado.');
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', 'inline; filename="certificado-' + c.codigo + '.pdf"');
+    res.set('Cache-Control', 'private, max-age=3600');
+    return res.send(certificadoPdf(c));
+  } catch (e) { return res.status(500).send('Não foi possível gerar o certificado.'); }
+});
+app.get('/ead-certificado', async (req, res) => {
+  const c = await eadCertificadoPorCodigo(req.query.c).catch(() => null);
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  const corpo = c
+    ? `<div class="ok">✓</div><h1>Certificado válido</h1><p><b>${escaparHtml(c.nome)}</b> concluiu o curso <b>${escaparHtml(c.curso_titulo)}</b> (${c.horas} h) em ${escaparHtml(formatarDataPt(new Date(c.data)))}.</p><p class="d">${escaparHtml(c.escola)} · código ${escaparHtml(c.codigo)}</p><a href="${SELF_URL}/ead-certificado.pdf?c=${escaparHtml(c.codigo)}">Ver o certificado</a>`
+    : '<div class="ok no">!</div><h1>Certificado não encontrado</h1><p>Confirma o código de verificação.</p>';
+  res.send(`<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Verificar certificado</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#F6F2FA;color:#1A0A27}main{width:min(480px,100%);background:#fff;border:1px solid #EAE2F2;border-radius:20px;padding:30px;text-align:center}.ok{width:56px;height:56px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;background:#89C804;color:#1A0A27;font-size:28px;font-weight:800}.ok.no{background:#FDE7EC;color:#B0123A}h1{margin:0 0 8px;font-size:24px}p{color:#5E5568;line-height:1.6}.d{font-size:13px}a{display:inline-block;margin-top:10px;padding:12px 20px;border-radius:12px;background:#430960;color:#fff;font-weight:700;text-decoration:none}</style></head><body><main>${corpo}</main></body></html>`);
+});
+
+// ---- comentários ----
+app.post('/ead-comentar', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const aluno = await eadAuth(b);
+    if (!aluno) return res.json({ status: 'error', codigo: 'entrar', message: 'Entra para comentares.' });
+    const site = await eadSitePublico(b.site_id);
+    const cfg = await eadLerOuDemo(b.site_id);
+    const { curso, aula } = eadAcharAula(cfg, b.curso_id, b.aula_id);
+    if (!site || !aula || !eadTemAcesso(aluno, curso.id)) return res.json({ status: 'error', message: 'Só os alunos do curso podem comentar.' });
+    const texto = eadTextoLongo(b.texto, 1500);
+    if (texto.length < 2) return res.json({ status: 'error', message: 'Escreve o teu comentário.' });
+    if (!contar('ead-com:' + aluno.id, 20, 60 * MIN)) return res.json({ status: 'error', message: 'Muitos comentários seguidos. Espera um pouco.' });
+    const c = { id: eadId(), aluno: aluno.id, nome: aluno.nome, texto, quando: new Date().toISOString(), aula: aula.id, curso: curso.id };
+    await eadFila('com:' + site._id + ':' + aula.id, async () => {
+      const l = (await lerJsonStorage('ead/' + site._id + '/comentarios/' + aula.id + '.json')) || [];
+      l.push(c);
+      await gravarJsonStorage('ead/' + site._id + '/comentarios/' + aula.id + '.json', l.slice(-500));
+      const ind = (await lerJsonStorage('ead/' + site._id + '/comentarios-recentes.json')) || [];
+      ind.unshift({ id: c.id, aula: aula.id, curso: curso.id, aula_titulo: aula.titulo, curso_titulo: curso.titulo, nome: c.nome, texto: c.texto.slice(0, 300), quando: c.quando });
+      await gravarJsonStorage('ead/' + site._id + '/comentarios-recentes.json', ind.slice(0, 300));
+    });
+    if (contar('ead-com-aviso:' + site._id, 1, 30 * MIN)) {
+      const dono = await eadEmailDono(site, cfg).catch(() => '');
+      if (dono) enviarEmail(dono, 'Nova pergunta numa aula: ' + aula.titulo, templateEmailAgenda({ negocio: eadNomeSite(site, cfg), titulo: 'Um aluno comentou uma aula', nome: '', texto: '"' + texto.slice(0, 300) + '"', linhas: [['Curso', curso.titulo], ['Aula', aula.titulo], ['Aluno', aluno.nome]], botao: { texto: 'Responder', url: eadLinkPainel(site._id) + '#comentarios' } })).catch(() => {});
+    }
+    return res.json({ status: 'success', response: { comentario: { id: c.id, nome: c.nome, texto: c.texto, quando: c.quando, resposta: null, meu: true } } });
+  } catch (e) { console.error('[ead] comentar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível comentar.' }); }
+});
+
+// ---- aulas ao vivo (Agora) ----
+function eadChat(siteId, aulaId) { const k = siteId + ':' + aulaId; if (!eadChats.has(k)) eadChats.set(k, []); return eadChats.get(k); }
+app.post('/ead-ao-vivo', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const aluno = await eadAuth(b);
+    const site = await eadSitePublico(b.site_id);
+    const cfg = site ? await eadLerOuDemo(site._id) : null;
+    const { curso, aula } = cfg ? eadAcharAula(cfg, b.curso_id, b.aula_id) : {};
+    if (!aula || aula.tipo !== 'ao_vivo') return res.json({ status: 'error', message: 'Aula ao vivo não encontrada.' });
+    if (!aula.previa && !eadTemAcesso(aluno, curso.id)) return res.json({ status: 'error', codigo: aluno ? 'sem_acesso' : 'entrar', message: 'Esta aula é para os alunos do curso.' });
+    if (!AGORA_APP_ID) return res.json({ status: 'error', message: 'As aulas ao vivo ainda não estão ligadas.' });
+    if (!eadAoVivoAberto(aula)) return res.json({ status: 'success', response: { estado: aula.ao_vivo.estado, inicio: aula.ao_vivo.inicio } });
+    const uid = crypto.randomInt(100000, 2000000000);
+    const canal = eadCanal(site._id, aula.id);
+    return res.json({ status: 'success', response: { estado: 'a decorrer', app_id: AGORA_APP_ID, canal, uid, token: agoraToken({ appId: AGORA_APP_ID, certificado: AGORA_APP_CERTIFICATE, canal, uid, publicar: false, segundos: 4 * 3600 }) } });
+  } catch (e) { console.error('[ead] ao vivo:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível entrar na aula ao vivo.' }); }
+});
+app.post('/ead-chat', async (req, res) => {
+  try {
+    const b = req.body || {};
+    let quem = null, dono = false;
+    if (b.dono && b.owner) {
+      const s = await bubbleGet('site', b.site_id).catch(() => null);
+      if (s && s['Owner'] === b.owner && await validarSessao(b.owner, b.token)) { quem = { nome: (await eadLerOuDemo(s._id)).assinatura || 'Formador' }; dono = true; }
+    } else quem = await eadAuth(b);
+    if (!quem) return res.json({ status: 'error', codigo: 'entrar', message: 'Entra para usares o chat.' });
+    const l = eadChat(b.site_id, String(b.aula_id || '').slice(0, 20));
+    if (b.apagar && dono) { const i = l.findIndex(m => m.id === b.apagar); if (i >= 0) l.splice(i, 1); }
+    const texto = eadTexto(b.texto, 500);
+    if (texto) {
+      if (!contar('ead-chat:' + (dono ? 'dono:' + b.owner : quem.id), 30, MIN)) return res.json({ status: 'error', message: 'Devagar :) espera uns segundos.' });
+      l.push({ id: eadId(), nome: quem.nome, texto, quando: Date.now(), dono });
+      if (l.length > 300) l.splice(0, l.length - 300);
+    }
+    const desde = Number(b.desde) || 0;
+    return res.json({ status: 'success', response: { mensagens: l.filter(m => m.quando > desde).slice(-80), agora: Date.now() } });
+  } catch (e) { return res.json({ status: 'error', message: 'Sem ligação.' }); }
+});
+
+// ---- dono (página /cursos/ da app) ----
+async function eadSiteDoDono(req, res) {
+  const site = req.body.site_id ? await bubbleGet('site', req.body.site_id).catch(() => null) : null;
+  if (!site || site['Owner'] !== req.body.owner) { res.json({ status: 'error', message: 'Não tens permissão para este site.' }); return null; }
+  return site;
+}
+async function eadResumoDono(site, cfg) {
+  const ind = await eadIndiceAlunos(site._id);
+  return { config: cfg, site: { id: site._id, nome: site['Nome'] || '', url: eadUrlSite(site), tipo: site['Tipo'] || '' }, alunos: ind.lista.length, conta: await eadContaDono(site['Owner']), pagamentos: await eadPagamentoOnline(site), ao_vivo_ligado: !!AGORA_APP_ID, stream_ligado: !!(STREAM_LIBRARY && STREAM_KEY), video_protegido: !!STREAM_TOKEN_KEY };
+}
+app.post('/ead-dono-ler', async (req, res) => {
+  try { const site = await eadSiteDoDono(req, res); if (!site) return; return res.json({ status: 'success', response: await eadResumoDono(site, (await eadLer(site._id)) || EAD_DEMO) }); }
+  catch (e) { console.error('[ead] dono ler:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível abrir os cursos.' }); }
+});
+app.post('/ead-dono-guardar', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    const ant = (await eadLer(site._id)) || { cursos: [] };
+    const cfg = eadLimparConfig(req.body.config || {}, ant);
+    await eadGravar(site._id, cfg);
+    return res.json({ status: 'success', response: await eadResumoDono(site, cfg) });
+  } catch (e) { console.error('[ead] dono guardar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível guardar.' }); }
+});
+const EAD_TIPOS_MAT = { 'application/pdf': 'pdf', 'application/zip': 'zip', 'application/x-zip-compressed': 'zip', 'application/msword': 'doc', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'audio/mpeg': 'mp3', 'text/plain': 'txt' };
+app.post('/ead-dono-ficheiro', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    const m = /^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(req.body.ficheiro || ''));
+    const capa = req.body.capa === true;
+    const tipos = capa ? { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' } : EAD_TIPOS_MAT;
+    if (!m || !tipos[m[1].toLowerCase()]) return res.json({ status: 'error', message: capa ? 'A capa tem de ser PNG, JPG ou WEBP.' : 'Tipo de ficheiro não aceite (PDF, Word, PowerPoint, Excel, ZIP, imagens, MP3 ou TXT).' });
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > (capa ? 5 : 10) * 1024 * 1024) return res.json({ status: 'error', message: capa ? 'A capa é grande demais (máximo 5 MB).' : 'O ficheiro é grande demais (máximo 10 MB).' });
+    const nome = eadTexto(req.body.nome, 120).replace(/[^\w.\- ]+/g, '').replace(/\s+/g, '-').slice(0, 60) || 'ficheiro';
+    const ext = tipos[m[1].toLowerCase()];
+    const caminho = 'ead/' + site._id + '/' + (capa ? 'capas/' : 'materiais/') + eadId() + '-' + nome.replace(/\.[a-z0-9]+$/i, '') + '.' + ext;
+    const url = await uploadParaBunnyBase(caminho, buf, m[1].toLowerCase());
+    return res.json({ status: 'success', response: { url, tamanho: buf.length, nome: eadTexto(req.body.nome, 120) } });
+  } catch (e) { console.error('[ead] ficheiro:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível carregar o ficheiro.' }); }
+});
+app.post('/ead-dono-video-iniciar', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    if (!STREAM_LIBRARY || !STREAM_KEY) return res.json({ status: 'error', message: 'Os vídeos ainda não estão ligados (Bunny Stream).' });
+    const videoId = await criarVideoBunnyStream(eadTexto(req.body.titulo, 120) || 'Aula');
+    const expire = Math.floor(Date.now() / 1000) + 24 * 3600;
+    return res.json({ status: 'success', response: { video_id: videoId, library_id: STREAM_LIBRARY, expire, signature: assinaturaTusBunny(videoId, expire), tus_endpoint: 'https://video.bunnycdn.com/tusupload' } });
+  } catch (e) { console.error('[ead] vídeo iniciar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível preparar o envio do vídeo.' }); }
+});
+app.post('/ead-dono-video-estado', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    if (!/^[a-f0-9-]{36}$/i.test(String(req.body.video_id || ''))) return res.json({ status: 'error', message: 'Vídeo inválido.' });
+    const v = await estadoVideoBunnyStream(req.body.video_id);
+    const st = Number(v.status);
+    return res.json({ status: 'success', response: { estado: st === 4 ? 'pronto' : (st === 5 || st === 6 ? 'erro' : 'a converter'), progresso: Number(v.encodeProgress) || 0, minutos: Math.max(1, Math.round((Number(v.length) || 0) / 60)), embed: st === 4 ? eadEmbedVideo(req.body.video_id) : '' } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível ver o estado do vídeo.' }); }
+});
+app.post('/ead-dono-alunos', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    const cfg = (await eadLer(site._id)) || EAD_DEMO;
+    const ind = await eadIndiceAlunos(site._id);
+    const lista = await Promise.all(ind.lista.slice(0, 300).map(async x => {
+      const a = await eadLerAluno(site._id, x.id);
+      if (!a) return null;
+      return { id: a.id, nome: a.nome, email: a.email, criado: a.criado, ultima: a.ultima ? a.ultima.quando : '',
+        cursos: cfg.cursos.map(c => { const i = a.cursos[c.id]; return i ? { id: c.id, titulo: c.titulo, estado: i.estado, valor: i.valor || i.pago || 0, desde: i.desde || i.pedido || '', progresso: eadProgresso(a, c).pct, certificado: !!(a.certificados && a.certificados[c.id]) } : null; }).filter(Boolean) };
+    }));
+    const l = lista.filter(Boolean);
+    const receita = l.reduce((s, a) => s + a.cursos.filter(c => c.estado === 'activo').reduce((t, c) => t + (Number(c.valor) || 0), 0), 0);
+    return res.json({ status: 'success', response: { total: ind.lista.length, alunos: l, receita, pendentes: l.filter(a => a.cursos.some(c => c.estado === 'pendente')).length } });
+  } catch (e) { console.error('[ead] alunos:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível ler os alunos.' }); }
+});
+app.post('/ead-dono-aluno', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    const cfg = (await eadLer(site._id)) || EAD_DEMO;
+    const curso = cfg.cursos.find(c => c.id === req.body.curso_id);
+    if (!curso) return res.json({ status: 'error', message: 'Escolhe o curso.' });
+    let aluno = req.body.aluno_id ? await eadLerAluno(site._id, req.body.aluno_id) : null;
+    if (!aluno && req.body.email) {
+      const email = eadEmail(req.body.email);
+      if (!email) return res.json({ status: 'error', message: 'Escreve um email válido.' });
+      aluno = await eadAlunoPorEmail(site._id, email, req.body.nome, true);
+    }
+    if (!aluno) return res.json({ status: 'error', message: 'Aluno não encontrado.' });
+    if (req.body.accao === 'tirar') {
+      await eadFila('aluno:' + aluno.id, async () => { const x = await eadLerAluno(site._id, aluno.id); delete x.cursos[curso.id]; await eadGravarAluno(site._id, x); });
+    } else {
+      const ant = aluno.cursos && aluno.cursos[curso.id];
+      const a = await eadDarAcesso(site._id, aluno.id, curso.id, { origem: 'dono', pago: ant && ant.estado === 'pendente' ? (Number(ant.valor) || 0) : (Number(req.body.valor) || 0) });
+      await eadAvisarInscricao(site, cfg, curso, a, 0).catch(() => {});
+    }
+    return res.json({ status: 'success', response: { feito: true } });
+  } catch (e) { console.error('[ead] aluno:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível.' }); }
+});
+app.post('/ead-dono-comentarios', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    const b = req.body;
+    if (b.aula_id && b.comentario_id) {
+      await eadFila('com:' + site._id + ':' + b.aula_id, async () => {
+        const l = (await lerJsonStorage('ead/' + site._id + '/comentarios/' + b.aula_id + '.json')) || [];
+        const i = l.findIndex(c => c.id === b.comentario_id);
+        if (i < 0) return;
+        if (b.apagar) l.splice(i, 1); else l[i].resposta = { texto: eadTextoLongo(b.resposta, 1500), quando: new Date().toISOString() };
+        await gravarJsonStorage('ead/' + site._id + '/comentarios/' + b.aula_id + '.json', l);
+        const ind = (await lerJsonStorage('ead/' + site._id + '/comentarios-recentes.json')) || [];
+        const j = ind.findIndex(c => c.id === b.comentario_id);
+        if (j >= 0) { if (b.apagar) ind.splice(j, 1); else ind[j].respondido = true; await gravarJsonStorage('ead/' + site._id + '/comentarios-recentes.json', ind); }
+      });
+    }
+    const ind = (await lerJsonStorage('ead/' + site._id + '/comentarios-recentes.json')) || [];
+    return res.json({ status: 'success', response: { comentarios: ind.slice(0, 150) } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível ler os comentários.' }); }
+});
+app.post('/ead-dono-ao-vivo', async (req, res) => {
+  try {
+    const site = await eadSiteDoDono(req, res); if (!site) return;
+    if (!AGORA_APP_ID) return res.json({ status: 'error', message: 'Falta ligar as aulas ao vivo: põe AGORA_APP_ID (e AGORA_APP_CERTIFICATE) no Bunny.' });
+    const cfg = (await eadLer(site._id)) || null;
+    const { aula } = cfg ? eadAcharAula(cfg, req.body.curso_id, req.body.aula_id) : {};
+    if (!aula || aula.tipo !== 'ao_vivo') return res.json({ status: 'error', message: 'Guarda primeiro a aula ao vivo.' });
+    const accao = req.body.accao;
+    if (accao === 'comecar' || accao === 'terminar') {
+      aula.ao_vivo.estado = accao === 'comecar' ? 'a decorrer' : 'terminada';
+      if (accao === 'comecar') aula.ao_vivo.comecou = new Date().toISOString();
+      await eadGravar(site._id, cfg);
+    }
+    const canal = eadCanal(site._id, aula.id), uid = 1;
+    return res.json({ status: 'success', response: { estado: aula.ao_vivo.estado, app_id: AGORA_APP_ID, canal, uid, token: accao === 'terminar' ? null : agoraToken({ appId: AGORA_APP_ID, certificado: AGORA_APP_CERTIFICATE, canal, uid, publicar: true, segundos: 6 * 3600 }) } });
+  } catch (e) { console.error('[ead] dono ao vivo:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível.' }); }
+});
+['/ead-dono-ler', '/ead-dono-guardar', '/ead-dono-ficheiro', '/ead-dono-video-iniciar', '/ead-dono-video-estado', '/ead-dono-alunos', '/ead-dono-aluno', '/ead-dono-comentarios', '/ead-dono-ao-vivo'].forEach(r => ROTAS_PRIVADAS.add(r));
+
+app.get('/ead.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(EAD_JS);
+});
+globalThis.__limparKycCache = () => cacheKycLoja.clear();
+globalThis.__danielEad = { agoraToken, certificadoPdf, eadLimparConfig, eadPermitidoPlano, codigos: eadCodigos };
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
