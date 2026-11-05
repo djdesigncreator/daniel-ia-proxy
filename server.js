@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.77.0'; // 31/10/2026 - escrever por voz; validade dos sites no painel; sites em pausa (Free 10 dias, pago 5 dias depois de expirar)
+const VERSION = '1.78.0'; // 02/11/2026 - Inspiração IA (biblioteca de referências no painel); escrever por voz; validade dos sites
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -2241,10 +2241,12 @@ ${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], ti
 IMPORTANTE: o site tem de parecer acabado, profissional e RICO - nunca com ar de esqueleto, com caixas vazias, pouca informação ou textos de enchimento. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, o site é completo e cheio de informação útil, como o de uma marca líder do sector (ver SITE RICO E VIVO).
 ${guia}${padroesDoTipo(tipo)}${instrucaoRiqueza(tipo)}${INSTRUCAO_ICONES}${instrucaoPaginas(paginas, tipo)}${quiz ? INSTRUCAO_QUIZ : ''}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
+  // 1.78.0: sem imagem de referência da pessoa, a IA recebe um print da biblioteca de inspiração
+  const insp = !(referencia && referencia.url) ? await inspiracaoParaSite(siteId, tipo, prompt).catch(() => null) : null;
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Idioma do site: ${IDIOMAS_SITE[lingua].nome}
-${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${siteId && videoHeroPorSite.has(siteId) ? INSTRUCAO_VIDEO_HERO : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
+${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${siteId && videoHeroPorSite.has(siteId) ? INSTRUCAO_VIDEO_HERO : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${insp ? instrucaoInspiracao(insp) : ''}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
 Descrição pedida pela pessoa: ${prompt}`;
 
   // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
@@ -2252,12 +2254,15 @@ Descrição pedida pela pessoa: ${prompt}`;
   // para copiar um estilo ou para usar como conteúdo. Sem imagens, o
   // pedido continua a ser simplesmente texto, como sempre foi.
   let userContent = textoPedido;
-  if ((imagensUrls && imagensUrls.length) || (referencia && referencia.url)) {
+  if ((imagensUrls && imagensUrls.length) || (referencia && referencia.url) || insp) {
     userContent = [{ type: 'text', text: textoPedido }];
     (imagensUrls || []).forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
     if (referencia && referencia.url) {
       userContent.push({ type: 'text', text: 'IMAGEM DE REFERÊNCIA (estilo a seguir):' });
       userContent.push({ type: 'image_url', image_url: { url: referencia.url, detail: 'high' } });
+    } else if (insp) {
+      userContent.push({ type: 'text', text: 'INSPIRAÇÃO DA CASA (só estilo, não é conteúdo):' });
+      userContent.push({ type: 'image_url', image_url: { url: insp.url, detail: 'high' } });
     }
   }
 
@@ -18559,10 +18564,12 @@ async function guardarVideoSite(siteId, v) {
 // ---- 1. O conceito (a IA escreve os dois quadros e o movimento) ----
 async function conceitoVideo({ nome, tipo, prompt, ideia, marca }) {
   const pa = marca ? paletaDaMarca(marca) : null;
+  const ideiasCasa = await ideiasVideoInspiracao(tipo, prompt).catch(() => ''); // 1.78.0: biblioteca de inspiração
   const pedido = [
     'Negócio: ' + nome + ' (' + tipo + ').',
     'Descrição: ' + String(prompt || '').slice(0, 1500),
     ideia ? 'A pessoa quer esta ideia para o vídeo: ' + String(ideia).slice(0, 600) : '',
+    ideiasCasa,
     pa && !pa.mono ? 'Cores da marca: principal ' + pa.primaria + ', destaque ' + pa.destaque + '. Usa-as no fundo ou em pormenores.' : '',
     'Cria um vídeo de 8 segundos para o hero do site: uma TRANSFORMAÇÃO marcante e bonita do produto ou do serviço principal (ex: café a cair num cubo de gelo que se torna um copo; um prédio a erguer-se do esqueleto à fachada de vidro; ingredientes que voam e se juntam num prato; um grão de café que derrete e vira cappuccino).',
     'Regras: câmara parada ou muito lenta, fundo limpo e liso (claro e quente, ou na cor da marca), o assunto bem centrado e grande, luz de estúdio, aspecto de anúncio premium, realista. Sem pessoas, sem mãos, sem texto, sem letras, sem logótipos.',
@@ -19300,6 +19307,162 @@ app.post('/voz-transcrever', async (req, res) => {
   }
 });
 ROTAS_PRIVADAS.add('/voz-transcrever');
+
+
+// ======================================================
+// Inspiração IA (1.78.0)
+// ------------------------------------------------------
+// Biblioteca de referências que o admin carrega no painel:
+//  - "sites": prints de sites bonitos, marcados por tipo de projecto,
+//    palavras do sector e estilo. Em cada criação sem imagem de referência
+//    da pessoa, a IA recebe 1 print da biblioteca (o que mais combina com o
+//    pedido) como inspiração de ESTILO. Nas 3 versões, cada versão recebe
+//    um print diferente - mais variedade.
+//  - "vídeos": vídeos de hero de que a equipa gosta, com a ideia escrita.
+//    As ideias entram no conceito dos vídeos cinemáticos do Business.
+// Ficheiros: inspiracao/indice.json, inspiracao/img/<id>.<ext>,
+// inspiracao/vid/<id>.<ext> e inspiracao/vid/<id>-poster.jpg.
+// ======================================================
+const INSP_MAX_IMG = 8 * 1024 * 1024, INSP_MAX_VID = 10 * 1024 * 1024;
+const INSP_TIPOS_IMG = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const INSP_TIPOS_VID = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
+const INSP_TIPOS_PROJ = ['E-commerce', 'Checkout', 'Landing Page', 'Portefólio', 'Blog', 'Galeria', 'Agendamento'];
+const INSP_ESTILOS = ['Moderno', 'Luxo', 'Minimalista', 'Colorido', 'Clássico', 'Ousado', 'Natural', 'Tecnológico'];
+let inspIndice = null, inspPromessa = null, inspGravacao = Promise.resolve();
+function carregarInspiracao() {
+  if (inspIndice) return Promise.resolve(inspIndice);
+  if (!inspPromessa) inspPromessa = (async () => {
+    let j = null;
+    try { j = JSON.parse((await descarregarDoBunnyBase('inspiracao/indice.json')).toString('utf8')); } catch (e) { j = null; }
+    inspIndice = { activo: !(j && j.activo === false), itens: (j && Array.isArray(j.itens)) ? j.itens : [] };
+    return inspIndice;
+  })();
+  return inspPromessa;
+}
+function gravarInspiracao() {
+  inspGravacao = inspGravacao.then(() => uploadParaBunnyBase('inspiracao/indice.json', Buffer.from(JSON.stringify(inspIndice), 'utf8'), 'application/json; charset=utf-8'))
+    .catch(e => console.error('[inspiração] não gravei o índice:', e.message || e));
+  return inspGravacao;
+}
+function inspNormal(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]+/g, ' '); }
+const INSP_PARAR = new Set('para com uma umas uns pelo pela pelos pelas sobre entre muito muita mais menos tudo todo toda todos todas onde quando como esse essa este esta isso isto site sites loja lojas pagina paginas nosso nossa nossos nossas cidade maputo matola mocambique servicos servico produtos produto empresa negocio clientes cliente'.split(' '));
+function inspPalavras(t) { return new Set(inspNormal(t).split(/\s+/).filter(w => w.length >= 4 && !INSP_PARAR.has(w))); }
+function inspPontos(item, tipo, palavras) {
+  let p = 0;
+  if (item.tipos && item.tipos.length) { if (!item.tipos.includes(tipo)) return -1; p += 2; }
+  const dele = inspPalavras([item.sectores, item.titulo, item.notas, item.estilo].join(' '));
+  for (const w of palavras) { if (dele.has(w)) p += 3; else for (const d of dele) { if (d.length >= 5 && w.length >= 5 && (d.indexOf(w) === 0 || w.indexOf(d) === 0)) { p += 2; break; } } }
+  return p;
+}
+function inspEscolher(kind, tipo, prompt, n, evitar) {
+  const palavras = inspPalavras(prompt);
+  const cand = (inspIndice.itens || []).filter(x => x.kind === kind && x.activo !== false && x.url && !(evitar && evitar.has(x.id)))
+    .map(x => ({ x, p: inspPontos(x, tipo, palavras) })).filter(c => c.p >= 0)
+    .map(c => ({ x: c.x, p: c.p + Math.random() * 1.5 - (Number(c.x.usos) || 0) * 0.02 })) // um pouco de sorte e de rotação
+    .sort((a, b) => b.p - a.p);
+  return cand.slice(0, n).map(c => c.x);
+}
+// Para cada site: lembra quais já foram usados (as 3 versões ficam diferentes)
+const inspUsadasPorSite = new Map();
+async function inspiracaoParaSite(siteId, tipo, prompt) {
+  await carregarInspiracao();
+  if (!inspIndice.activo) return null;
+  const chave = siteId || ('x' + Math.random());
+  let u = inspUsadasPorSite.get(chave);
+  if (!u) { u = { ids: new Set(), t: Date.now() }; inspUsadasPorSite.set(chave, u); }
+  for (const [k, v] of inspUsadasPorSite) if (Date.now() - v.t > 3600000) inspUsadasPorSite.delete(k);
+  const [it] = inspEscolher('site', tipo, prompt, 1, u.ids);
+  if (!it) return null;
+  u.ids.add(it.id);
+  it.usos = (Number(it.usos) || 0) + 1; it.usado = new Date().toISOString();
+  gravarInspiracao();
+  return it;
+}
+function instrucaoInspiracao(it) {
+  return `\nINSPIRAÇÃO DA CASA: a ÚLTIMA imagem deste pedido é um site da biblioteca de inspiração da Daniel IA${it.estilo ? ' (estilo ' + it.estilo + ')' : ''}. Usa-a para subir o nível: acabamento, hierarquia, tipografia, espaço em branco, ritmo das secções, detalhes e composição. É INSPIRAÇÃO, não cópia: nunca uses o nome, o logótipo, os textos, as fotografias nem a marca que lá aparecem. As cores seguem primeiro o logótipo e a descrição da pessoa; se não houver, podes inspirar-te na paleta da imagem. Se a descrição da pessoa pedir outra coisa, a descrição manda.${it.notas ? ' Nota da equipa sobre esta referência: ' + String(it.notas).slice(0, 300) : ''}`;
+}
+// Ideias de vídeos para o conceito do hero cinemático
+async function ideiasVideoInspiracao(tipo, prompt) {
+  await carregarInspiracao();
+  if (!inspIndice.activo) return '';
+  const vs = inspEscolher('video', tipo, prompt, 3);
+  if (!vs.length) return '';
+  vs.forEach(v => { v.usos = (Number(v.usos) || 0) + 1; });
+  gravarInspiracao();
+  return 'Vídeos de que a equipa gosta (inspira-te no tipo de transformação, no ritmo e no ambiente; não copies): ' + vs.map(v => '"' + String(v.notas || v.titulo || '').slice(0, 220) + '"').join('; ') + '.';
+}
+
+// ---- painel ----
+function inspPublico(x) {
+  return { id: x.id, kind: x.kind, url: x.url, poster: x.poster || '', titulo: x.titulo || '', tipos: x.tipos || [], sectores: x.sectores || '', estilo: x.estilo || '', notas: x.notas || '', activo: x.activo !== false, usos: Number(x.usos) || 0, usado: x.usado || '', criado: x.criado || '' };
+}
+function inspCampos(dst, b) {
+  if (b.titulo !== undefined) dst.titulo = textoCurto(b.titulo, 80);
+  if (b.sectores !== undefined) dst.sectores = textoCurto(b.sectores, 200);
+  if (b.notas !== undefined) dst.notas = textoCurto(b.notas, 400);
+  if (b.estilo !== undefined) dst.estilo = INSP_ESTILOS.includes(b.estilo) ? b.estilo : '';
+  if (b.tipos !== undefined) dst.tipos = (Array.isArray(b.tipos) ? b.tipos : []).filter(t => INSP_TIPOS_PROJ.includes(t));
+  if (b.activo !== undefined) dst.activo = b.activo !== false;
+}
+function inspDataUrl(v, tipos, max) {
+  const m = /^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(v || ''));
+  if (!m || !tipos[m[1].toLowerCase()]) return null;
+  const b = Buffer.from(m[2], 'base64');
+  if (!b.length || b.length > max) return { grande: true };
+  return { mime: m[1].toLowerCase(), ext: tipos[m[1].toLowerCase()], buffer: b };
+}
+app.post('/admin-inspiracao', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    await carregarInspiracao();
+    if (req.body.activo !== undefined) { inspIndice.activo = req.body.activo !== false; await gravarInspiracao(); registar(admin, 'inspiracao', inspIndice.activo ? 'ligada' : 'desligada'); }
+    return res.json({ status: 'success', response: { activo: inspIndice.activo, itens: inspIndice.itens.map(inspPublico), tipos: INSP_TIPOS_PROJ, estilos: INSP_ESTILOS } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível ler a biblioteca.' }); }
+});
+app.post('/admin-inspiracao-guardar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    await carregarInspiracao();
+    const b = req.body.item || {};
+    let it = b.id ? inspIndice.itens.find(x => x.id === b.id) : null;
+    if (b.id && !it) return res.json({ status: 'error', message: 'Esta referência já não existe.' });
+    if (!it) {
+      const kind = b.kind === 'video' ? 'video' : 'site';
+      if (inspIndice.itens.length >= 600) return res.json({ status: 'error', message: 'A biblioteca chegou ao máximo (600). Apaga algumas referências antigas.' });
+      const f = kind === 'video' ? inspDataUrl(b.ficheiro, INSP_TIPOS_VID, INSP_MAX_VID) : inspDataUrl(b.ficheiro, INSP_TIPOS_IMG, INSP_MAX_IMG);
+      if (!f) return res.json({ status: 'error', message: kind === 'video' ? 'Escolhe um vídeo MP4, WEBM ou MOV.' : 'Escolhe uma imagem PNG, JPG ou WEBP.' });
+      if (f.grande) return res.json({ status: 'error', message: kind === 'video' ? 'O vídeo é grande demais (máximo 10 MB).' : 'A imagem é grande demais (máximo 8 MB).' });
+      const id = Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+      it = { id, kind, criado: new Date().toISOString(), usos: 0, activo: true };
+      it.url = await uploadParaBunnyBase('inspiracao/' + (kind === 'video' ? 'vid/' : 'img/') + id + '.' + f.ext, f.buffer, f.mime);
+      if (kind === 'video') {
+        const p = inspDataUrl(b.poster, INSP_TIPOS_IMG, 2 * 1024 * 1024);
+        if (p && !p.grande) it.poster = await uploadParaBunnyBase('inspiracao/vid/' + id + '-poster.' + p.ext, p.buffer, p.mime);
+      }
+      inspCampos(it, Object.assign({ titulo: '', sectores: '', notas: '', estilo: '', tipos: [] }, b));
+      inspIndice.itens.unshift(it);
+      registar(admin, 'inspiracao-nova', kind + ' ' + id);
+    } else {
+      inspCampos(it, b);
+    }
+    await gravarInspiracao();
+    return res.json({ status: 'success', response: { item: inspPublico(it) } });
+  } catch (e) { console.error('[inspiração] guardar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível guardar.' }); }
+});
+app.post('/admin-inspiracao-apagar', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    await carregarInspiracao();
+    const antes = inspIndice.itens.length;
+    inspIndice.itens = inspIndice.itens.filter(x => x.id !== req.body.id);
+    if (inspIndice.itens.length === antes) return res.json({ status: 'error', message: 'Esta referência já não existe.' });
+    await gravarInspiracao();
+    registar(admin, 'inspiracao-apagar', String(req.body.id).slice(0, 40));
+    return res.json({ status: 'success', response: { apagado: true } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível apagar.' }); }
+});
+['/admin-inspiracao', '/admin-inspiracao-guardar', '/admin-inspiracao-apagar'].forEach(r => ROTAS_PRIVADAS.add(r));
+globalThis.__danielInspiracao = { escolher: inspiracaoParaSite, carregar: carregarInspiracao, ideiasVideo: ideiasVideoInspiracao };
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
