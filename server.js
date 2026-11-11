@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.79.0'; // 03/11/2026 - plataformas de cursos (EAD): aulas em vídeo, texto e ao vivo, alunos, pagamentos, certificados
+const VERSION = '1.81.0'; // 11/11/2026 - página de venda a sério (uma oferta, checkout próprio, entrega automática), separada da loja
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -56,6 +56,9 @@ const BUNNY_API_KEY = clean(process.env.BUNNY_API_KEY);
 const OPENAI_API_KEY = clean(process.env.OPENAI_API_KEY);
 const OPENAI_MODEL = clean(process.env.OPENAI_MODEL) || 'gpt-5.6-sol';
 const OPENAI_REASONING_EFFORT = clean(process.env.OPENAI_REASONING_EFFORT) || 'low';
+// 1.80.0: na CRIAÇÃO do site a IA pensa mais (o design agradece). low | medium | high
+const OPENAI_REASONING_CRIAR = (['minimal', 'low', 'medium', 'high'].includes(clean(process.env.OPENAI_REASONING_CRIAR).toLowerCase()) ? clean(process.env.OPENAI_REASONING_CRIAR).toLowerCase() : 'medium');
+const DESIGN_GUIAO = (clean(process.env.DESIGN_GUIAO) || 'sim').toLowerCase() !== 'nao';
 // Modelo para tarefas pequenas (arrumar a loja). Se não existir, usa o principal.
 const OPENAI_MODEL_RAPIDO = clean(process.env.OPENAI_MODEL_RAPIDO) || '';
 // Subido de 16000 para 32000 a 12/10/2026: com a instrução "capricha
@@ -65,6 +68,8 @@ const OPENAI_MODEL_RAPIDO = clean(process.env.OPENAI_MODEL_RAPIDO) || '';
 // resposta vazia ou demasiado curta" nos logs). 32000 dá folga de sobra
 // tanto para o raciocínio como para um HTML completo e bem desenvolvido.
 const OPENAI_MAX_TOKENS = parseInt(clean(process.env.OPENAI_MAX_TOKENS), 10) || 32000;
+// a pensar mais, a IA precisa de mais espaço para não ficar sem tokens a meio do site
+const OPENAI_MAX_TOKENS_CRIAR = Math.max(OPENAI_MAX_TOKENS, parseInt(clean(process.env.OPENAI_MAX_TOKENS_CRIAR), 10) || 48000);
 
 // ---- MozPayment ----
 // Credenciais da conta MozPayment da Daniel IA (diferente da carteira do
@@ -1943,7 +1948,7 @@ function escolherDirecoes(tipo) {
 }
 function instrucaoDirecao(direcao, outras, tipo) {
   if (direcao.referencia) return instrucaoReferencia(direcao, tipo, false);
-  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  const ehLoja = (tipo === 'E-commerce'); // 1.81.0: a página de venda já não é loja
   return `\nVERSÃO ${direcao.n} DE 3: a pessoa vai ver três versões do site lado a lado e escolher uma. Esta versão tem de ser CLARAMENTE diferente das outras - nas cores, nas letras, na composição e no ambiente.
 DIRECÇÃO DE ARTE DESTA VERSÃO: ${direcao.prompt}.
 ${ehLoja ? (direcao.temaPrompt ? `ESTRUTURA DA LOJA NESTA VERSÃO - ${direcao.temaPrompt} As cores e as letras seguem a direcção de arte acima.` : 'ESTRUTURA: é uma loja, por isso a estrutura das secções é a do guia acima. A diferença está no cabeçalho, nas cores, nas letras, na faixa de confiança, no contacto e no rodapé.') : `ESTRUTURA: ${direcao.estrutura}. HERO: ${direcao.hero}.`}
@@ -2074,7 +2079,7 @@ function textoAnaliseReferencia(a) {
   return linhas.map(l => '- ' + l).join('\n');
 }
 function instrucaoReferencia(direcao, tipo, unica) {
-  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  const ehLoja = (tipo === 'E-commerce'); // 1.81.0: a página de venda já não é loja
   const nivel = NIVEL_REFERENCIA_TEXTO[direcao.referencia] ? direcao.referencia : 'fiel';
   const cabeca = unica
     ? 'A PESSOA QUER UM SITE PARECIDO COM A IMAGEM DE REFERÊNCIA (é a última imagem do pedido).'
@@ -2132,7 +2137,7 @@ const GUIA_TIPO = {
   'Agendamento': 'App de marcações de um negócio de serviços (salão, barbearia, clínica, consultório, spa, ginásio, explicações, oficina, estúdio...). O protagonista é MARCAR: um botão "Marcar horário" bem visível no cabeçalho e no hero. Desenha: hero com a promessa e o botão; os serviços em cartões (nome, duração e preço em MZN) só para apresentar; a equipa, se fizer sentido; como funciona em 3 passos (escolhe o serviço, escolhe o dia e a hora, confirma); testemunhos; horário de funcionamento e localização; perguntas frequentes; contacto. INSTRUÇÃO OBRIGATÓRIA: inclui uma secção de marcação com id="marcar", com um título curto (ex: "Marca o teu horário") e uma frase, e dentro dela, num contentor com a largura do conteúdo, exactamente esta div vazia: <div id="daniel-ia-agenda"></div> - é ali que o sistema de marcações a sério (serviços, profissionais, dias e horas livres, dados e pagamento) aparece sozinho. NUNCA desenhes tu calendários, horas, formulários de marcação nem botões de confirmar. Os botões "Marcar" do site levam a #marcar (ou a marcar.html, num site com várias páginas).',
 
   'E-commerce': 'Esta é uma loja online ao estilo dos grandes marketplaces (Amazon, Shein, Jumia): o protagonista são os PRODUTOS, com pouca informação à volta. Desenha só: (1) um cabeçalho compacto e elegante com o logótipo/nome da loja e um menu curto (ex: Início, Produtos, Contacto), que pode ficar fixo no topo; (2) logo a seguir ao cabeçalho, a div obrigatória da loja (ver instrução abaixo) - NÃO ponhas nenhum hero, banner ou capa antes dela, porque a capa em carrossel, a pesquisa, as categorias, os destaques e os produtos aparecem automaticamente dentro dessa div; (3) depois dela, uma faixa curta de confiança com 3 ou 4 pontos (ex: entrega rápida, pagamento seguro, apoio por WhatsApp), cada um com um ícone SVG; (4) um contacto curto e discreto junto ao rodapé (segue a instrução do contacto) e um rodapé compacto com contactos e redes sociais. Nada de textos longos, sobre nós extensos ou testemunhos - a loja vai directa aos produtos. NÃO desenhes produtos, preços, carrinho, pesquisa, categorias nem capa - é tudo tratado automaticamente.',
-  'Checkout': 'Esta é uma página de venda directa de uma loja pequena, focada nos produtos. Desenha só: (1) um cabeçalho compacto com o logótipo/nome; (2) logo a seguir, a div obrigatória da loja (ver instrução abaixo) - sem hero nem capa antes dela, porque a capa, os produtos, o carrinho e o pagamento aparecem automaticamente lá dentro; (3) uma faixa curta com 3 razões para comprar (com ícones SVG); (4) um contacto curto e discreto junto ao rodapé (segue a instrução do contacto) e um rodapé compacto. Textos curtos e directos. NÃO desenhes produtos, carrinho, nem botões de compra ou pagamento - é tudo tratado automaticamente.',
+  'Checkout': 'Esta é uma PÁGINA DE VENDA: uma só página, longa e focada, que vende UMA oferta (um curso, um bilhete para um evento, um ebook, uma mentoria, um serviço ou um produto único) e leva a pessoa a comprar ali mesmo. NÃO é uma loja: não há catálogo, categorias, pesquisa, carrinho nem várias páginas. Estrutura das melhores páginas de venda (adapta ao que se vende e à ordem do site-modelo, se houver): (1) cabeçalho mínimo: logótipo ou nome e um só botão de compra, sem menu comprido; (2) hero com a promessa (o resultado concreto que a pessoa consegue), uma frase de apoio, o botão de compra, prova social (alunos, avaliações, lugares vendidos) e uma fotografia ou composição forte; (3) o problema e para quem é; (4) o que a pessoa recebe ou aprende, com detalhe (módulos do curso, programa do evento, capítulos do ebook, etapas do serviço); (5) quem está por trás (formador, organizador, autor), com foto e credenciais; (6) benefícios e resultados; (7) testemunhos; (8) bónus, se fizer sentido; (9) A OFERTA, a secção de compra (ver instruções obrigatórias); (10) garantia ou política clara; (11) perguntas frequentes (pagamento por M-Pesa, e-Mola e cartão, como se recebe o acesso, datas, reembolso); (12) chamada final com o botão de compra; rodapé mínimo. Num evento, a data, a hora, o local e o programa ficam bem visíveis no hero e numa secção própria. Põe um botão de compra a cada duas ou três secções.',
   'Landing Page': 'Landing page para apresentar o negócio e levar a uma acção (contactar, comprar, reservar, inscrever-se). Secções possíveis - escolhe as que fazem sentido para a descrição, pela ordem que conta melhor a história: hero, benefícios, como funciona, sobre, serviços ou preços, depoimentos, perguntas frequentes, chamada para acção, contacto e rodapé. Se a pessoa pedir uma página simples ou curta, fica-te por 3 ou 4 secções muito bem feitas. Se não disser nada, desenvolve o suficiente para convencer, com textos com substância (explica cada benefício, não só títulos soltos).',
   'Portefólio': 'Portefólio pessoal ou profissional. Obrigatório: apresentação com o nome e o que a pessoa faz, a zona dos trabalhos (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: sobre com percurso, serviços, clientes, processo de trabalho, prémios, uma citação. A forma é livre e segue a descrição: pode ser uma página minimal só com nome, trabalhos e contacto, ou uma página rica e editorial. NÃO desenhes trabalhos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
   'Blog': 'Página inicial de um blog. Obrigatório: o nome do blog ou do autor, uma frase sobre o que o blog aborda, a zona dos artigos (ver instrução abaixo) e o contacto. Opcional, conforme a descrição: sobre quem escreve, temas principais, subscrição, redes sociais. Pode ser leve e minimal, ao estilo de um caderno, ou uma capa de revista. NÃO desenhes artigos reais nem a grelha deles - isso é tratado à parte, automaticamente.',
@@ -2157,14 +2162,14 @@ function largarVez() {
   const proximo = filaGeracoes.shift();
   if (proximo) proximo(); else geracoesActivas = Math.max(0, geracoesActivas - 1);
 }
-async function fetchGeracao(url, opcoes) {
+async function fetchGeracao(url, opcoes, maxMs) {
   await pedirVez();
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), GERACAO_TEMPO_MAX_MS);
+  const t = setTimeout(() => ctrl.abort(), maxMs || GERACAO_TEMPO_MAX_MS);
   try {
     return await fetch(url, Object.assign({}, opcoes, { signal: ctrl.signal }));
   } catch (erro) {
-    if (erro && erro.name === 'AbortError') throw new Error('A OpenAI demorou mais de 6 minutos a responder.');
+    if (erro && erro.name === 'AbortError') throw new Error('A OpenAI demorou mais de ' + Math.round((maxMs || GERACAO_TEMPO_MAX_MS) / 60000) + ' minutos a responder.');
     throw erro;
   } finally {
     clearTimeout(t);
@@ -2176,7 +2181,8 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
   const multiPagina = Array.isArray(paginas) && paginas.length > 1;
   const lingua = normalizarIdioma(idioma);
   const guia = GUIA_TIPO[tipo] || GUIA_TIPO['Landing Page'];
-  const ehLoja = (tipo === 'E-commerce' || tipo === 'Checkout');
+  const ehLoja = (tipo === 'E-commerce'); // 1.81.0: a página de venda já não é loja
+  const ehVenda = (tipo === 'Checkout');
   const ehGaleria = (tipo === 'Galeria');
   const ehPortfolio = (tipo === 'Portefólio');
   const ehBlog = (tipo === 'Blog');
@@ -2233,83 +2239,107 @@ async function gerarComOpenAI({ nome, tipo, prompt, logoUrl, imagensUrls, siteId
   // por email para o endereço que o dono do site escolher.
   const instrucaoContacto = multiPagina ? INSTRUCAO_CONTACTO_MULTI : `\nINSTRUÇÃO OBRIGATÓRIA: nesta página tens de incluir, algures dentro do <body>, exactamente esta div vazia, sem nada lá dentro: <div id="daniel-ia-contacto"></div> - é ali que o formulário de contacto a sério (nome, email, mensagem, já ligado para enviar a mensagem ao dono do site) vai aparecer sozinho, gerido por um sistema à parte. Não escrevas tu nenhum formulário, nem campos de nome/email/mensagem, nem botão de enviar - só essa div vazia. A secção de contacto tem de ser CURTA e discreta, perto do rodapé: no máximo um título pequeno numa linha e os contactos (telefone, WhatsApp, email, morada) ao lado, com a div em baixo. Nada de secções de contacto enormes, imagens grandes ou textos longos à volta. O formulário aparece sozinho, fechado e compacto (abre com um botão) - não lhe ponhas outro título grande por cima.`;
 
+  // 1.80.0: sem imagem de referência da pessoa (e sem template como base), a biblioteca de
+  // inspiração dá o SITE-MODELO desta versão: cortes legíveis do print + o ADN estudado.
+  const semModelo = (referencia && referencia.url) || (direcao && /^tpl-/.test(String(direcao.id || '')));
+  const insp = semModelo ? null : await inspiracaoParaSite(siteId, tipo, prompt, direcao && direcao.n).catch(() => null);
+  const inspImgs = insp ? await imagensInspiracao(insp).catch(() => []) : [];
+  const inspForte = !!(insp && inspImgs.length && inspiracaoForte());
+  if (insp && !(insp.adn && insp.adn.resumo)) pedirEstudoInspiracao(insp); // fica estudado para a próxima
+  if (insp) registarUsoInspiracao(insp, siteId, nome, direcao && direcao.n);
+  const temVideoHero = !!(siteId && videoHeroPorSite.has(siteId));
+  // Director de arte: o guião de design deste site (segue mesmo que falhe)
+  const guiao = await guiaoDeDesign({ nome, tipo, prompt, lingua, insp, imgs: inspImgs, fotos, marca, logoUrl, direcao, paginas, guia, videoHero: temVideoHero }).catch(() => ({ texto: '', tokens: 0 }));
+
   const systemPrompt = `Você é o motor de geração de sites da Daniel IA, uma plataforma moçambicana.
 Gera APENAS um ficheiro HTML completo e válido (doctype, head, body), com todo o CSS e JavaScript embutidos no mesmo ficheiro (nada de ficheiros externos, excepto fontes do Google Fonts se quiseres).
 Não escrevas nenhuma explicação antes ou depois do código. Não uses blocos de markdown (não escrevas \`\`\`html nem \`\`\`). A resposta deve começar directamente com <!DOCTYPE html>.
 O site deve ser responsivo, moderno e profissional.
 TELEMÓVEL PRIMEIRO (obrigatório): o site tem de ficar perfeito a 360 px, 768 px e 1280 px de largura. Nada pode sair da largura do ecrã nem criar scroll para o lado: nada de larguras fixas maiores do que o ecrã (usa max-width, %, minmax() e clamp()); grelhas e linhas com várias colunas passam a 1 coluna no telemóvel (grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)) ou media queries); filas de botões, etiquetas e links usam flex-wrap:wrap e gap; títulos com font-size em clamp() e overflow-wrap:break-word; imagens e vídeos com max-width:100% e height:auto; tabelas dentro de uma caixa com overflow-x:auto; o menu vira um botão de menu no telemóvel; margens laterais de pelo menos 16 px; botões com pelo menos 44 px de altura; nada escondido atrás de elementos fixos.
 IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].instrucao} A tag de abertura tem de ser <html lang="${lingua}">. As instruções que recebes estão em português, mas o texto visível do site segue sempre o idioma do site.
-${DIRECAO_DE_ARTE}${direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : (referencia ? instrucaoReferencia({ referencia: 'fiel', analise: null }, tipo, true) : pontoDePartidaVisual())}
-IMPORTANTE: o site tem de parecer acabado, profissional e RICO - nunca com ar de esqueleto, com caixas vazias, pouca informação ou textos de enchimento. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, o site é completo e cheio de informação útil, como o de uma marca líder do sector (ver SITE RICO E VIVO).
-${guia}${padroesDoTipo(tipo)}${instrucaoRiqueza(tipo)}${INSTRUCAO_ICONES}${instrucaoPaginas(paginas, tipo)}${quiz ? INSTRUCAO_QUIZ : ''}${instrucaoLoja}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
+${DIRECAO_DE_ARTE}${inspForte ? instrucaoSiteModelo(insp, tipo, direcao, inspImgs.length) : (direcao ? instrucaoDirecao(direcao, outrasDirecoes || [], tipo) : (referencia ? instrucaoReferencia({ referencia: 'fiel', analise: null }, tipo, true) : pontoDePartidaVisual()))}
+NÍVEL EXIGIDO: este site tem de poder passar por trabalho de um estúdio de web design, feito à mão para este cliente. Proibido o ar de \"feito por IA\": hero centrado banal, filas de três cartões iguais, secções todas com o mesmo desenho, blocos de texto sem imagem, cores chapadas sem intenção. As fotografias entram grandes; o texto é curto e bem hierarquizado.\nIMPORTANTE: o site tem de parecer acabado, profissional e RICO - nunca com ar de esqueleto, com caixas vazias, pouca informação ou textos de enchimento. Se a pessoa pedir simples, curto ou minimal, respeita (poucas secções, muito bem feitas). Se não disser nada, o site é completo e cheio de informação útil, como o de uma marca líder do sector (ver SITE RICO E VIVO).
+${guia}${padroesDoTipo(tipo)}${instrucaoRiqueza(tipo, inspForte)}${INSTRUCAO_ICONES}${instrucaoPaginas(paginas, tipo)}${quiz ? INSTRUCAO_QUIZ : ''}${instrucaoLoja}${ehVenda ? INSTRUCAO_VENDA : ''}${instrucaoGaleria}${instrucaoPortfolio}${instrucaoBlog}${instrucaoContacto}`;
 
-  // 1.78.0: sem imagem de referência da pessoa, a IA recebe um print da biblioteca de inspiração
-  const insp = !(referencia && referencia.url) ? await inspiracaoParaSite(siteId, tipo, prompt).catch(() => null) : null;
   const textoPedido = `Nome do negócio: ${nome}
 Tipo de projecto: ${tipo}
 Idioma do site: ${IDIOMAS_SITE[lingua].nome}
-${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${siteId && videoHeroPorSite.has(siteId) ? INSTRUCAO_VIDEO_HERO : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${insp ? instrucaoInspiracao(insp) : ''}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
-Descrição pedida pela pessoa: ${prompt}`;
+${instrucaoLogo}${logoUrl ? instrucaoMarca(marca, prompt) : ''}${temVideoHero ? INSTRUCAO_VIDEO_HERO + (inspForte ? ' (Isto manda sobre o hero do site-modelo; o resto segue o modelo.)' : '') : ''}${instrucaoImagens}${instrucaoFotos(fotos)}${insp && inspImgs.length && !inspForte ? instrucaoInspiracao(insp) : ''}${inspForte ? '\nSITE-MODELO: as últimas ' + inspImgs.length + ' imagem(ns) deste pedido são o print do site-modelo (segue as instruções do SITE-MODELO). Não são conteúdo para pôr no site.' : ''}${referencia ? '\nIMAGEM DE REFERÊNCIA: a ÚLTIMA imagem deste pedido é a referência de estilo que a pessoa escolheu (segue as instruções da referência). Não é conteúdo para pôr no site.' : ''}
+Descrição pedida pela pessoa: ${prompt}${guiao.texto ? '\n\nGUIÃO DE DESIGN (escrito pelo director de arte para ESTE site - constrói exactamente isto; se o guião e as regras obrigatórias chocarem, mandam as regras obrigatórias):\n' + guiao.texto : ''}`;
 
   // Se houver imagens anexadas, mandamo-las a sério para a API (não só o
   // URL em texto) - só assim a IA consegue "ver" o que está nelas, seja
   // para copiar um estilo ou para usar como conteúdo. Sem imagens, o
   // pedido continua a ser simplesmente texto, como sempre foi.
   let userContent = textoPedido;
-  if ((imagensUrls && imagensUrls.length) || (referencia && referencia.url) || insp) {
+  if ((imagensUrls && imagensUrls.length) || (referencia && referencia.url) || (insp && inspImgs.length)) {
     userContent = [{ type: 'text', text: textoPedido }];
     (imagensUrls || []).forEach(url => userContent.push({ type: 'image_url', image_url: { url } }));
     if (referencia && referencia.url) {
       userContent.push({ type: 'text', text: 'IMAGEM DE REFERÊNCIA (estilo a seguir):' });
       userContent.push({ type: 'image_url', image_url: { url: referencia.url, detail: 'high' } });
-    } else if (insp) {
-      userContent.push({ type: 'text', text: 'INSPIRAÇÃO DA CASA (só estilo, não é conteúdo):' });
-      userContent.push({ type: 'image_url', image_url: { url: insp.url, detail: 'high' } });
+    } else if (insp && inspImgs.length) {
+      inspImgs.forEach((u, i) => {
+        userContent.push({ type: 'text', text: (inspForte ? 'SITE-MODELO' : 'INSPIRAÇÃO DA CASA') + (inspImgs.length > 1 ? ' - parte ' + (i + 1) + ' de ' + inspImgs.length + (i === 0 ? ' (topo do site)' : i === inspImgs.length - 1 ? ' (fim do site)' : '') : '') + ' (design a seguir, não é conteúdo):' });
+        userContent.push({ type: 'image_url', image_url: { url: u, detail: 'high' } });
+      });
     }
   }
 
-  const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      reasoning_effort: OPENAI_REASONING_EFFORT,
-      max_completion_tokens: OPENAI_MAX_TOKENS,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
-      ]
-    })
-  });
-
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error('OpenAI falhou: ' + JSON.stringify(json));
+  // 1.80.0: a criação pensa mais (OPENAI_REASONING_CRIAR). Se a resposta vier vazia (o
+  // raciocínio gastou o espaço todo) ou a OpenAI recusar as imagens do modelo, tenta mais
+  // uma vez de forma mais simples - nunca depois de ter esperado muito.
+  const t0Criar = Date.now();
+  const pedirSite = async (esforco, conteudo) => {
+    const res = await fetchGeracao('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        reasoning_effort: esforco,
+        max_completion_tokens: esforco === OPENAI_REASONING_EFFORT ? OPENAI_MAX_TOKENS : OPENAI_MAX_TOKENS_CRIAR,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: conteudo }
+        ]
+      })
+    }, 7 * 60 * 1000);
+    const json = await res.json();
+    if (!res.ok) { const e = new Error('OpenAI falhou: ' + JSON.stringify(json)); e.rapido = true; e.imagem = /image|download|invalid_image/i.test(JSON.stringify(json.error || '')); throw e; }
+    let h = (json.choices[0].message.content || '').trim();
+    // Defesa: se a IA mesmo assim devolver com blocos markdown, limpamos
+    h = h.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+    const tk = (json.usage && json.usage.total_tokens) || 0;
+    // Defesa: se por algum motivo (ex: o raciocínio gastou todo o orçamento
+    // de tokens) não sobrar HTML nenhum, falha de forma clara em vez de
+    // guardar um ficheiro vazio.
+    if (!h || h.length < 100) { const e = new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tk); e.rapido = true; e.tokens = tk; throw e; }
+    return { html: h, tokens: tk };
+  };
+  let feito, tokensPerdidos = 0;
+  try {
+    feito = await pedirSite(OPENAI_REASONING_CRIAR, userContent);
+  } catch (erro) {
+    const semImagens = erro.imagem && insp && Array.isArray(userContent);
+    if (!erro.rapido || Date.now() - t0Criar > 4 * 60 * 1000 || (OPENAI_REASONING_CRIAR === OPENAI_REASONING_EFFORT && !semImagens)) throw erro;
+    console.error('[criar] primeira tentativa falhou, tento de novo (' + (semImagens ? 'sem as imagens do modelo' : 'a pensar menos') + '):', String(erro.message || erro).slice(0, 200));
+    tokensPerdidos = erro.tokens || 0;
+    const conteudo2 = semImagens ? userContent.filter((x, i) => i < 1 + ((imagensUrls || []).length)) : userContent;
+    feito = await pedirSite(semImagens ? OPENAI_REASONING_CRIAR : OPENAI_REASONING_EFFORT, conteudo2.length === 1 && conteudo2[0].type === 'text' ? conteudo2[0].text : conteudo2);
   }
-
-  let html = (json.choices[0].message.content || '').trim();
-
-  // Defesa: se a IA mesmo assim devolver com blocos markdown, limpamos
-  html = html.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-
-  const tokens = (json.usage && json.usage.total_tokens) || 0;
-
-  // Defesa: se por algum motivo (ex: o raciocínio gastou todo o orçamento
-  // de tokens) não sobrar HTML nenhum, falha de forma clara em vez de
-  // guardar um ficheiro vazio.
-  if (!html || html.length < 100) {
-    throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
-  }
+  let html = feito.html;
+  // 1.81.0: página de venda - a oferta que a IA escreveu com a página passa a ser a oferta do site
+  let vendaDados = null;
+  if (ehVenda) { const x = vendaDadosDoHtml(html); html = x.html; vendaDados = x.dados; }
+  const tokens = feito.tokens + tokensPerdidos + (guiao.tokens || 0);
 
   html = injectarIcones(html);
   html = fixarIdiomaHtml(html, lingua);
   if (multiPagina) html = prepararCasca(html, paginas);
   html = aplicarRedeResponsiva(html);
-  html = injectarLojaSeNecessario(html, ehLoja, siteId);
-  html = injectarQuizSeNecessario(html, ehLoja, siteId);
+  html = ehVenda ? injectarVendaSeNecessario(html, siteId) : injectarLojaSeNecessario(html, ehLoja, siteId);
+  if (ehVenda && siteId) await vendaCriarSeFalta(siteId, vendaDados, nome).catch(e => console.error('[venda] não criei a oferta:', e.message || e));
+  html = injectarQuizSeNecessario(html, ehLoja || ehVenda, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
   html = injectarEadSeNecessario(html, tipo === 'Curso', siteId);
@@ -2355,8 +2385,18 @@ function aplicarRedeResponsiva(html) {
 // se tenha esquecido dela) e injecta sempre o módulo fixo da loja antes de
 // </body>. Chamado tanto na criação como na edição de um site - nunca
 // depende do que a IA escreveu, é sempre reaplicado por cima.
+
+// 1.81.0: página de venda - a oferta, os botões de compra e os preços
+const INSTRUCAO_VENDA = `\nINSTRUÇÕES OBRIGATÓRIAS DA PÁGINA DE VENDA:
+- A secção da oferta tem id="comprar", um título curto e uma frase, e dentro dela, num contentor com a largura do conteúdo, exactamente esta div vazia: <div id="daniel-ia-oferta"></div>. É ali que aparece sozinha a caixa da oferta a sério (as opções de compra com o preço, o que inclui e o botão), ligada ao checkout com M-Pesa, e-Mola e cartão. NÃO desenhes tu cartões de preço, tabelas de planos, formulários de pagamento, campos de cartão nem carrinho.
+- TODOS os botões de compra da página (cabeçalho, hero, a meio, chamada final, barra fixa do telemóvel) são <a href="#comprar" data-dia-comprar>: o sistema abre o checkout quando se clica. O texto do botão é uma acção concreta (ex: "Quero o meu lugar", "Começar o curso", "Comprar o ebook").
+- PREÇOS: nunca escrevas o preço em texto na página. Onde quiseres mostrar o preço (no hero, ao lado de um botão, na chamada final), usa <span data-dia-preco></span> - o sistema escreve lá o preço actual (ex: "1 500 MZN"). Para o preço antigo riscado: <s data-dia-preco-antes></s>. Assim o preço fica sempre certo quando o dono o mudar.
+- DADOS DA OFERTA: mesmo antes de </body>, inclui <script type="application/json" id="daniel-ia-oferta-dados"> com um objecto JSON neste formato exacto: {"nome":"nome da oferta","frase":"uma frase","tipo":"curso|bilhete|ebook|servico|outro","opcoes":[{"nome":"...","preco":1500,"preco_antes":2500,"descricao":"uma frase curta","inclui":["...","...","..."],"destaque":true}]} - 1 a 3 opções (uma só; ou, se fizer sentido, por exemplo Normal e VIP, ou Básico e Completo). "preco" e "preco_antes" são números inteiros em MZN tirados da descrição da pessoa; se a descrição não disser o preço, usa 0 (o dono define depois) e nunca inventes um. 3 a 6 linhas concretas em "inclui". "destaque": true numa só opção. É com isto que a caixa da oferta é criada.
+- É uma página só: os links do cabeçalho, se existirem, são âncoras para secções desta página.`;
 function injectarLojaSeNecessario(html, ehLoja, siteId) {
   if (!ehLoja) return html;
+  // 1.81.0: páginas de venda no formato novo levam a oferta e o /venda.js, nunca a loja
+  if (vendaTemOferta(html) || vendaEhNovaSync(siteId)) return injectarVendaSeNecessario(html, siteId);
 
   // Sites com várias páginas: a div só existe nas páginas da loja, mas o
   // script vai para todas (o carrinho funciona em todas as páginas).
@@ -2535,7 +2575,10 @@ async function editarComOpenAI({ nome, tipo, prompt, htmlAtual, imagensUrls, sit
     ? `\nA pessoa anexou ${imagensUrls.length} imagem(ns) nova(s) a este pedido de alteração - estão incluídas a seguir. Olha bem para cada uma: se o pedido disser para ficar "como esta imagem" ou seguir o estilo dela, aplica esse estilo visual (cores, disposição, tipografia) ao site, sem copiar texto, logótipos ou marca de outra empresa que apareça nela. Se for conteúdo (uma foto para usar no site), usa-a onde fizer sentido.`
     : '';
 
-  const instrucaoLoja = ehLoja && (!paginasMulti(htmlAtual) || /id=["']daniel-ia-produtos["']/.test(htmlAtual))
+  const ehVendaNova = ehLoja && (vendaTemOferta(htmlAtual) || vendaEhNovaSync(siteId));
+  const instrucaoLoja = ehVendaNova
+    ? `\nATENÇÃO: esta é uma página de venda. Têm de continuar a existir, exactamente como estão: a div <div id="daniel-ia-oferta"></div> (a caixa da oferta e o checkout aparecem lá sozinhos), os atributos data-dia-comprar, data-dia-preco e data-dia-preco-antes, e os <script> antes de </body> (window.DANIEL_IA_SITE_ID e venda.js). Não escrevas tu preços em texto, cartões de preço, formulários de pagamento nem carrinho. Botões de compra novos são <a href="#comprar" data-dia-comprar>.`
+    : ehLoja && (!paginasMulti(htmlAtual) || /id=["']daniel-ia-produtos["']/.test(htmlAtual))
     ? `\nATENÇÃO: esta página é uma loja. Tem de continuar a existir, exactamente como está, a div <div id="daniel-ia-produtos"></div> e os dois <script> antes de </body> que carregam o módulo da loja (window.DANIEL_IA_SITE_ID e loja-cart.js). Não apagues nem modifiques essa div nem esses scripts, e não escrevas tu produtos, carrinho ou botões de compra - isso continua a ser tratado à parte, automaticamente.`
     : '';
 
@@ -2613,6 +2656,7 @@ ${htmlAtual}`;
     throw new Error('A OpenAI devolveu uma resposta vazia ou demasiado curta. Tokens gastos: ' + tokens);
   }
 
+  if (ehVendaNova) html = injectarVendaSeNecessario(html, siteId); // a IA pode ter apagado a oferta: volta a pô-la
   html = injectarLojaSeNecessario(html, ehLoja, siteId);
   html = injectarGaleriaSeNecessario(html, ehGaleria, siteId);
   html = injectarAgendaSeNecessario(html, tipo === 'Agendamento', siteId);
@@ -6925,6 +6969,8 @@ app.post('/meus-sites', async (req, res) => {
       email_contacto: s['Email Contacto'] || ''
     }));
 
+    // 1.81.0: páginas de venda no formato novo (botão "Gerir oferta" em vez de "Gerir loja")
+    try { const vi = await vendaCarregarIndice(); lista.forEach(x => { if (x.tipo === 'Checkout') x.venda_nova = !!vi.sites[x.id]; }); } catch (e) {}
     // 1.76.0: até quando cada site fica no ar (e aplica já as regras a este dono)
     let contaAc = null;
     try {
@@ -8604,6 +8650,11 @@ app.post('/wh-loja-mz9k3f7xq2', async (req, res) => {
     await baixarStock(lerJsonSeguro(encomenda['Produtos Json'], []));
     // 1.69.0: pagamento de uma marcação (sinal ou total) - confirma a marcação e avisa
     // 1.79.0: compra de um curso - liberta o acesso do aluno
+    // 1.81.0: compra numa página de venda - confirma e entrega o acesso
+    if (String(encomenda['Notas'] || '').indexOf('venda:') === 0) {
+      await vendaPagamentoConfirmado(encomenda).catch(e => console.error('[venda] pagamento confirmado, mas a entrega falhou:', e.message || e));
+      return;
+    }
     if (String(encomenda['Notas'] || '').indexOf('ead:') === 0) {
       await eadPagamentoConfirmado(encomenda).catch(e => console.error('[ead] pagamento confirmado, mas o acesso não abriu:', e.message || e));
       return;
@@ -11733,7 +11784,7 @@ PADRÕES DE SITE DE NEGÓCIO DE TOPO: agência/serviços (hero com promessa + pr
   'E-commerce': `
 PADRÕES DE LOJA DE TOPO (só no que tu desenhas - cabeçalho, faixas e rodapé): barra fina de anúncio no topo ("Entrega em todo o país", "Pagamento por M-Pesa e e-Mola"); cabeçalho com logótipo, menu, pesquisa ou ícone de pesquisa, conta e carrinho com contagem numa bolinha; depois da montra, faixa de 4 vantagens com ícones em pastilhas (entrega, devoluções, pagamento seguro, apoio por WhatsApp) e uma frase cada; faixa de comunidade/recompensas em fundo escuro ou na cor de destaque com botão; newsletter em pílula; rodapé de 4 colunas com métodos de pagamento.`,
   'Checkout': `
-PADRÕES DE PÁGINA DE VENDA DE TOPO: cabeçalho mínimo; promessa forte; prova social (estrelas, número de clientes); a oferta; garantias com ícones (pagamento seguro, entrega, apoio); perguntas frequentes curtas; urgência honesta (stock ou prazo reais, nunca falsos).`,
+PADRÕES DE PÁGINA DE VENDA DE TOPO (como as das melhores marcas de cursos, eventos e infoprodutos): cabeçalho mínimo com um só botão; hero com promessa forte, prova social (estrelas, número de alunos ou de lugares) e uma imagem grande do produto, do formador ou do evento; programa ou módulos em acordeão ou linha do tempo; o formador ou organizador com foto grande e números; testemunhos com foto, nome e resultado; a secção da oferta com fundo contrastante, a puxar o olhar; garantia com selo desenhado; perguntas frequentes em acordeão; barra fixa no fundo do telemóvel com o preço (<span data-dia-preco></span>) e o botão de compra; urgência honesta (lugares ou prazo reais, nunca falsos).`,
   'Blog': `
 PADRÕES DE BLOG DE TOPO: capa de revista com o artigo em destaque grande, categorias em pílulas, autor com foto redonda e uma frase, subscrição da newsletter numa caixa elegante, tipografia de leitura confortável (16-19px, linhas de 60-75 caracteres).`
 };
@@ -11775,7 +11826,7 @@ const FREE_VERSOES = parseInt(clean(process.env.FREE_VERSOES), 10) === 3 ? 3 : 1
 const VERSOES_IA = parseInt(clean(process.env.VERSOES_IA), 10) === 3 ? 3 : 1;
 const MSG_SO_TEMPLATES = 'Agora cada site é criado numa versão só. Para um visual novo, escolhe um dos templates profissionais.';
 const OPENAI_IMAGE_MODEL = clean(process.env.OPENAI_IMAGE_MODEL) || 'gpt-image-1';
-const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 3);
+const FOTOS_IA_MAX = Math.max(0, parseInt(clean(process.env.FOTOS_IA_MAX), 10) || 6); // 1.80.0: 6 (antes 3)
 const TOKENS_POR_FOTO_IA = Math.max(0, parseInt(clean(process.env.TOKENS_POR_FOTO_IA), 10) || 3000);
 const PAGINAS_IA_MAX_FREE = 3;
 const PAGINAS_IA_MAX = 6;
@@ -11921,7 +11972,7 @@ function limparPlanoPaginas(dados, tipo, idioma, pago) {
 }
 function limparPedidosFotos(dados, tipo) {
   const lista = (dados && Array.isArray(dados.fotos) ? dados.fotos : []).filter(f => f && f.consulta);
-  const max = (tipo === 'E-commerce' || tipo === 'Checkout') ? 3 : 6;
+  const max = tipo === 'E-commerce' ? 3 : 8;
   return lista.slice(0, max).map((f, i) => ({
     uso: textoCurto(f.uso, 40).toLowerCase().replace(/[^a-z0-9à-ú-]+/gi, '-') || ('foto-' + (i + 1)),
     consulta: textoCurto(f.consulta, 100),
@@ -11930,6 +11981,7 @@ function limparPedidosFotos(dados, tipo) {
   }));
 }
 async function planearSite({ tipo, nome, prompt, idioma, pago, comFotos, umaPagina }) {
+  if (tipo === 'Checkout') umaPagina = true; // 1.81.0: uma página de venda é uma página só
   const regras = PAGINAS_TIPO[tipo] || PAGINAS_TIPO['Landing Page'];
   const lingua = normalizarIdioma(idioma);
   const pedido = [
@@ -11938,7 +11990,7 @@ async function planearSite({ tipo, nome, prompt, idioma, pago, comFotos, umaPagi
     umaPagina ? 'A pessoa escolheu um site de UMA página só: devolve "paginas": [{"slug":"inicio"}].' : `Páginas obrigatórias: ${regras.fixas.join(', ')}. Opcionais: ${regras.opcionais.join(', ') || 'nenhuma'}. O site deve ser RICO e completo: escolhe sempre pelo menos 2 opcionais que sirvam ESTE negócio (até ${(pago ? PAGINAS_IA_MAX : PAGINAS_IA_MAX_FREE)} páginas de conteúdo no total, contando com as obrigatórias que não são da loja, dos trabalhos, dos álbuns ou dos artigos).`,
     'Ex: um restaurante quer "menu" e "reservas"; uma agência quer "servicos" e "precos"; uma clínica quer "servicos" e "equipa".',
     'Para cada página: "nav" (1 ou 2 palavras para o menu), "titulo" (título da página), "subtitulo" (uma frase curta) e "resumo" (em português: que secções e conteúdos leva, concretos para este negócio). Os textos "nav", "titulo" e "subtitulo" são no idioma do site.',
-    comFotos ? `Fotografias: 3 a ${(tipo === 'E-commerce' || tipo === 'Checkout') ? 3 : 6} fotos reais de que o site precisa (capa, sobre, serviços, ambiente...). Para cada uma: "uso" (onde entra, ex: capa, sobre, servico-1), "consulta" (3 a 6 palavras em INGLÊS para procurar num banco de fotos, concretas e visuais, ex: "african woman baker kneading bread"; quando houver pessoas, prefere pessoas africanas/moçambicanas; nunca marcas), "descricao" (em português, a foto ideal, para gerar com IA se não houver) e "orientacao" (paisagem, retrato ou quadrada).` : 'Fotografias: devolve "fotos": [].',
+    comFotos ? `Fotografias: ${tipo === 'E-commerce' ? '3' : '6 a 8'} fotos reais de que o site precisa (capa, sobre, serviços um a um, equipa, ambiente, detalhe, chamada final...) - um site profissional vive de fotografias grandes, não de texto. Para cada uma: "uso" (onde entra, ex: capa, sobre, servico-1), "consulta" (3 a 6 palavras em INGLÊS para procurar num banco de fotos, concretas e visuais, ex: "african woman baker kneading bread"; quando houver pessoas, prefere pessoas africanas/moçambicanas; nunca marcas), "descricao" (em português, a foto ideal, para gerar com IA se não houver) e "orientacao" (paisagem, retrato ou quadrada).` : 'Fotografias: devolve "fotos": [].',
     tipo === 'E-commerce' ? 'Estilos de loja: em "temas", escolhe os 3 estilos (ids diferentes) que melhor servem ESTE negócio, do melhor para o menos bom. Os estilos de nicho (fresco = mercearia/supermercado, sabor = restaurante/comida) só se o negócio for mesmo desse ramo:\n' + TEMAS_LOJA.map(t => '- ' + t.id + ': ' + t.resumo).join('\n') : '',
     'Formato exacto: {"paginas":[{"slug":"sobre","nav":"...","titulo":"...","subtitulo":"...","resumo":"..."}],"fotos":[{"uso":"capa","consulta":"...","descricao":"...","orientacao":"paisagem"}]' + (tipo === 'E-commerce' ? ',"temas":["id1","id2","id3"]' : '') + '}'
   ].filter(Boolean).join('\n');
@@ -12113,10 +12165,10 @@ function sortearPadroesSeccao(n) {
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a.slice(0, n);
 }
-function instrucaoRiqueza(tipo) {
+function instrucaoRiqueza(tipo, comModelo) {
   const extra = {
     'E-commerce': 'Loja: depois da div da loja, junta 4 a 6 secções ricas (vantagens e entregas, como comprar passo a passo, a marca com link para sobre.html, depoimentos, perguntas rápidas, uma faixa para encomendar no WhatsApp). Os produtos continuam a ser os protagonistas.',
-    'Checkout': 'Página de venda COMPLETA (como as melhores páginas de venda): depois da div da loja, desenvolve a venda com 6 a 9 secções - a promessa, os benefícios explicados, para quem é, como funciona, o que a pessoa recebe, garantia, depoimentos, perguntas frequentes e uma chamada final com um botão que leva de volta à oferta (href="#daniel-ia-produtos"). Isto substitui a regra de "textos curtos" do guia.',
+    'Checkout': 'Página de venda COMPLETA: 9 a 12 secções entre o hero e o rodapé, cada uma a responder a uma dúvida de quem está a decidir comprar (o que é, para quem, o que recebo, quem ensina ou organiza, que resultados, quanto custa, que garantia, como pago, como recebo). Textos de venda concretos e com substância, nunca genéricos. A secção da oferta (id="comprar") aparece uma vez, depois de a pessoa perceber o valor, e todos os botões levam a ela.',
   }[tipo] || 'A página inicial tem no mínimo 8 secções diferentes entre o hero e o rodapé.';
   return `\nSITE RICO E VIVO (regra base, a não ser que a descrição peça algo simples ou curto - aí manda a descrição):
 - Nada de sites "mortos" ou pobres: cada secção tem informação concreta e útil para este negócio (o que faz, como, para quem, quanto custa em MZN quando faz sentido, prazos, zonas, horários, garantias, passos, exemplos). Parágrafos com substância, listas, números e detalhes - nunca frases genéricas de enchimento.
@@ -12124,8 +12176,7 @@ function instrucaoRiqueza(tipo) {
 - Varia a forma das secções: nunca duas secções seguidas com o mesmo desenho (ex: três grelhas de cartões iguais seguidas).
 - Depoimentos: escreve-os como exemplos realistas que o dono vai trocar pelos verdadeiros - só o primeiro nome e a cidade, sem empresas nem números inventados como se fossem factos.
 - Interacção: hover nos cartões, contadores animados, acordeões, abas ou carrosséis onde fizer sentido (sempre com o conteúdo visível sem JavaScript).
-PADRÕES DE SECÇÃO SORTEADOS PARA ESTA VERSÃO (usa pelo menos 4 deles, adaptados ao negócio, para esta versão ser diferente das outras e de qualquer site anterior):
-${sortearPadroesSeccao(6).map(x => '- ' + x).join('\n')}`;
+${comModelo ? 'AS SECÇÕES SEGUEM O SITE-MODELO: a quantidade, a ordem e o desenho das secções são os do site-modelo (ver SITE-MODELO). Enche-as com informação concreta deste negócio. Só acrescentas secções que o negócio precise e o modelo não tenha, desenhadas com os mesmos componentes.' : 'PADRÕES DE SECÇÃO SORTEADOS PARA ESTA VERSÃO (usa pelo menos 4 deles, adaptados ao negócio, para esta versão ser diferente das outras e de qualquer site anterior):\n' + sortearPadroesSeccao(6).map(x => '- ' + x).join('\n')}`;
 }
 
 // ---- Instruções para as páginas ----
@@ -13613,7 +13664,7 @@ const TPL_SECCOES = {
     if (v === 'cartao') return `<section class="hero h-cartao"><div class="w"><div class="palco">${tFoto(c, 'capa', d.marca.nome)}<div class="cx rv">${etq}<h1>${tTitulo(h.titulo || d.marca.nome, h.destaque)}</h1>${lead}${btns}</div></div></div></section>`;
     if (v === 'venda') {
       const vd = d.venda || {};
-      return `<section class="hero h-venda"><div class="w duas"><div class="rv">${etq}${titulo}${lead}<ul>${tLista(vd.inclui, 5).map(x => `<li>${tIc('circle-check')}${tEsc(x)}</li>`).join('')}</ul>${nota}</div><div class="cartao oferta rv">${tFoto(c, 'capa', vd.produto || '')}<span class="etq">${tEsc(c.txt.oferta)}</span><h3 style="font-size:24px;margin-top:10px">${tEsc(vd.produto || d.marca.nome)}</h3><div class="preco"><b>${tEsc(vd.preco || '')}</b>${vd.preco_antigo ? `<s>${tEsc(vd.preco_antigo)}</s>` : ''}</div><a class="btn btn-p" href="#oferta">${tEsc(h.botao || c.txt.oferta)}${tIc('arrow-down')}</a><small>${tIc('shield-check')}${tEsc((d.garantia && d.garantia.titulo) || '')}</small></div></div></section>`;
+      return `<section class="hero h-venda"><div class="w duas"><div class="rv">${etq}${titulo}${lead}<ul>${tLista(vd.inclui, 5).map(x => `<li>${tIc('circle-check')}${tEsc(x)}</li>`).join('')}</ul>${nota}</div><div class="cartao oferta rv">${tFoto(c, 'capa', vd.produto || '')}<span class="etq">${tEsc(c.txt.oferta)}</span><h3 style="font-size:24px;margin-top:10px">${tEsc(vd.produto || d.marca.nome)}</h3><div class="preco"><b data-dia-preco>${tEsc(vd.preco || '')}</b>${vd.preco_antigo ? `<s data-dia-preco-antes>${tEsc(vd.preco_antigo)}</s>` : ''}</div><a class="btn btn-p" href="#oferta" data-dia-comprar>${tEsc(h.botao || c.txt.oferta)}${tIc('arrow-down')}</a><small>${tIc('shield-check')}${tEsc((d.garantia && d.garantia.titulo) || '')}</small></div></div></section>`;
     }
     if (v === 'perfil') {
       const pf = d.portfolio || {};
@@ -13762,6 +13813,8 @@ const TPL_SECCOES = {
     const id = ids[v] || 'daniel-ia-produtos';
     const pg = { loja: 'loja', portfolio: 'trabalhos', galeria: 'albuns', blog: 'artigos' }[v];
     const titulo = { loja: c.d.textos.loja_titulo || c.txt.produtos, portfolio: c.d.textos.portfolio_titulo || c.txt.trabalhos, galeria: c.d.textos.galeria_titulo || c.txt.albuns, blog: c.d.textos.blog_titulo || c.txt.artigos }[v];
+    // 1.81.0: nas páginas de venda, a caixa da oferta (não a montra da loja)
+    if (v === 'loja' && c.tipo === 'Checkout') return `<section class="s s-modulo${x.fundo}" id="oferta"><div class="w"><div class="s-cab-linha">${tCab(c, '', titulo, '', {})}</div><div id="comprar"></div><div id="daniel-ia-oferta" data-dia-depois-quiz></div></div></section>`;
     const ancora = v === 'loja' ? ' id="oferta"' : '';
     const extra = v === 'loja' ? ' data-sem-capa="1"' : '';
     const cab = (v === 'loja' && c.tipo === 'E-commerce') ? '' : `<div class="s-cab-linha">${tCab(c, '', titulo, '', {})}${c.temPagina(pg) ? `<a class="lnk" href="${pg}.html">${tEsc(c.txt.verTodos)}${tIc('arrow-right')}</a>` : ''}</div>`;
@@ -14166,6 +14219,7 @@ async function processarTemplate({ owner, nome, tipo, prompt, logo_data_url, sit
     // 1.73.0: com logótipo, o template ganha as cores dele
     const marcaR = logoUrl ? await marcaDoSite(siteId, logo_data_url, logoUrl) : { marca: null, tokens: 0 };
     const m = montarTemplate({ t: recolorirTemplate(t, marcaR.marca), conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: !!quizR, nome });
+    if (tipo === 'Checkout') await vendaCriarSeFalta(siteId, vendaDadosDoTemplate(conteudo, nome), nome).catch(e => console.error('[venda] template:', e.message || e));
     let html = prepararCasca(m.casca, m.plano);
     html = aplicarRedeResponsiva(html);
     const ehLoja = tipo === 'E-commerce' || tipo === 'Checkout';
@@ -16659,6 +16713,7 @@ async function aplicarTemplateAoSite({ owner, site, t, inicio }) {
     const logoUrl = site['Logo URL'] || '';
     const marcaT = logoUrl ? await marcaDoSite(siteId, logoUrl, logoUrl) : { marca: null };
     const m = montarTemplate({ t: recolorirTemplate(t, marcaT.marca), conteudo, fotos: fts.fotos, idioma, logoUrl, quiz: temQuiz, nome });
+    if (tipo === 'Checkout') await vendaCriarSeFalta(siteId, vendaDadosDoTemplate(conteudo, nome), nome).catch(e => console.error('[venda] template:', e.message || e));
 
     let html = prepararCasca(m.casca, m.plano);
     html = aplicarRedeResponsiva(html);
@@ -18157,7 +18212,7 @@ async function filaIAEntrar({ siteId, generationId, owner, nome, tipo, variantes
 const emailsCriadoEnviados = new Set();
 const CRIADO_TIPO = {
   'E-commerce': { o: 'A tua loja', pronto: 'está pronta', ver: 'Ver a minha loja', a: 'a', seguinte: 'Agora junta os teus produtos em <b>Gerir loja</b>, no dashboard, e partilha o link com os teus clientes.' },
-  'Checkout': { o: 'A tua página de venda', pronto: 'está pronta', ver: 'Ver a minha página', a: 'a', seguinte: 'Confirma os produtos e os preços em <b>Gerir loja</b>, no dashboard, e partilha o link.' },
+  'Checkout': { o: 'A tua página de venda', pronto: 'está pronta', ver: 'Ver a minha página', a: 'a', seguinte: 'Confirma o preço e escreve o que o cliente recebe depois de pagar em <b>Gerir oferta</b>, no dashboard. Depois partilha o link.' },
   'Agendamento': { o: 'A tua app de marcações', pronto: 'está pronta', ver: 'Ver a minha app', a: 'a', seguinte: 'Confirma os serviços, a equipa e o horário em <b>Gerir agenda</b>, no dashboard. Os clientes já podem marcar.' },
   'Portefólio': { o: 'O teu portefólio', pronto: 'está pronto', ver: 'Ver o meu portefólio', a: 'o', seguinte: 'Junta os teus trabalhos em <b>Gerir portefólio</b>, no dashboard, e partilha o link.' },
   'Blog': { o: 'O teu blog', pronto: 'está pronto', ver: 'Ver o meu blog', a: 'o', seguinte: 'Escreve o primeiro artigo no dashboard e partilha o link.' },
@@ -19356,11 +19411,23 @@ ROTAS_PRIVADAS.add('/voz-transcrever');
 //    As ideias entram no conceito dos vídeos cinemáticos do Business.
 // Ficheiros: inspiracao/indice.json, inspiracao/img/<id>.<ext>,
 // inspiracao/vid/<id>.<ext> e inspiracao/vid/<id>-poster.jpg.
+//
+// 1.80.0 - a inspiração passa a MANDAR no design ("seguir de perto"):
+//  - cada print é cortado em pedaços legíveis (inspiracao/img/<id>-c1.jpg...):
+//    um print de página inteira, mandado de uma vez, chega à IA encolhido e
+//    ilegível;
+//  - a IA estuda cada print UMA vez e guarda o "ADN" do design (estrutura
+//    secção a secção, letras, grelha, componentes, uso das fotos, movimento);
+//  - na criação, o print é o SITE-MODELO: a estrutura e o acabamento seguem-no;
+//    mudam o nome, os textos, as fotos e as cores (as do logótipo primeiro);
+//  - inspiracao/usos.json guarda os últimos sites e o print que cada um seguiu.
 // ======================================================
 const INSP_MAX_IMG = 8 * 1024 * 1024, INSP_MAX_VID = 10 * 1024 * 1024;
 const INSP_TIPOS_IMG = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 const INSP_TIPOS_VID = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
 const INSP_TIPOS_PROJ = ['E-commerce', 'Checkout', 'Landing Page', 'Portefólio', 'Blog', 'Galeria', 'Agendamento', 'Curso'];
+const INSP_MAX_CORTES = 5, INSP_MAX_CORTE = Math.round(1.6 * 1024 * 1024);
+const INSP_ESTUDAR = (clean(process.env.INSPIRACAO_ESTUDAR) || 'sim').toLowerCase() !== 'nao';
 const INSP_ESTILOS = ['Moderno', 'Luxo', 'Minimalista', 'Colorido', 'Clássico', 'Ousado', 'Natural', 'Tecnológico'];
 let inspIndice = null, inspPromessa = null, inspGravacao = Promise.resolve();
 function carregarInspiracao() {
@@ -19368,7 +19435,8 @@ function carregarInspiracao() {
   if (!inspPromessa) inspPromessa = (async () => {
     let j = null;
     try { j = JSON.parse((await descarregarDoBunnyBase('inspiracao/indice.json')).toString('utf8')); } catch (e) { j = null; }
-    inspIndice = { activo: !(j && j.activo === false), itens: (j && Array.isArray(j.itens)) ? j.itens : [] };
+    inspIndice = { activo: !(j && j.activo === false), modo: (j && j.modo === 'livre') ? 'livre' : 'perto', itens: (j && Array.isArray(j.itens)) ? j.itens : [] };
+    inspIndice.itens.forEach(x => { if (x.adn_estado === 'a estudar') x.adn_estado = ''; }); // o servidor reiniciou a meio de um estudo
     return inspIndice;
   })();
   return inspPromessa;
@@ -19383,8 +19451,11 @@ const INSP_PARAR = new Set('para com uma umas uns pelo pela pelos pelas sobre en
 function inspPalavras(t) { return new Set(inspNormal(t).split(/\s+/).filter(w => w.length >= 4 && !INSP_PARAR.has(w))); }
 function inspPontos(item, tipo, palavras) {
   let p = 0;
+  const adn = item.adn || null;
   if (item.tipos && item.tipos.length) { if (!item.tipos.includes(tipo)) return -1; p += 2; }
-  const dele = inspPalavras([item.sectores, item.titulo, item.notas, item.estilo].join(' '));
+  else if (adn && adn.serve_para && adn.serve_para.length) { if (!adn.serve_para.includes(tipo)) return -1; p += 1; } // sem tipos marcados à mão: vale o que o estudo viu
+  if (adn && adn.resumo) p += 1.5; // os prints já estudados passam à frente
+  const dele = inspPalavras([item.sectores, item.titulo, item.notas, item.estilo, adn ? adn.sectores : ''].join(' '));
   for (const w of palavras) { if (dele.has(w)) p += 3; else for (const d of dele) { if (d.length >= 5 && w.length >= 5 && (d.indexOf(w) === 0 || w.indexOf(d) === 0)) { p += 2; break; } } }
   return p;
 }
@@ -19397,23 +19468,202 @@ function inspEscolher(kind, tipo, prompt, n, evitar) {
   return cand.slice(0, n).map(c => c.x);
 }
 // Para cada site: lembra quais já foram usados (as 3 versões ficam diferentes)
+// e qual ficou em cada versão (a mesma versão recebe sempre o mesmo print).
 const inspUsadasPorSite = new Map();
-async function inspiracaoParaSite(siteId, tipo, prompt) {
+async function inspiracaoParaSite(siteId, tipo, prompt, versao) {
   await carregarInspiracao();
   if (!inspIndice.activo) return null;
   const chave = siteId || ('x' + Math.random());
   let u = inspUsadasPorSite.get(chave);
-  if (!u) { u = { ids: new Set(), t: Date.now() }; inspUsadasPorSite.set(chave, u); }
+  if (!u) { u = { ids: new Set(), por: {}, t: Date.now() }; inspUsadasPorSite.set(chave, u); }
   for (const [k, v] of inspUsadasPorSite) if (Date.now() - v.t > 3600000) inspUsadasPorSite.delete(k);
+  const v = String(versao || '0');
+  if (u.por[v]) { const ja = inspIndice.itens.find(x => x.id === u.por[v]); if (ja) return ja; }
   const [it] = inspEscolher('site', tipo, prompt, 1, u.ids);
   if (!it) return null;
-  u.ids.add(it.id);
+  u.ids.add(it.id); u.por[v] = it.id;
   it.usos = (Number(it.usos) || 0) + 1; it.usado = new Date().toISOString();
   gravarInspiracao();
   return it;
 }
+
+// ---- cortes: o print em pedaços que a IA consegue ler ----
+function inspCaminho(url) { const i = String(url || '').indexOf('inspiracao/'); return i >= 0 ? String(url).slice(i).split('?')[0] : ''; }
+const inspCacheImg = new Map(); // caminho -> data URL (até ~40 MB em memória)
+let inspCacheBytes = 0;
+async function inspDataUrlDe(url) {
+  const cam = inspCaminho(url);
+  if (!cam) return '';
+  if (inspCacheImg.has(cam)) return inspCacheImg.get(cam);
+  const b = await descarregarDoBunnyBase(cam);
+  if (!b || !b.length) return '';
+  const ext = (cam.split('.').pop() || '').toLowerCase();
+  const d = 'data:' + (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg') + ';base64,' + b.toString('base64');
+  inspCacheBytes += d.length; inspCacheImg.set(cam, d);
+  while (inspCacheBytes > 40 * 1024 * 1024 && inspCacheImg.size > 1) { const k = inspCacheImg.keys().next().value; inspCacheBytes -= inspCacheImg.get(k).length; inspCacheImg.delete(k); }
+  return d;
+}
+// As imagens do print para mandar à IA (cortes, se houver; senão o original).
+// Vão como dados e não como link: a IA não depende de conseguir abrir a CDN.
+async function imagensInspiracao(it) {
+  const urls = (it.cortes && it.cortes.length) ? it.cortes.slice(0, INSP_MAX_CORTES) : [it.url];
+  const l = [];
+  for (const u of urls) { try { const d = await inspDataUrlDe(u); if (d) l.push(d); } catch (e) { console.error('[inspiração] não li', inspCaminho(u), e.message || e); } }
+  return l;
+}
+
+// ---- ADN: a IA estuda o print uma vez ----
+function limparAdn(o) {
+  o = (o && typeof o === 'object') ? o : {};
+  const cor = c => { const v = String(c || '').trim(); return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v.toUpperCase() : ''; };
+  const cores = {};
+  ['fundo', 'superficie', 'primaria', 'destaque', 'texto'].forEach(k => { const v = cor(o.cores && o.cores[k]); if (v) cores[k] = v; });
+  const lista = (l, n, max) => (Array.isArray(l) ? l : []).map(x => textoCurto(x, max)).filter(Boolean).slice(0, n);
+  const secoes = (Array.isArray(o.secoes) ? o.secoes : []).map(x => (x && typeof x === 'object')
+    ? { papel: textoCurto(x.papel, 60), layout: textoCurto(x.layout, 420), pormenores: textoCurto(x.pormenores, 260) }
+    : { papel: '', layout: textoCurto(x, 420), pormenores: '' }).filter(x => x.layout).slice(0, 14);
+  return {
+    resumo: textoCurto(o.resumo, 260),
+    ambiente: ['claro', 'escuro', 'vibrante'].includes(o.ambiente) ? o.ambiente : 'claro',
+    nivel: lista(o.nivel, 6, 220), cores,
+    tipografia: textoCurto(o.tipografia, 420), grelha: textoCurto(o.grelha, 320), cantos: textoCurto(o.cantos, 200),
+    cabecalho: textoCurto(o.cabecalho, 420), hero: textoCurto(o.hero, 700), secoes,
+    componentes: textoCurto(o.componentes, 520), imagens: textoCurto(o.imagens, 420), movimento: textoCurto(o.movimento, 320),
+    rodape: textoCurto(o.rodape, 320),
+    serve_para: [...new Set(lista(o.serve_para, 8, 30))].filter(t => INSP_TIPOS_PROJ.includes(t)),
+    sectores: textoCurto(o.sectores, 200)
+  };
+}
+function textoAdn(a) {
+  if (!a || !a.resumo) return '- (ainda não estudado: olha com muita atenção para as imagens do site-modelo e tira delas a estrutura, a grelha, as letras, os componentes, o uso das fotos e o acabamento)';
+  const l = [];
+  l.push('Em resumo: ' + a.resumo);
+  if (a.nivel && a.nivel.length) l.push('O que o faz parecer um site caro: ' + a.nivel.join('; '));
+  if (a.tipografia) l.push('Letras: ' + a.tipografia);
+  if (a.grelha) l.push('Grelha e espaço: ' + a.grelha);
+  if (a.cantos) l.push('Cantos, sombras e linhas: ' + a.cantos);
+  if (a.cabecalho) l.push('Cabeçalho: ' + a.cabecalho);
+  if (a.hero) l.push('Hero (topo): ' + a.hero);
+  (a.secoes || []).forEach((x, i) => l.push('Secção ' + (i + 1) + (x.papel ? ' (' + x.papel + ')' : '') + ': ' + x.layout + (x.pormenores ? ' Pormenores: ' + x.pormenores : '')));
+  if (a.componentes) l.push('Componentes (botões, cartões, etiquetas, ícones): ' + a.componentes);
+  if (a.imagens) l.push('Fotografias e imagens: ' + a.imagens);
+  if (a.movimento) l.push('Movimento: ' + a.movimento);
+  if (a.rodape) l.push('Rodapé: ' + a.rodape);
+  const c = a.cores || {}, cs = ['fundo', 'superficie', 'primaria', 'destaque', 'texto'].filter(k => c[k]).map(k => k + ' ' + c[k]);
+  if (cs.length) l.push('Paleta do modelo (só se usa quando não há logótipo nem cores pedidas): ' + cs.join(', '));
+  return l.map(x => '- ' + x).join('\n');
+}
+const SISTEMA_ADN = 'És director de arte sénior. Estudas prints de sites excelentes e escreves a ficha técnica do design, tão concreta que outro designer consegue reconstruir o mesmo layout sem ver a imagem. Respondes só com um objecto JSON válido, sem texto à volta.';
+async function estudarInspiracao(it) {
+  if (!OPENAI_API_KEY) throw new Error('Sem OPENAI_API_KEY');
+  const imgs = await imagensInspiracao(it);
+  if (!imgs.length) throw new Error('Não consegui ler a imagem');
+  const pedido = [
+    imgs.length > 1 ? 'As ' + imgs.length + ' imagens são o MESMO site, cortado de cima para baixo (a primeira é o topo).' : 'A imagem é um print de um site.',
+    'Escreve a ficha do DESIGN (nunca do conteúdo: não copies nomes, marcas, slogans nem textos). Português, frases curtas e concretas, com medidas e proporções quando se vêem (ex: "hero em 2 colunas 55/45: à esquerda etiqueta pequena em maiúsculas, título de 3 linhas com uma palavra em itálico serifado, 2 botões; à direita foto retrato com cantos de 32 px e um cartão de avaliação flutuante no canto inferior esquerdo").',
+    'Formato exacto: {"resumo":"uma frase","ambiente":"claro|escuro|vibrante","nivel":["3 a 5 coisas concretas que fazem este site parecer feito por um estúdio caro"],'
+      + '"cores":{"fundo":"#RRGGBB","superficie":"#RRGGBB","primaria":"#RRGGBB","destaque":"#RRGGBB","texto":"#RRGGBB"},'
+      + '"tipografia":"famílias parecidas do Google Fonts para títulos e texto, pesos, tamanho relativo dos títulos, maiúsculas, espaçamento de letras",'
+      + '"grelha":"largura máxima, colunas, margens laterais, espaço vertical entre secções, alinhamentos",'
+      + '"cantos":"raios, sombras, bordas e linhas","cabecalho":"composição do cabeçalho",'
+      + '"hero":"composição exacta do topo: o que está onde, proporções, tamanho do título, botões, imagem, elementos flutuantes, fundo",'
+      + '"secoes":[{"papel":"para que serve (ex: serviços, números, testemunhos)","layout":"disposição exacta: colunas, cartões, fundo, alinhamento, tamanhos","pormenores":"acabamentos que se notam"}],'
+      + '"componentes":"botões, cartões, etiquetas, ícones, separadores: forma, borda, enchimento, tamanhos",'
+      + '"imagens":"como as fotografias são usadas: quantas, tamanhos, recortes, sobreposições, tratamento",'
+      + '"movimento":"animações e efeitos que este design pede (entrada ao fazer scroll, hover, faixas em movimento, parallax)",'
+      + '"rodape":"composição do rodapé","serve_para":["tipos de projecto onde este design serve bem"],"sectores":"8 a 12 palavras soltas dos sectores de negócio onde encaixa"}',
+    '"secoes": TODAS as secções entre o hero e o rodapé, de cima para baixo (até 14). "serve_para" só pode ter valores desta lista: ' + INSP_TIPOS_PROJ.join(', ') + '.',
+    'O que cada tipo quer dizer: E-commerce = loja online com catálogo de vários produtos e carrinho; Checkout = página de venda de UMA oferta (curso, bilhete de evento, ebook, mentoria, serviço), longa, com botões de compra e uma secção de preço; Landing Page = site de um negócio ou serviço; Portefólio = trabalhos de um profissional; Blog = artigos; Galeria = álbuns de fotografia; Agendamento = negócio que marca horários (salão, clínica); Curso = escola online com vários cursos. Uma página de venda nunca é "E-commerce" e uma loja nunca é "Checkout".',
+    it.notas ? 'Nota da equipa sobre este print: ' + String(it.notas).slice(0, 300) : ''
+  ].filter(Boolean).join('\n');
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 150000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', signal: ctrl.signal,
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OPENAI_MODEL, reasoning_effort: 'medium', max_completion_tokens: 9000, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: SISTEMA_ADN }, { role: 'user', content: [{ type: 'text', text: pedido }].concat(imgs.map(u => ({ type: 'image_url', image_url: { url: u, detail: 'high' } }))) }]
+      })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error('OpenAI falhou: ' + ((json.error && json.error.message) || res.status));
+    const texto = String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim();
+    const m = texto.match(/\{[\s\S]*\}/);
+    const adn = limparAdn(JSON.parse(m ? m[0] : texto));
+    if (!adn.resumo && !adn.hero && !adn.secoes.length) throw new Error('A IA não descreveu o design');
+    return { adn, tokens: (json.usage && json.usage.total_tokens) || 0 };
+  } finally { clearTimeout(t); }
+}
+// Fila de estudo: um print de cada vez, sem nunca travar uma criação.
+const inspFilaEstudo = []; let inspAEstudar = false;
+function pedirEstudoInspiracao(it, forcar) {
+  if (!INSP_ESTUDAR || !it || it.kind !== 'site' || !OPENAI_API_KEY) return;
+  if (it.adn_estado === 'a estudar' || (it.adn && it.adn.resumo && !forcar)) return;
+  if (!forcar && (Number(it.adn_falhas) || 0) >= 3) return; // 3 falhas seguidas: fica para o botão "Estudar outra vez"
+  it.adn_estado = 'a estudar';
+  inspFilaEstudo.push(it.id);
+  if (!inspAEstudar) trabalharEstudos();
+}
+async function trabalharEstudos() {
+  inspAEstudar = true;
+  try {
+    while (inspFilaEstudo.length) {
+      const id = inspFilaEstudo.shift();
+      const it = inspIndice && inspIndice.itens.find(x => x.id === id);
+      if (!it) continue;
+      try {
+        const r = await estudarInspiracao(it);
+        it.adn = r.adn; it.adn_estado = 'pronto'; it.adn_em = new Date().toISOString(); it.adn_falhas = 0;
+      } catch (e) {
+        it.adn_estado = 'erro'; it.adn_falhas = (Number(it.adn_falhas) || 0) + 1; it.adn_erro = textoCurto(e.message || e, 160);
+        console.error('[inspiração] estudo falhou (' + id + '):', e.message || e);
+      }
+      await gravarInspiracao();
+    }
+  } finally { inspAEstudar = false; }
+}
+// Ao arrancar e de hora a hora: estuda o que ainda falta.
+function estudarPendentesInspiracao() {
+  carregarInspiracao().then(() => { inspIndice.itens.filter(x => x.kind === 'site' && x.activo !== false && x.cortes && x.cortes.length && !(x.adn && x.adn.resumo)).slice(0, 40).forEach(x => pedirEstudoInspiracao(x)); }).catch(() => {});
+}
+setTimeout(estudarPendentesInspiracao, 20000).unref();
+setInterval(estudarPendentesInspiracao, 3600000).unref();
+
+// ---- o que a IA recebe na criação ----
+// modo "perto" (por omissão): o print é o site-modelo e manda na estrutura.
+function inspiracaoForte() { return !inspIndice || inspIndice.modo !== 'livre'; }
+function instrucaoSiteModelo(it, tipo, direcao, nImgs) {
+  const ehLoja = (tipo === 'E-commerce'); // 1.81.0: a página de venda já não é loja
+  const ehVenda = (tipo === 'Checkout');
+  const cabeca = direcao && direcao.n
+    ? `VERSÃO ${direcao.n} DE 3: a pessoa vai ver três versões lado a lado e escolher uma. Cada versão segue um SITE-MODELO diferente da biblioteca da Daniel IA - esta segue o que está nas imagens deste pedido.`
+    : 'A DANIEL IA ESCOLHEU UM SITE-MODELO PARA ESTE PEDIDO.';
+  return `\n${cabeca}
+SITE-MODELO (obrigatório): as últimas ${nImgs > 1 ? nImgs + ' imagens' : 'imagem'} deste pedido ${nImgs > 1 ? 'são o print de um site excelente, cortado de cima para baixo (a primeira é o topo)' : 'é o print de um site excelente'}${it.estilo ? ' (estilo ' + it.estilo + ')' : ''}. O teu trabalho é RECRIAR ESSE DESIGN para este negócio, com o mesmo nível de acabamento. Não é uma sugestão nem um "ambiente": é a planta do site.
+SEGUE À RISCA: a ordem e a disposição das secções; a composição do hero (o que está onde, proporções, tamanho do título); a grelha, as larguras, as margens e o espaço entre secções; as letras (as famílias mais parecidas do Google Fonts, com os mesmos pesos, tamanhos relativos e caixa); a forma dos botões, cartões, etiquetas e ícones; cantos, sombras, bordas e linhas; o papel das fotografias (mesmo tamanho, recorte, sobreposições e cartões flutuantes); os efeitos de movimento. Cada secção tua tem de se reconhecer numa secção do modelo.
+MUDA SEMPRE: o nome, o logótipo, os textos, os números e a oferta (escritos de raiz para este negócio - nunca copies nomes, marcas, slogans nem frases do modelo) e as fotografias (usa as FOTOGRAFIAS DESTE SITE e as imagens que a pessoa anexou nos lugares onde o modelo tem fotos; se não chegarem, faz composições ricas em CSS/SVG com a mesma área e o mesmo peso visual - nunca deixes o lugar vazio nem o troques por texto).
+CORES: primeiro as do logótipo e as que a descrição pedir; só se não houver nenhuma é que usas a paleta do modelo. Aplica as cores deste negócio com a MESMA lógica do modelo (onde ele usa a cor forte, o neutro, o fundo escuro).
+ADAPTAÇÃO: cada secção do modelo passa a ser a secção equivalente deste negócio (ex: "projectos" do modelo → "serviços" ou "pratos" aqui), com o mesmo desenho. Se este negócio precisar de uma secção que o modelo não tem (ou de uma div obrigatória das instruções), desenha-a com os mesmos componentes e a mesma grelha, no sítio onde encaixa melhor. Secções do modelo que não fazem sentido para este negócio saem.${ehLoja ? '\nLOJA: a montra é automática (a div obrigatória). O modelo manda no cabeçalho, nas faixas e secções à volta da montra, nas cores, nas letras, nos cartões e no rodapé.' + (direcao && direcao.temaPrompt ? ' ESTRUTURA DA LOJA NESTA VERSÃO - ' + direcao.temaPrompt : '') : ''}
+ADN DO SITE-MODELO (estudado antes por um director de arte):
+${textoAdn(it.adn)}${it.notas ? '\n- Nota da equipa: ' + String(it.notas).slice(0, 300) : ''}
+Se a descrição da pessoa pedir explicitamente cores, um estilo ou secções concretas, a descrição manda NESSES pontos; em tudo o resto manda o site-modelo.
+${ehVenda ? 'PÁGINA DE VENDA: onde o site-modelo tem a caixa de preço, a tabela de planos ou o formulário de compra, entra a secção da oferta (id="comprar", com a div obrigatória) - desenha o título e o fundo dessa secção como no modelo. Os botões do modelo passam a ser os botões de compra (data-dia-comprar). Se o modelo for uma loja ou um site de empresa, aproveita o estilo, a grelha e os componentes, mas a estrutura é a de uma página de venda.\n' : ''}TESTE FINAL: quem puser o print e o teu site lado a lado tem de reconhecer a mesma mão de designer - a mesma estrutura, o mesmo ritmo e o mesmo cuidado.`;
+}
+// modo "livre": só inspiração de estilo (como na 1.78.0), agora com o ADN.
 function instrucaoInspiracao(it) {
-  return `\nINSPIRAÇÃO DA CASA: a ÚLTIMA imagem deste pedido é um site da biblioteca de inspiração da Daniel IA${it.estilo ? ' (estilo ' + it.estilo + ')' : ''}. Usa-a para subir o nível: acabamento, hierarquia, tipografia, espaço em branco, ritmo das secções, detalhes e composição. É INSPIRAÇÃO, não cópia: nunca uses o nome, o logótipo, os textos, as fotografias nem a marca que lá aparecem. As cores seguem primeiro o logótipo e a descrição da pessoa; se não houver, podes inspirar-te na paleta da imagem. Se a descrição da pessoa pedir outra coisa, a descrição manda.${it.notas ? ' Nota da equipa sobre esta referência: ' + String(it.notas).slice(0, 300) : ''}`;
+  return `\nINSPIRAÇÃO DA CASA: as ÚLTIMAS imagens deste pedido são um site da biblioteca de inspiração da Daniel IA${it.estilo ? ' (estilo ' + it.estilo + ')' : ''}. Usa-o para subir o nível: acabamento, hierarquia, tipografia, espaço em branco, ritmo das secções, detalhes e composição. É INSPIRAÇÃO, não cópia: nunca uses o nome, o logótipo, os textos, as fotografias nem a marca que lá aparecem. As cores seguem primeiro o logótipo e a descrição da pessoa; se não houver, podes inspirar-te na paleta da imagem. Se a descrição da pessoa pedir outra coisa, a descrição manda.${it.adn && it.adn.resumo ? '\nO que esse site tem:\n' + textoAdn(it.adn) : ''}${it.notas ? ' Nota da equipa sobre esta referência: ' + String(it.notas).slice(0, 300) : ''}`;
+}
+// Registo: que print cada site seguiu (os últimos 300), para o painel.
+let inspUsos = null, inspUsosGravacao = Promise.resolve();
+async function registarUsoInspiracao(it, siteId, nome, versao) {
+  try {
+    if (!inspUsos) { try { inspUsos = JSON.parse((await descarregarDoBunnyBase('inspiracao/usos.json')).toString('utf8')); } catch (e) { inspUsos = []; } if (!Array.isArray(inspUsos)) inspUsos = []; }
+    inspUsos.unshift({ item: it.id, site: String(siteId || ''), nome: textoCurto(nome, 80), versao: Number(versao) || 0, modo: inspiracaoForte() ? 'perto' : 'livre', adn: !!(it.adn && it.adn.resumo), cortes: (it.cortes || []).length, quando: new Date().toISOString() });
+    inspUsos = inspUsos.slice(0, 300);
+    inspUsosGravacao = inspUsosGravacao.then(() => uploadParaBunnyBase('inspiracao/usos.json', Buffer.from(JSON.stringify(inspUsos), 'utf8'), 'application/json; charset=utf-8')).catch(() => {});
+  } catch (e) {}
 }
 // Ideias de vídeos para o conceito do hero cinemático
 async function ideiasVideoInspiracao(tipo, prompt) {
@@ -19428,7 +19678,9 @@ async function ideiasVideoInspiracao(tipo, prompt) {
 
 // ---- painel ----
 function inspPublico(x) {
-  return { id: x.id, kind: x.kind, url: x.url, poster: x.poster || '', titulo: x.titulo || '', tipos: x.tipos || [], sectores: x.sectores || '', estilo: x.estilo || '', notas: x.notas || '', activo: x.activo !== false, usos: Number(x.usos) || 0, usado: x.usado || '', criado: x.criado || '' };
+  return { id: x.id, kind: x.kind, url: x.url, poster: x.poster || '', titulo: x.titulo || '', tipos: x.tipos || [], sectores: x.sectores || '', estilo: x.estilo || '', notas: x.notas || '', activo: x.activo !== false, usos: Number(x.usos) || 0, usado: x.usado || '', criado: x.criado || '',
+    cortes: (x.cortes || []).length, adn_estado: x.kind !== 'site' ? '' : (x.adn && x.adn.resumo && x.adn_estado !== 'a estudar' ? 'pronto' : (x.adn_estado || '')), adn: x.adn && x.adn.resumo ? x.adn : null, adn_erro: x.adn_estado === 'erro' ? (x.adn_erro || '') : '',
+    sites: (inspUsos || []).filter(u => u.item === x.id).slice(0, 3).map(u => ({ nome: u.nome, quando: u.quando, modo: u.modo })) };
 }
 function inspCampos(dst, b) {
   if (b.titulo !== undefined) dst.titulo = textoCurto(b.titulo, 80);
@@ -19450,7 +19702,12 @@ app.post('/admin-inspiracao', async (req, res) => {
     const admin = await exigirAdmin(req, res); if (!admin) return;
     await carregarInspiracao();
     if (req.body.activo !== undefined) { inspIndice.activo = req.body.activo !== false; await gravarInspiracao(); registar(admin, 'inspiracao', inspIndice.activo ? 'ligada' : 'desligada'); }
-    return res.json({ status: 'success', response: { activo: inspIndice.activo, itens: inspIndice.itens.map(inspPublico), tipos: INSP_TIPOS_PROJ, estilos: INSP_ESTILOS } });
+    if (req.body.modo !== undefined) { inspIndice.modo = req.body.modo === 'livre' ? 'livre' : 'perto'; await gravarInspiracao(); registar(admin, 'inspiracao', 'modo ' + inspIndice.modo); }
+    if (!inspUsos) { try { inspUsos = JSON.parse((await descarregarDoBunnyBase('inspiracao/usos.json')).toString('utf8')); } catch (e) { inspUsos = []; } if (!Array.isArray(inspUsos)) inspUsos = []; }
+    const sitios = inspIndice.itens.filter(x => x.kind === 'site');
+    return res.json({ status: 'success', response: { activo: inspIndice.activo, modo: inspIndice.modo, itens: inspIndice.itens.map(inspPublico), tipos: INSP_TIPOS_PROJ, estilos: INSP_ESTILOS,
+      estudo: { ligado: INSP_ESTUDAR && !!OPENAI_API_KEY, prontos: sitios.filter(x => x.adn && x.adn.resumo).length, a_estudar: sitios.filter(x => x.adn_estado === 'a estudar').length, sem_cortes: sitios.filter(x => !(x.cortes && x.cortes.length)).length, total: sitios.length },
+      ultimos: (inspUsos || []).slice(0, 12).map(u => { const it = inspIndice.itens.find(x => x.id === u.item); return { nome: u.nome, quando: u.quando, modo: u.modo, adn: !!u.adn, cortes: u.cortes || 0, titulo: it ? (it.titulo || '') : '', url: it ? ((it.cortes && it.cortes[0]) || it.url) : '' }; }) } });
   } catch (e) { return res.json({ status: 'error', message: 'Não foi possível ler a biblioteca.' }); }
 });
 app.post('/admin-inspiracao-guardar', async (req, res) => {
@@ -19477,7 +19734,21 @@ app.post('/admin-inspiracao-guardar', async (req, res) => {
       inspIndice.itens.unshift(it);
       registar(admin, 'inspiracao-nova', kind + ' ' + id);
     } else {
+      const notasAntes = it.notas || '';
       inspCampos(it, b);
+      if (b.estudar === true || (b.notas !== undefined && (it.notas || '') !== notasAntes && it.adn)) { it.adn_falhas = 0; setTimeout(() => pedirEstudoInspiracao(it, true), 50); }
+    }
+    // 1.80.0: os cortes do print (feitos no navegador), para a IA o conseguir ler
+    if (it.kind === 'site' && Array.isArray(b.cortes) && b.cortes.length) {
+      const cs = b.cortes.slice(0, INSP_MAX_CORTES).map(c => inspDataUrl(c, INSP_TIPOS_IMG, INSP_MAX_CORTE));
+      if (cs.some(c => !c || c.grande)) return res.json({ status: 'error', message: 'Os cortes do print não chegaram bem. Tenta outra vez.' });
+      const urls = [];
+      for (let i = 0; i < cs.length; i++) urls.push(await uploadParaBunnyBase('inspiracao/img/' + it.id + '-c' + (i + 1) + '.' + cs[i].ext, cs[i].buffer, cs[i].mime));
+      urls.forEach(u => { const k = inspCaminho(u); if (inspCacheImg.has(k)) { inspCacheBytes -= inspCacheImg.get(k).length; inspCacheImg.delete(k); } });
+      it.cortes = urls; it.adn_falhas = 0;
+      setTimeout(() => pedirEstudoInspiracao(it, true), 50);
+    } else if (it.kind === 'site' && !b.id && !b.cortes_depois) { // cortes_depois: o painel manda os cortes a seguir, e só aí se estuda
+      setTimeout(() => pedirEstudoInspiracao(it), 50);
     }
     await gravarInspiracao();
     return res.json({ status: 'success', response: { item: inspPublico(it) } });
@@ -19495,8 +19766,19 @@ app.post('/admin-inspiracao-apagar', async (req, res) => {
     return res.json({ status: 'success', response: { apagado: true } });
   } catch (e) { return res.json({ status: 'error', message: 'Não foi possível apagar.' }); }
 });
-['/admin-inspiracao', '/admin-inspiracao-guardar', '/admin-inspiracao-apagar'].forEach(r => ROTAS_PRIVADAS.add(r));
-globalThis.__danielInspiracao = { escolher: inspiracaoParaSite, carregar: carregarInspiracao, ideiasVideo: ideiasVideoInspiracao };
+app.post('/admin-inspiracao-ficheiro', async (req, res) => {
+  try {
+    const admin = await exigirAdmin(req, res); if (!admin) return;
+    await carregarInspiracao();
+    const it = inspIndice.itens.find(x => x.id === req.body.id && x.kind === 'site');
+    if (!it) return res.json({ status: 'error', message: 'Esta referência já não existe.' });
+    const d = await inspDataUrlDe(it.url);
+    if (!d) return res.json({ status: 'error', message: 'Não consegui ler a imagem.' });
+    return res.json({ status: 'success', response: { id: it.id, ficheiro: d } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não consegui ler a imagem.' }); }
+});
+['/admin-inspiracao', '/admin-inspiracao-guardar', '/admin-inspiracao-apagar', '/admin-inspiracao-ficheiro'].forEach(r => ROTAS_PRIVADAS.add(r));
+globalThis.__danielInspiracao = { escolher: inspiracaoParaSite, carregar: carregarInspiracao, ideiasVideo: ideiasVideoInspiracao, estudar: estudarInspiracao, pedirEstudo: pedirEstudoInspiracao, fila: () => inspFilaEstudo.length + (inspAEstudar ? 1 : 0), textoAdn };
 
 const EAD_JS = "/*\n  Daniel IA - plataforma de cursos (1.79.0)\n  -----------------------------------------\n  Servido em /ead.js. Mostra, dentro de <div id=\"daniel-ia-cursos\">, o\n  catálogo, a página de cada curso, as aulas (vídeo, texto e ao vivo), o\n  progresso, os materiais, os comentários e o certificado.\n  Os alunos entram com o email e um código de 6 dígitos.\n  Navegação pelo endereço: #ead/curso/<id>, #ead/aula/<curso>/<aula>, #ead/meus\n  Usa as fichas --dia-* do próprio site.\n*/\n(function(){\n  'use strict';\n  if (window.__danielEad) return;\n  window.__danielEad = true;\n  var eu = document.currentScript || document.querySelector('script[src*=\"ead.js\"]');\n  if (!eu) return;\n  var SITE = eu.getAttribute('data-site') || '';\n  var API = ''; try { API = new URL(eu.src, location.href).origin; } catch (e) { return; }\n  var PREVIA = /[?&]dia_previa=1/.test(location.search) || /\\/v\\d+\\.html$/.test(location.pathname) || !SITE;\n  if (PREVIA) SITE = 'previa';\n  var LANG = (document.documentElement.lang || 'pt').slice(0, 2).toLowerCase();\n  var TX = {\n    pt: { cursos: 'Cursos', meus: 'Os meus cursos', entrar: 'Entrar', sair: 'Sair', gratis: 'Grátis', aulas: '{n} aulas', aula1: '1 aula', horas: '{n} h', min: '{n} min', continuar: 'Continuar', comecar: 'Começar', verCurso: 'Ver o curso', todos: 'Todos os cursos', inscreverGratis: 'Inscrever-me grátis', comprar: 'Comprar por {v}', continuarCurso: 'Continuar o curso', incluido: 'O que inclui', inclui1: 'Acesso às aulas quando quiseres', inclui2: 'Materiais para descarregar', inclui3: 'Certificado de conclusão', inclui4: 'Perguntas ao formador', curriculo: 'Conteúdo do curso', previa: 'Prévia grátis', aoVivo: 'Ao vivo', aoVivoAgora: 'AO VIVO AGORA', texto: 'Leitura', video: 'Vídeo', progresso: '{f} de {t} aulas concluídas', concluida: 'Concluída', marcarConcluida: 'Marcar como concluída', proxima: 'Próxima aula', anterior: 'Aula anterior', materiais: 'Materiais', comentarios: 'Perguntas e comentários', comentar: 'Escreve a tua pergunta ou comentário...', enviar: 'Enviar', semComentarios: 'Ainda não há comentários. Sê o primeiro!', resposta: 'Resposta do formador', paraComentar: 'Inscreve-te no curso para fazeres perguntas.', parabens: 'Parabéns! Terminaste o curso.', baixarCert: 'Descarregar o certificado', videoPreparar: 'O vídeo desta aula ainda está a ser preparado. Volta daqui a pouco.', aoVivoEm: 'A aula ao vivo começa {q}.', aoVivoTerminou: 'Esta aula ao vivo já terminou.', entrarAoVivo: 'Entrar na aula ao vivo', aguardarProf: 'À espera do formador...', aoVivoLigado: 'Estás na aula ao vivo', chat: 'Chat da aula', escreverChat: 'Escreve uma mensagem...', entrarTit: 'Entra para estudares', entrarSub: 'Recebes um código no teu email. Sem palavras-passe.', email: 'O teu email', nome: 'O teu nome', receberCodigo: 'Receber o código', codigoTit: 'Escreve o código', codigoSub: 'Enviámos um código de 6 dígitos para {e}.', entrarBtn: 'Entrar', outroEmail: 'Usar outro email', reenviar: 'Enviar outro código', fechar: 'Fechar', pagarTit: 'Comprar o curso', comoPagar: 'Como queres pagar?', telefone: 'Número de telefone', pagar: 'Pagar {v}', esperaPag: 'À espera da confirmação do pagamento...', jaPaguei: 'Já paguei', cancelar: 'Cancelar', abrirSeparador: 'A página não aparece? Abrir num separador novo', aindaNao: 'Ainda não recebemos o pagamento. Se já pagaste, espera um pouco.', manualTit: 'Pedido enviado!', manualSub: 'O formador vai contactar-te para combinar o pagamento. Assim que receber, o curso aparece nos teus cursos.', whatsapp: 'Falar no WhatsApp', bemVindo: 'Já tens acesso. Bons estudos!', previaAviso: 'Isto é uma pré-visualização. No teu site, os alunos entram, compram e estudam aqui.', erro: 'Algo correu mal. Tenta outra vez.', semCursos: 'Ainda não há cursos publicados.', nivel: 'Nível', professor: 'Formador', numeroErrado: 'Este número não é M-Pesa (84/85) nem e-Mola (86/87).', escolheMetodo: 'Escolhe como queres pagar.', cartao: 'Cartão', semAulas: 'Este curso ainda não tem aulas.', bloqueada: 'Inscreve-te para abrires esta aula.', hoje: 'hoje às {h}', amanha: 'amanhã às {h}', dia: 'a {d} às {h}', dentro: 'dentro de {m} min', faltaNome: 'Escreve o teu nome.', abrirCurso: 'Abrir o curso', inscrito: 'Inscrito' },\n    en: { cursos: 'Courses', meus: 'My courses', entrar: 'Sign in', sair: 'Sign out', gratis: 'Free', aulas: '{n} lessons', aula1: '1 lesson', horas: '{n} h', min: '{n} min', continuar: 'Continue', comecar: 'Start', verCurso: 'View course', todos: 'All courses', inscreverGratis: 'Enrol for free', comprar: 'Buy for {v}', continuarCurso: 'Continue the course', incluido: 'What you get', inclui1: 'Access to the lessons any time', inclui2: 'Downloadable materials', inclui3: 'Certificate of completion', inclui4: 'Questions to the instructor', curriculo: 'Course content', previa: 'Free preview', aoVivo: 'Live', aoVivoAgora: 'LIVE NOW', texto: 'Reading', video: 'Video', progresso: '{f} of {t} lessons completed', concluida: 'Completed', marcarConcluida: 'Mark as completed', proxima: 'Next lesson', anterior: 'Previous lesson', materiais: 'Materials', comentarios: 'Questions and comments', comentar: 'Write your question or comment...', enviar: 'Send', semComentarios: 'No comments yet. Be the first!', resposta: 'Instructor reply', paraComentar: 'Enrol in the course to ask questions.', parabens: 'Congratulations! You finished the course.', baixarCert: 'Download the certificate', videoPreparar: 'The video for this lesson is still being prepared. Come back soon.', aoVivoEm: 'The live class starts {q}.', aoVivoTerminou: 'This live class has ended.', entrarAoVivo: 'Join the live class', aguardarProf: 'Waiting for the instructor...', aoVivoLigado: 'You are in the live class', chat: 'Class chat', escreverChat: 'Write a message...', entrarTit: 'Sign in to study', entrarSub: 'You get a code by email. No passwords.', email: 'Your email', nome: 'Your name', receberCodigo: 'Get the code', codigoTit: 'Enter the code', codigoSub: 'We sent a 6-digit code to {e}.', entrarBtn: 'Sign in', outroEmail: 'Use another email', reenviar: 'Send another code', fechar: 'Close', pagarTit: 'Buy the course', comoPagar: 'How do you want to pay?', telefone: 'Phone number', pagar: 'Pay {v}', esperaPag: 'Waiting for payment confirmation...', jaPaguei: 'I have paid', cancelar: 'Cancel', abrirSeparador: 'Page not showing? Open in a new tab', aindaNao: \"We haven't received the payment yet. If you've paid, wait a moment.\", manualTit: 'Request sent!', manualSub: 'The instructor will contact you to arrange payment. Once received, the course appears in your courses.', whatsapp: 'Chat on WhatsApp', bemVindo: 'You now have access. Happy learning!', previaAviso: 'This is a preview. On your site, students sign in, buy and study here.', erro: 'Something went wrong. Try again.', semCursos: 'No courses published yet.', nivel: 'Level', professor: 'Instructor', numeroErrado: 'This number is not M-Pesa (84/85) or e-Mola (86/87).', escolheMetodo: 'Choose how to pay.', cartao: 'Card', semAulas: 'This course has no lessons yet.', bloqueada: 'Enrol to open this lesson.', hoje: 'today at {h}', amanha: 'tomorrow at {h}', dia: 'on {d} at {h}', dentro: 'in {m} min', faltaNome: 'Write your name.', abrirCurso: 'Open the course', inscrito: 'Enrolled' }\n  };\n  var L = TX[LANG] || (LANG === 'pt' ? TX.pt : (LANG === 'fr' || LANG === 'es' ? TX.en : TX.pt));\n  function t(k, v){ var s = L[k] || TX.pt[k] || k; if (v) Object.keys(v).forEach(function(n){ s = s.replace('{' + n + '}', v[n]); }); return s; }\n  function esc(x){ return String(x == null ? '' : x).replace(/[&<>\"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }\n  function mzn(v){ return Number(v || 0).toLocaleString('pt-PT') + ' MZN'; }\n  function duracao(min){ min = Number(min) || 0; return min >= 60 ? t('horas', { n: (Math.round(min / 6) / 10).toString().replace('.', ',') }) : t('min', { n: min }); }\n  function soDigitos(x){ return String(x || '').replace(/\\D/g, ''); }\n  function operadora(tel){ var d = soDigitos(tel).replace(/^258/, ''); return /^8[45]/.test(d) ? 'mpesa' : (/^8[67]/.test(d) ? 'emola' : ''); }\n  var CHAVE = 'dia_ead_' + SITE;\n  var S = { sessao: null, cat: null, curso: null, aula: null, poll: null, chatPoll: null, agora: null };\n  try { S.sessao = JSON.parse(localStorage.getItem(CHAVE) || 'null'); } catch (e) { S.sessao = null; }\n  function guardarSessao(s){ S.sessao = s; try { if (s) localStorage.setItem(CHAVE, JSON.stringify(s)); else localStorage.removeItem(CHAVE); } catch (e) {} }\n  function post(rota, corpo){\n    corpo = corpo || {}; corpo.site_id = SITE; corpo.idioma = LANG;\n    if (S.sessao) { corpo.aluno_id = S.sessao.aluno.id; corpo.token = S.sessao.token; }\n    return fetch(API + rota, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).then(function(r){ return r.json(); });\n  }\n  var IC = {\n    play: '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M8 5.5v13l11-6.5z\"/></svg>',\n    livro: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19.5A2.5 2.5 0 0 1 6.5 17H20\"/><path d=\"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z\"/></svg>',\n    vivo: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"2.5\" fill=\"currentColor\"/><path d=\"M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5\"/></svg>',\n    certo: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>',\n    cadeado: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><rect x=\"4\" y=\"11\" width=\"16\" height=\"10\" rx=\"2\"/><path d=\"M8 11V7a4 4 0 0 1 8 0v4\"/></svg>',\n    seta: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>',\n    voltar: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M19 12H5M11 18l-6-6 6-6\"/></svg>',\n    doc: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><polyline points=\"14 2 14 8 20 8\"/></svg>',\n    baixar: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"/></svg>',\n    trofeu: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z\"/><path d=\"M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3\"/></svg>',\n    pessoa: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"8\" r=\"4\"/><path d=\"M4 21a8 8 0 0 1 16 0\"/></svg>',\n    relogio: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>',\n    x: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>'\n  };\n  var CSS = ''\n    + '.dce{--e-p:var(--dia-primaria,#3b2a8f);--e-pt:var(--dia-primaria-texto,#fff);--e-f:var(--dia-fundo,#fff);--e-s:var(--dia-superficie,#f5f4f8);--e-t:var(--dia-texto,#16131f);--e-ts:var(--dia-texto-suave,#5d5868);--e-b:var(--dia-borda,rgba(0,0,0,.1));--e-r:var(--dia-raio,16px);'\n    + 'font-family:var(--dia-fonte-texto,inherit);color:var(--e-t);text-align:left;max-width:1180px;margin:0 auto;padding:0 16px;box-sizing:border-box}'\n    + '.dce *,.dce-m *{box-sizing:border-box}.dce button,.dce-m button{font-family:inherit}'\n    + '.dce h2,.dce h3,.dce h4,.dce-m h3{font-family:var(--dia-fonte-titulos,inherit);letter-spacing:-.01em}'\n    + '.dce-barra{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 18px}'\n    + '.dce-barra .esq{display:flex;gap:8px;flex-wrap:wrap}'\n    + '.dce-pill{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--e-b);background:var(--e-f);color:var(--e-t);font:600 14px/1 inherit;cursor:pointer;text-decoration:none}'\n    + '.dce-pill:hover{border-color:var(--e-p)}.dce-pill.on{background:var(--e-p);color:var(--e-pt);border-color:var(--e-p)}.dce-pill svg{width:16px;height:16px}'\n    + '.dce-btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:48px;padding:0 22px;border-radius:calc(var(--e-r) * .75);border:0;background:var(--e-p);color:var(--e-pt);font:700 15px/1.1 inherit;cursor:pointer;text-decoration:none;transition:transform .15s,opacity .15s}'\n    + '.dce-btn:hover{transform:translateY(-1px)}.dce-btn:disabled{opacity:.55;cursor:default;transform:none}.dce-btn svg{width:17px;height:17px}'\n    + '.dce-btn.sec{background:transparent;color:var(--e-t);border:1.5px solid var(--e-b)}.dce-btn.lg{width:100%}'\n    + '.dce-btn:focus-visible,.dce-pill:focus-visible,.dce-aula-l:focus-visible,.dce-card:focus-visible{outline:3px solid color-mix(in srgb,var(--e-p) 45%,transparent);outline-offset:2px}'\n    + '.dce-grelha{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr));gap:18px}'\n    + '.dce-card{display:flex;flex-direction:column;border-radius:var(--e-r);overflow:hidden;background:var(--e-f);border:1px solid var(--e-b);text-decoration:none;color:inherit;cursor:pointer;transition:transform .2s,box-shadow .2s}'\n    + '.dce-card:hover{transform:translateY(-3px);box-shadow:0 22px 50px -28px rgba(0,0,0,.45)}'\n    + '.dce-capa{position:relative;aspect-ratio:16/9;background:linear-gradient(135deg,var(--e-p),color-mix(in srgb,var(--e-p) 45%,#000));background-size:cover;background-position:center;display:grid;place-items:center;color:var(--e-pt);font:800 40px/1 var(--dia-fonte-titulos,inherit)}'\n    + '.dce-capa .tag{position:absolute;top:12px;left:12px;padding:6px 10px;border-radius:999px;background:rgba(0,0,0,.6);color:#fff;font:700 11.5px/1 inherit;letter-spacing:.03em}'\n    + '.dce-capa .preco{position:absolute;right:12px;bottom:12px;padding:7px 12px;border-radius:999px;background:var(--e-f);color:var(--e-t);font:800 13px/1 inherit;box-shadow:0 8px 20px -10px rgba(0,0,0,.5)}'\n    + '.dce-capa .vivo{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#E0314B;color:#fff;font:800 11px/1 inherit;letter-spacing:.06em}'\n    + '.dce-capa .vivo i,.dce-vivo-ponto{width:7px;height:7px;border-radius:50%;background:#fff;animation:dceP 1.2s infinite}'\n    + '@keyframes dceP{50%{opacity:.25}}'\n    + '.dce-card-c{display:flex;flex-direction:column;gap:6px;padding:16px 16px 18px;flex:1}'\n    + '.dce-card-c h3{margin:0;font-size:18px;line-height:1.25}.dce-card-c p{margin:0;color:var(--e-ts);font-size:14px;line-height:1.5}'\n    + '.dce-meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--e-ts);font-size:13px;margin-top:auto;padding-top:8px}.dce-meta span{display:inline-flex;align-items:center;gap:5px}.dce-meta svg{width:14px;height:14px}'\n    + '.dce-prog{height:6px;border-radius:99px;background:var(--e-s);overflow:hidden;margin-top:8px}.dce-prog i{display:block;height:100%;background:var(--e-p);border-radius:inherit}'\n    + '.dce-prog-t{font-size:12.5px;color:var(--e-ts);margin-top:4px}'\n    + '.dce-vazio{padding:50px 20px;text-align:center;color:var(--e-ts);border:1px dashed var(--e-b);border-radius:var(--e-r)}'\n    + '.dce-aviso{padding:12px 14px;border-radius:calc(var(--e-r) * .7);background:color-mix(in srgb,var(--e-p) 9%,var(--e-f));border:1px solid color-mix(in srgb,var(--e-p) 25%,transparent);font-size:14px;margin-bottom:16px}'\n    + '.dce-hero{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:28px;align-items:start;margin-bottom:28px}'\n    + '.dce-hero h2{font-size:clamp(28px,4.2vw,44px);line-height:1.08;margin:10px 0 12px}.dce-hero .sub{font-size:17px;color:var(--e-ts);line-height:1.55;margin:0 0 16px}'\n    + '.dce-chips{display:flex;flex-wrap:wrap;gap:8px}.dce-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:var(--e-s);font-size:13px;font-weight:600}.dce-chip svg{width:14px;height:14px;color:var(--e-p)}'\n    + '.dce-compra{position:sticky;top:16px;border-radius:var(--e-r);overflow:hidden;background:var(--e-f);border:1px solid var(--e-b);box-shadow:0 26px 60px -36px rgba(0,0,0,.5)}'\n    + '.dce-compra .dce-capa{font-size:54px}.dce-compra-c{padding:18px}.dce-compra .valor{font:800 30px/1 var(--dia-fonte-titulos,inherit);margin:0 0 14px}'\n    + '.dce-inc{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:9px;font-size:14px}.dce-inc li{display:flex;gap:9px;align-items:flex-start}.dce-inc svg{width:16px;height:16px;flex:0 0 16px;color:var(--e-p);margin-top:2px}'\n    + '.dce-desc{font-size:16px;line-height:1.7;color:var(--e-t);margin:0 0 26px;white-space:pre-line}'\n    + '.dce-mod{border:1px solid var(--e-b);border-radius:var(--e-r);margin-bottom:10px;overflow:hidden;background:var(--e-f)}'\n    + '.dce-mod summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;padding:15px 16px;font-weight:700;background:var(--e-s)}.dce-mod summary::-webkit-details-marker{display:none}'\n    + '.dce-mod summary small{font-weight:500;color:var(--e-ts);white-space:nowrap}'\n    + '.dce-aula-l{display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px;border:0;border-top:1px solid var(--e-b);background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}'\n    + '.dce-aula-l:hover{background:color-mix(in srgb,var(--e-p) 5%,transparent)}.dce-aula-l.actual{background:color-mix(in srgb,var(--e-p) 10%,transparent)}'\n    + '.dce-aula-l .ic{flex:0 0 32px;width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--e-s);color:var(--e-p)}.dce-aula-l .ic svg{width:15px;height:15px}'\n    + '.dce-aula-l.feita .ic{background:var(--e-p);color:var(--e-pt)}'\n    + '.dce-aula-l .nm{flex:1;min-width:0;font-size:14.5px;line-height:1.35}.dce-aula-l .nm small{display:block;color:var(--e-ts);font-size:12.5px;margin-top:2px}'\n    + '.dce-aula-l .lado{display:flex;align-items:center;gap:8px;color:var(--e-ts);font-size:12.5px;white-space:nowrap}.dce-aula-l .lado svg{width:15px;height:15px}'\n    + '.dce-et{display:inline-flex;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700;background:color-mix(in srgb,var(--e-p) 12%,transparent);color:var(--e-p)}.dce-et.vivo{background:#E0314B;color:#fff}'\n    + '.dce-cert{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 18px;border-radius:var(--e-r);margin-bottom:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--e-p) 16%,var(--e-f)),var(--e-f));border:1px solid color-mix(in srgb,var(--e-p) 30%,transparent)}'\n    + '.dce-cert svg{width:30px;height:30px;color:var(--e-p)}.dce-cert b{flex:1;min-width:180px;font-size:16px}'\n    + '.dce-sala{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:22px;align-items:start}'\n    + '.dce-palco{position:relative;aspect-ratio:16/9;border-radius:var(--e-r);overflow:hidden;background:#0d0b12;color:#fff}'\n    + '.dce-palco iframe{position:absolute;inset:0;width:100%;height:100%;border:0}'\n    + '.dce-palco .msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;font-size:15px;line-height:1.55}.dce-palco .msg b{display:block;font-size:20px;margin:10px 0 6px}'\n    + '.dce-palco .msg svg{width:34px;height:34px;color:#fff;opacity:.85}'\n    + '.dce-palco #dce-remoto{position:absolute;inset:0}.dce-palco #dce-remoto video{object-fit:contain!important}'\n    + '.dce-palco .faixa{position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:7px;padding:7px 11px;border-radius:999px;background:#E0314B;color:#fff;font:800 11.5px/1 inherit;letter-spacing:.06em;z-index:2}'\n    + '.dce-ler{padding:26px;border-radius:var(--e-r);background:var(--e-f);border:1px solid var(--e-b);font-size:16.5px;line-height:1.75}.dce-ler p{margin:0 0 14px}.dce-ler ul{margin:0 0 14px;padding-left:22px}'\n    + '.dce-aula-cab{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin:18px 0 6px}'\n    + '.dce-aula-cab h3{margin:0;font-size:clamp(20px,2.8vw,26px);line-height:1.2;flex:1;min-width:220px}'\n    + '.dce-feita{display:inline-flex;align-items:center;gap:8px;min-height:42px;padding:0 15px;border-radius:999px;border:1.5px solid var(--e-b);background:var(--e-f);color:var(--e-t);font:700 13.5px/1 inherit;cursor:pointer}'\n    + '.dce-feita svg{width:16px;height:16px}.dce-feita.on{background:var(--e-p);border-color:var(--e-p);color:var(--e-pt)}'\n    + '.dce-nav{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:16px 0 22px}'\n    + '.dce-bloco{margin-top:24px}.dce-bloco h4{margin:0 0 12px;font-size:17px}'\n    + '.dce-mat{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--e-b);border-radius:calc(var(--e-r) * .7);margin-bottom:8px;text-decoration:none;color:inherit;background:var(--e-f)}'\n    + '.dce-mat:hover{border-color:var(--e-p)}.dce-mat svg{width:18px;height:18px;color:var(--e-p);flex:0 0 18px}.dce-mat span{flex:1;font-size:14.5px}.dce-mat small{color:var(--e-ts)}'\n    + '.dce-com{padding:14px 0;border-top:1px solid var(--e-b)}.dce-com b{font-size:14px}.dce-com small{color:var(--e-ts);margin-left:6px;font-size:12px}.dce-com p{margin:6px 0 0;font-size:14.5px;line-height:1.55;white-space:pre-line}'\n    + '.dce-com .resp{margin:10px 0 0 14px;padding:10px 12px;border-left:3px solid var(--e-p);background:var(--e-s);border-radius:0 10px 10px 0;font-size:14px}.dce-com .resp b{display:block;font-size:12px;color:var(--e-p);margin-bottom:3px}'\n    + '.dce-escrever{display:grid;gap:8px;margin-bottom:8px}.dce-escrever textarea,.dce-m input{width:100%;padding:12px 14px;border-radius:calc(var(--e-r) * .7);border:1.5px solid var(--e-b);background:var(--e-f);color:var(--e-t);font-weight:500;font-size:15px;font-family:inherit;outline:none}'\n    + '.dce-escrever textarea{min-height:84px;resize:vertical}.dce-escrever textarea:focus,.dce-m input:focus{border-color:var(--e-p)}'\n    + '.dce-lado{position:sticky;top:16px;border:1px solid var(--e-b);border-radius:var(--e-r);overflow:hidden;background:var(--e-f);max-height:calc(100vh - 32px);display:flex;flex-direction:column}'\n    + '.dce-lado-cab{padding:16px;border-bottom:1px solid var(--e-b)}.dce-lado-cab b{display:block;font-size:15px;line-height:1.3}'\n    + '.dce-lado-l{overflow:auto}.dce-lado .dce-mod{border:0;border-radius:0;margin:0}'\n    + '.dce-chat{display:flex;flex-direction:column;height:420px;border:1px solid var(--e-b);border-radius:var(--e-r);overflow:hidden;background:var(--e-f);margin-top:14px}'\n    + '.dce-chat-l{flex:1;overflow:auto;padding:12px;display:grid;gap:8px;align-content:start}.dce-chat-l div{font-size:13.5px;line-height:1.45}.dce-chat-l b{font-size:12.5px}.dce-chat-l .dono b{color:var(--e-p)}'\n    + '.dce-chat form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--e-b)}.dce-chat input{flex:1;min-width:0;padding:10px 12px;border-radius:10px;border:1.5px solid var(--e-b);background:var(--e-f);color:var(--e-t);font:inherit}'\n    + '.dce-erro{color:#C0392B;font-size:13.5px;min-height:18px;margin:4px 0}'\n    + '.dce-m{position:fixed;inset:0;z-index:2147482000;display:grid;place-items:center;padding:16px;font-family:var(--dia-fonte-texto,inherit);color:var(--e-t,#16131f)}'\n    + '.dce-m-f{position:absolute;inset:0;background:rgba(10,8,16,.6);backdrop-filter:blur(4px)}'\n    + '.dce-m-c{position:relative;width:min(440px,100%);max-height:calc(100vh - 32px);overflow:auto;padding:26px;border-radius:calc(var(--e-r,16px) + 4px);background:var(--e-f,#fff);box-shadow:0 30px 80px -30px rgba(0,0,0,.6);animation:dceE .3s ease-out}'\n    + '@keyframes dceE{from{opacity:0;transform:translateY(14px)}}'\n    + '.dce-m-c h3{margin:0 0 6px;font-size:22px}.dce-m-c p{margin:0 0 16px;color:var(--e-ts,#5d5868);font-size:14.5px;line-height:1.55}'\n    + '.dce-m-x{position:absolute;top:12px;right:12px;width:36px;height:36px;border-radius:50%;border:0;background:var(--e-s,#f3f3f3);color:inherit;cursor:pointer;display:grid;place-items:center}.dce-m-x svg{width:16px;height:16px}'\n    + '.dce-m .campos{display:grid;gap:10px;margin-bottom:8px}.dce-m .codigo{font:800 26px/1 var(--font-mono,ui-monospace,monospace);letter-spacing:.4em;text-align:center}'\n    + '.dce-m .lig{background:none;border:0;padding:8px 0;color:var(--e-ts,#5d5868);font-weight:600;font-size:13.5px;font-family:inherit;cursor:pointer;text-decoration:underline}'\n    + '.dce-metodos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0 12px}.dce-metodos button{min-height:46px;border-radius:12px;border:1.5px solid var(--e-b,#ddd);background:var(--e-f,#fff);color:inherit;font-weight:700;font-size:14px;font-family:inherit;cursor:pointer}.dce-metodos button.on{border-color:var(--e-p);background:color-mix(in srgb,var(--e-p) 10%,var(--e-f,#fff))}'\n    + '.dce-checkout{position:relative;height:450px;overflow:hidden;border-radius:12px;border:1px solid var(--e-b,#ddd);margin:6px 0 10px}.dce-checkout iframe{position:absolute;left:0;width:100%;border:0}'\n    + '.dce-espera{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--e-ts,#5d5868);margin:8px 0 12px}.dce-espera i{width:16px;height:16px;border-radius:50%;border:2.5px solid var(--e-b,#ddd);border-top-color:var(--e-p);animation:dceG .8s linear infinite}'\n    + '@keyframes dceG{to{transform:rotate(360deg)}}'\n    + '.dce-ok{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:var(--e-p);color:var(--e-pt);margin:0 auto 14px}.dce-ok svg{width:28px;height:28px}'\n    + '@media (max-width:900px){.dce-hero,.dce-sala{grid-template-columns:1fr}.dce-compra,.dce-lado{position:static;max-height:none}}'\n    + '@media (max-width:520px){.dce-btn{width:100%}.dce-nav .dce-btn{width:auto;flex:1}.dce-m-c{padding:22px 18px}.dce-metodos{grid-template-columns:1fr 1fr 1fr}}'\n    + '@media (prefers-reduced-motion:reduce){.dce-card,.dce-m-c{animation:none;transition:none}.dce-capa .vivo i,.dce-vivo-ponto,.dce-espera i{animation:none}}';\n\n  var raiz = null;\n  function iniciais(t){ return String(t || '').split(/\\s+/).filter(Boolean).slice(0, 2).map(function(w){ return w.charAt(0).toUpperCase(); }).join(''); }\n  function capaHtml(c, extra){ return '<div class=\"dce-capa\"' + (c.capa ? ' style=\"background-image:url(\\'' + esc(c.capa) + '\\')\"' : '') + '>' + (c.capa ? '' : esc(iniciais(c.titulo))) + (extra || '') + '</div>'; }\n  function temVivo(c){ return (c.ao_vivo || []).some(function(a){ return a.estado === 'a decorrer'; }); }\n  function quando(iso){\n    var d = new Date(iso); if (isNaN(d)) return '';\n    var h = d.toLocaleTimeString(LANG === 'pt' ? 'pt-PT' : 'en-GB', { hour: '2-digit', minute: '2-digit' });\n    var hoje = new Date(); hoje.setHours(0, 0, 0, 0);\n    var dia = new Date(d); dia.setHours(0, 0, 0, 0);\n    var dif = Math.round((dia - hoje) / 864e5), min = Math.round((d - Date.now()) / 60000);\n    if (min > 0 && min < 60) return t('dentro', { m: min });\n    if (dif === 0) return t('hoje', { h: h });\n    if (dif === 1) return t('amanha', { h: h });\n    return t('dia', { d: d.toLocaleDateString(LANG === 'pt' ? 'pt-PT' : 'en-GB', { day: 'numeric', month: 'long' }), h: h });\n  }\n  function barraTopo(aqui){\n    var s = S.sessao;\n    return '<div class=\"dce-barra\"><div class=\"esq\"><button type=\"button\" class=\"dce-pill' + (aqui === 'cat' ? ' on' : '') + '\" data-ir=\"\">' + esc(t('todos')) + '</button>'\n      + (s ? '<button type=\"button\" class=\"dce-pill' + (aqui === 'meus' ? ' on' : '') + '\" data-ir=\"meus\">' + esc(t('meus')) + '</button>' : '') + '</div>'\n      + (s ? '<button type=\"button\" class=\"dce-pill\" data-sair>' + IC.pessoa + esc(s.aluno.nome || s.aluno.email) + ' · ' + esc(t('sair')) + '</button>' : '<button type=\"button\" class=\"dce-pill\" data-entrar>' + IC.pessoa + esc(t('entrar')) + '</button>') + '</div>'\n      + (PREVIA ? '<div class=\"dce-aviso\">' + esc(t('previaAviso')) + '</div>' : '');\n  }\n  function ligarBarra(){\n    Array.prototype.forEach.call(raiz.querySelectorAll('[data-ir]'), function(b){ b.addEventListener('click', function(){ ir(b.getAttribute('data-ir')); }); });\n    var e = raiz.querySelector('[data-entrar]'); if (e) e.addEventListener('click', function(){ entrar(function(){ rota(); }); });\n    var s = raiz.querySelector('[data-sair]'); if (s) s.addEventListener('click', function(){ post('/ead-sair', {}).catch(function(){}); guardarSessao(null); ir(''); });\n  }\n  function ir(h){ var alvo = h ? '#ead/' + h : '#ead'; if (location.hash === alvo) rota(); else location.hash = alvo; }\n  function ecra(html){\n    pararAoVivo();\n    raiz.innerHTML = html;\n    ligarBarra();\n  }\n  function rolar(){ try { var r = raiz.getBoundingClientRect(); if (r.top < 0 || r.top > innerHeight * 0.6) raiz.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }\n\n  // ---- catálogo ----\n  function cartaoCurso(c){\n    var aulas = c.aulas === 1 ? t('aula1') : t('aulas', { n: c.aulas });\n    return '<a class=\"dce-card\" href=\"#ead/curso/' + esc(c.id) + '\">' + capaHtml(c, (c.nivel ? '<span class=\"tag\">' + esc(c.nivel) + '</span>' : '') + (temVivo(c) ? '<span class=\"vivo\"><i></i>' + esc(t('aoVivoAgora')) + '</span>' : '') + '<span class=\"preco\">' + (c.acesso ? esc(t('inscrito')) : (c.preco ? esc(mzn(c.preco)) : esc(t('gratis')))) + '</span>')\n      + '<div class=\"dce-card-c\"><h3>' + esc(c.titulo) + '</h3>' + (c.subtitulo ? '<p>' + esc(c.subtitulo) + '</p>' : '')\n      + '<div class=\"dce-meta\"><span>' + IC.play + esc(aulas) + '</span>' + (c.minutos ? '<span>' + IC.relogio + esc(duracao(c.minutos)) + '</span>' : '') + (c.professor ? '<span>' + IC.pessoa + esc(c.professor) + '</span>' : '') + '</div>'\n      + (c.acesso ? '<div class=\"dce-prog\"><i style=\"width:' + (c.progresso.pct || 0) + '%\"></i></div><div class=\"dce-prog-t\">' + esc(t('progresso', { f: c.progresso.feitas, t: c.progresso.total })) + '</div>' : '')\n      + '</div></a>';\n  }\n  function catalogo(meus){\n    post('/ead-catalogo', {}).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      if (S.sessao && !r.response.aluno) guardarSessao(null);\n      S.cat = r.response;\n      var l = r.response.cursos.filter(function(c){ return !meus || c.acesso; });\n      ecra(barraTopo(meus ? 'meus' : 'cat') + (l.length ? '<div class=\"dce-grelha\">' + l.map(cartaoCurso).join('') + '</div>' : '<div class=\"dce-vazio\">' + esc(t('semCursos')) + '</div>'));\n    }).catch(function(e){ ecra(barraTopo('cat') + '<div class=\"dce-vazio\">' + esc(e.message || t('erro')) + '</div>'); });\n  }\n\n  // ---- curso ----\n  function iconeAula(a){ return a.tipo === 'texto' ? IC.livro : (a.tipo === 'ao_vivo' ? IC.vivo : IC.play); }\n  function linhaAula(cursoId, a, actual){\n    var lado = a.feita ? '' : (a.aberta ? (a.previa ? '<span class=\"dce-et\">' + esc(t('previa')) + '</span>' : '') : IC.cadeado);\n    if (a.tipo === 'ao_vivo' && a.estado === 'a decorrer') lado = '<span class=\"dce-et vivo\">' + esc(t('aoVivo')) + '</span>' + lado;\n    var sub = a.tipo === 'ao_vivo' ? (a.inicio && a.estado !== 'terminada' ? quando(a.inicio) : t('aoVivo')) : (a.minutos ? duracao(a.minutos) : (a.tipo === 'texto' ? t('texto') : t('video')));\n    return '<button type=\"button\" class=\"dce-aula-l' + (a.feita ? ' feita' : '') + (actual === a.id ? ' actual' : '') + '\" data-aula=\"' + esc(a.id) + '\" data-aberta=\"' + (a.aberta ? 1 : 0) + '\"><span class=\"ic\">' + (a.feita ? IC.certo : iconeAula(a)) + '</span><span class=\"nm\">' + esc(a.titulo) + '<small>' + esc(sub) + '</small></span><span class=\"lado\">' + lado + '</span></button>';\n  }\n  function curriculoHtml(c, actual){\n    if (!c.curriculo.length || !c.aulas) return '<div class=\"dce-vazio\">' + esc(t('semAulas')) + '</div>';\n    return c.curriculo.map(function(m, i){\n      var temActual = m.aulas.some(function(a){ return a.id === actual; });\n      return '<details class=\"dce-mod\"' + (i === 0 || temActual || !actual ? ' open' : '') + '><summary><span>' + esc(m.titulo) + '</span><small>' + esc(m.aulas.length === 1 ? t('aula1') : t('aulas', { n: m.aulas.length })) + '</small></summary>' + m.aulas.map(function(a){ return linhaAula(c.id, a, actual); }).join('') + '</details>';\n    }).join('');\n  }\n  function ligarAulas(c){\n    Array.prototype.forEach.call(raiz.querySelectorAll('[data-aula]'), function(b){\n      b.addEventListener('click', function(){\n        if (b.getAttribute('data-aberta') === '1') ir('aula/' + c.id + '/' + b.getAttribute('data-aula'));\n        else accaoCurso(c);\n      });\n    });\n  }\n  function primeiraAula(c){\n    var todas = []; c.curriculo.forEach(function(m){ m.aulas.forEach(function(a){ todas.push(a); }); });\n    var por = todas.filter(function(a){ return a.aberta && !a.feita; })[0] || todas.filter(function(a){ return a.aberta; })[0];\n    return por ? por.id : '';\n  }\n  function curso(id){\n    post('/ead-curso', { curso_id: id }).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      var c = S.curso = r.response;\n      var btn = c.acesso ? t(c.progresso.feitas ? 'continuarCurso' : 'comecar') : (c.preco ? t('comprar', { v: mzn(c.preco) }) : t('inscreverGratis'));\n      ecra(barraTopo('') + (c.certificado_url ? '<div class=\"dce-cert\">' + IC.trofeu + '<b>' + esc(t('parabens')) + '</b><a class=\"dce-btn\" href=\"' + esc(c.certificado_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.baixar + esc(t('baixarCert')) + '</a></div>' : '')\n        + '<div class=\"dce-hero\"><div>'\n        + (temVivo(c) ? '<span class=\"dce-et vivo\">' + esc(t('aoVivoAgora')) + '</span>' : (c.nivel ? '<span class=\"dce-et\">' + esc(c.nivel) + '</span>' : ''))\n        + '<h2>' + esc(c.titulo) + '</h2>' + (c.subtitulo ? '<p class=\"sub\">' + esc(c.subtitulo) + '</p>' : '')\n        + '<div class=\"dce-chips\"><span class=\"dce-chip\">' + IC.play + esc(c.aulas === 1 ? t('aula1') : t('aulas', { n: c.aulas })) + '</span>' + (c.minutos ? '<span class=\"dce-chip\">' + IC.relogio + esc(duracao(c.minutos)) + '</span>' : '') + (c.professor ? '<span class=\"dce-chip\">' + IC.pessoa + esc(c.professor) + '</span>' : '') + '</div>'\n        + (c.acesso ? '<div class=\"dce-prog\" style=\"margin-top:16px\"><i style=\"width:' + c.progresso.pct + '%\"></i></div><div class=\"dce-prog-t\">' + esc(t('progresso', { f: c.progresso.feitas, t: c.progresso.total })) + '</div>' : '')\n        + '</div><aside class=\"dce-compra\">' + capaHtml(c) + '<div class=\"dce-compra-c\">' + (c.acesso ? '' : '<p class=\"valor\">' + esc(c.preco ? mzn(c.preco) : t('gratis')) + '</p>')\n        + '<button type=\"button\" class=\"dce-btn lg\" id=\"dce-accao\">' + esc(btn) + IC.seta + '</button>'\n        + '<ul class=\"dce-inc\"><li>' + IC.certo + esc(t('inclui1')) + '</li><li>' + IC.certo + esc(t('inclui2')) + '</li>' + (c.certificado ? '<li>' + IC.certo + esc(t('inclui3')) + '</li>' : '') + '<li>' + IC.certo + esc(t('inclui4')) + '</li></ul></div></aside></div>'\n        + (c.descricao ? '<p class=\"dce-desc\">' + esc(c.descricao) + '</p>' : '')\n        + '<h3 style=\"font-size:22px;margin:0 0 12px\">' + esc(t('curriculo')) + '</h3>' + curriculoHtml(c, ''));\n      raiz.querySelector('#dce-accao').addEventListener('click', function(){ accaoCurso(c); });\n      ligarAulas(c);\n      rolar();\n    }).catch(function(e){ ecra(barraTopo('') + '<div class=\"dce-vazio\">' + esc(e.message || t('erro')) + '</div>'); });\n  }\n  function accaoCurso(c){\n    if (c.acesso) { var a = primeiraAula(c); if (a) ir('aula/' + c.id + '/' + a); return; }\n    if (PREVIA) { aviso(t('previaAviso')); return; }\n    if (!S.sessao) return entrar(function(){ post('/ead-curso', { curso_id: c.id }).then(function(r){ if (r.status === 'success' && r.response.acesso) ir('curso/' + c.id + '?' + Date.now()); else if (r.status === 'success') { S.curso = r.response; accaoCurso(r.response); } }); });\n    if (!c.preco) {\n      post('/ead-inscrever', { curso_id: c.id }).then(function(r){\n        if (r.status !== 'success') throw new Error(r.message);\n        aviso(t('bemVindo'), true); curso(c.id);\n      }).catch(function(e){ aviso(e.message || t('erro')); });\n      return;\n    }\n    comprar(c);\n  }\n\n  // ---- aula ----\n  function textoAula(txt){\n    var blocos = String(txt || '').split(/\\n{2,}/);\n    return blocos.map(function(b){\n      var ls = b.split('\\n');\n      if (ls.every(function(l){ return /^\\s*[-•*]\\s+/.test(l); })) return '<ul>' + ls.map(function(l){ return '<li>' + fmt(l.replace(/^\\s*[-•*]\\s+/, '')) + '</li>'; }).join('') + '</ul>';\n      return '<p>' + ls.map(fmt).join('<br>') + '</p>';\n    }).join('');\n    function fmt(s){ return esc(s).replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>').replace(/(https?:\\/\\/[^\\s<]+)/g, '<a href=\"$1\" target=\"_blank\" rel=\"noopener nofollow\">$1</a>'); }\n  }\n  function todasAulas(c){ var l = []; c.curriculo.forEach(function(m){ m.aulas.forEach(function(a){ l.push(a); }); }); return l; }\n  function aula(cursoId, aulaId){\n    var pc = S.curso && S.curso.id === cursoId ? Promise.resolve({ status: 'success', response: S.curso }) : post('/ead-curso', { curso_id: cursoId });\n    pc.then(function(rc){\n      if (rc.status !== 'success') throw new Error(rc.message);\n      S.curso = rc.response;\n      return post('/ead-aula', { curso_id: cursoId, aula_id: aulaId }).then(function(r){\n        if (r.status !== 'success') { if (r.codigo === 'entrar') return entrar(function(){ S.curso = null; rota(); }); if (r.codigo === 'sem_acesso') { ir('curso/' + cursoId); return; } throw new Error(r.message); }\n        desenharAula(S.curso, r.response);\n      });\n    }).catch(function(e){ ecra(barraTopo('') + '<div class=\"dce-vazio\">' + esc(e.message || t('erro')) + '</div>'); });\n  }\n  function palcoHtml(a){\n    if (a.tipo === 'texto') return '<div class=\"dce-ler\">' + textoAula(a.texto) + '</div>';\n    if (a.tipo === 'ao_vivo') {\n      var v = a.ao_vivo || {};\n      if (v.estado === 'a decorrer') return '<div class=\"dce-palco\" id=\"dce-palco\"><div class=\"msg\"><div>' + IC.vivo + '<b>' + esc(t('aoVivoAgora')) + '</b><button type=\"button\" class=\"dce-btn\" id=\"dce-vivo-entrar\">' + esc(t('entrarAoVivo')) + '</button></div></div></div><div class=\"dce-chat\" id=\"dce-chat\" hidden><div class=\"dce-chat-l\" id=\"dce-chat-l\"></div><form id=\"dce-chat-f\"><input maxlength=\"500\" placeholder=\"' + esc(t('escreverChat')) + '\" aria-label=\"' + esc(t('chat')) + '\"><button type=\"submit\" class=\"dce-btn\" style=\"min-height:42px;padding:0 14px\">' + esc(t('enviar')) + '</button></form></div>';\n      if (v.estado === 'terminada' && a.video_url) return '<div class=\"dce-palco\"><iframe src=\"' + esc(a.video_url) + '\" loading=\"lazy\" allow=\"accelerometer;gyroscope;autoplay;encrypted-media;picture-in-picture\" allowfullscreen title=\"' + esc(a.titulo) + '\"></iframe></div>';\n      return '<div class=\"dce-palco\"><div class=\"msg\"><div>' + IC.vivo + '<b>' + esc(t('aoVivo')) + '</b>' + esc(v.estado === 'terminada' ? t('aoVivoTerminou') : t('aoVivoEm', { q: quando(v.inicio) || '' })) + '</div></div></div>';\n    }\n    if (!a.video_url) return '<div class=\"dce-palco\"><div class=\"msg\"><div>' + IC.relogio + '<b>' + esc(t('video')) + '</b>' + esc(t('videoPreparar')) + '</div></div></div>';\n    return '<div class=\"dce-palco\"><iframe src=\"' + esc(a.video_url) + '\" allow=\"accelerometer;gyroscope;autoplay;encrypted-media;picture-in-picture\" allowfullscreen title=\"' + esc(a.titulo) + '\"></iframe></div>';\n  }\n  function comentarioHtml(c){ return '<div class=\"dce-com\"><b>' + esc(c.nome) + '</b><small>' + esc(new Date(c.quando).toLocaleDateString(LANG === 'pt' ? 'pt-PT' : 'en-GB')) + '</small><p>' + esc(c.texto) + '</p>' + (c.resposta && c.resposta.texto ? '<div class=\"resp\"><b>' + esc(t('resposta')) + '</b>' + esc(c.resposta.texto) + '</div>' : '') + '</div>'; }\n  function desenharAula(c, a){\n    S.aula = a;\n    var l = todasAulas(c), i = l.findIndex(function(x){ return x.id === a.id; });\n    var ant = l.slice(0, Math.max(0, i)).reverse().filter(function(x){ return x.aberta; })[0], prox = l.slice(i + 1).filter(function(x){ return x.aberta; })[0];\n    ecra(barraTopo('') + '<div class=\"dce-sala\"><div>'\n      + palcoHtml(a)\n      + '<div class=\"dce-aula-cab\"><h3>' + esc(a.titulo) + '</h3>' + (S.sessao && c.acesso ? '<button type=\"button\" class=\"dce-feita' + (a.feita ? ' on' : '') + '\" id=\"dce-feita\">' + IC.certo + '<span>' + esc(a.feita ? t('concluida') : t('marcarConcluida')) + '</span></button>' : '') + '</div>'\n      + '<div class=\"dce-nav\">' + (ant ? '<button type=\"button\" class=\"dce-btn sec\" data-ir=\"aula/' + esc(c.id) + '/' + esc(ant.id) + '\">' + IC.voltar + esc(t('anterior')) + '</button>' : '<span></span>') + (prox ? '<button type=\"button\" class=\"dce-btn\" data-ir=\"aula/' + esc(c.id) + '/' + esc(prox.id) + '\">' + esc(t('proxima')) + IC.seta + '</button>' : '') + '</div>'\n      + (a.materiais && a.materiais.length ? '<div class=\"dce-bloco\"><h4>' + esc(t('materiais')) + '</h4>' + a.materiais.map(function(m){ return '<a class=\"dce-mat\" href=\"' + esc(m.url) + '\" target=\"_blank\" rel=\"noopener\" download>' + IC.doc + '<span>' + esc(m.nome) + '</span><small>' + (m.tamanho ? Math.max(1, Math.round(m.tamanho / 1024)) + ' KB' : '') + '</small>' + IC.baixar + '</a>'; }).join('') + '</div>' : '')\n      + '<div class=\"dce-bloco\"><h4>' + esc(t('comentarios')) + '</h4>'\n      + (a.pode_comentar ? '<form class=\"dce-escrever\" id=\"dce-com-f\"><textarea maxlength=\"1500\" placeholder=\"' + esc(t('comentar')) + '\" aria-label=\"' + esc(t('comentar')) + '\"></textarea><div class=\"dce-erro\" id=\"dce-com-erro\"></div><div><button type=\"submit\" class=\"dce-btn\">' + esc(t('enviar')) + '</button></div></form>' : '<p style=\"color:var(--e-ts);font-size:14px\">' + esc(t('paraComentar')) + '</p>')\n      + '<div id=\"dce-coms\">' + (a.comentarios.length ? a.comentarios.slice().reverse().map(comentarioHtml).join('') : '<p style=\"color:var(--e-ts);font-size:14px\" id=\"dce-sem-com\">' + esc(t('semComentarios')) + '</p>') + '</div></div>'\n      + '</div><aside class=\"dce-lado\"><div class=\"dce-lado-cab\"><b>' + esc(c.titulo) + '</b>' + (c.acesso ? '<div class=\"dce-prog\"><i id=\"dce-prog-i\" style=\"width:' + c.progresso.pct + '%\"></i></div><div class=\"dce-prog-t\" id=\"dce-prog-t\">' + esc(t('progresso', { f: c.progresso.feitas, t: c.progresso.total })) + '</div>' : '') + '<div id=\"dce-cert-lado\">' + (c.certificado_url ? '<a class=\"dce-btn lg\" style=\"margin-top:12px\" href=\"' + esc(c.certificado_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.baixar + esc(t('baixarCert')) + '</a>' : '') + '</div></div><div class=\"dce-lado-l\">' + curriculoHtml(c, a.id) + '</div></aside></div>');\n    ligarAulas(c);\n    var bf = raiz.querySelector('#dce-feita');\n    if (bf) bf.addEventListener('click', function(){\n      var desfazer = bf.classList.contains('on'); bf.disabled = true;\n      post('/ead-concluir', { curso_id: c.id, aula_id: a.id, desfazer: desfazer }).then(function(r){\n        bf.disabled = false;\n        if (r.status !== 'success') throw new Error(r.message);\n        a.feita = !desfazer; bf.classList.toggle('on', a.feita); bf.querySelector('span').textContent = a.feita ? t('concluida') : t('marcarConcluida');\n        l.forEach(function(x){ if (x.id === a.id) x.feita = a.feita; });\n        c.progresso = r.response.progresso;\n        var pi = raiz.querySelector('#dce-prog-i'), pt = raiz.querySelector('#dce-prog-t');\n        if (pi) pi.style.width = c.progresso.pct + '%'; if (pt) pt.textContent = t('progresso', { f: c.progresso.feitas, t: c.progresso.total });\n        var linha = raiz.querySelector('.dce-lado [data-aula=\"' + a.id + '\"]'); if (linha) { linha.classList.toggle('feita', a.feita); linha.querySelector('.ic').innerHTML = a.feita ? IC.certo : iconeAula(a); }\n        if (r.response.certificado_url) { c.certificado_url = r.response.certificado_url; raiz.querySelector('#dce-cert-lado').innerHTML = '<a class=\"dce-btn lg\" style=\"margin-top:12px\" href=\"' + esc(c.certificado_url) + '\" target=\"_blank\" rel=\"noopener\">' + IC.baixar + esc(t('baixarCert')) + '</a>'; }\n        if (r.response.novo_certificado) aviso(t('parabens'), true, c.certificado_url);\n      }).catch(function(e){ bf.disabled = false; aviso(e.message || t('erro')); });\n    });\n    var fc = raiz.querySelector('#dce-com-f');\n    if (fc) fc.addEventListener('submit', function(e){\n      e.preventDefault();\n      var ta = fc.querySelector('textarea'), txt = ta.value.trim(), b = fc.querySelector('button'), er = raiz.querySelector('#dce-com-erro');\n      if (txt.length < 2) return; b.disabled = true; er.textContent = '';\n      post('/ead-comentar', { curso_id: c.id, aula_id: a.id, texto: txt }).then(function(r){\n        b.disabled = false;\n        if (r.status !== 'success') { er.textContent = r.message || t('erro'); return; }\n        ta.value = ''; var sem = raiz.querySelector('#dce-sem-com'); if (sem) sem.remove();\n        raiz.querySelector('#dce-coms').insertAdjacentHTML('afterbegin', comentarioHtml(r.response.comentario));\n      }).catch(function(){ b.disabled = false; er.textContent = t('erro'); });\n    });\n    var bv = raiz.querySelector('#dce-vivo-entrar');\n    if (bv) bv.addEventListener('click', function(){ entrarAoVivo(c, a); });\n    rolar();\n  }\n\n  // ---- ao vivo (Agora) ----\n  function carregarAgora(){\n    if (window.AgoraRTC) return Promise.resolve(window.AgoraRTC);\n    return new Promise(function(ok, falha){ var s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.20.0/AgoraRTC_N-production.js'; s.onload = function(){ ok(window.AgoraRTC); }; s.onerror = falha; document.head.appendChild(s); });\n  }\n  function pararAoVivo(){\n    clearInterval(S.chatPoll); S.chatPoll = null;\n    if (S.agora) { try { S.agora.leave(); } catch (e) {} S.agora = null; }\n  }\n  function entrarAoVivo(c, a){\n    var palco = raiz.querySelector('#dce-palco'), b = raiz.querySelector('#dce-vivo-entrar');\n    b.disabled = true;\n    post('/ead-ao-vivo', { curso_id: c.id, aula_id: a.id }).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      if (r.response.estado !== 'a decorrer') { a.ao_vivo.estado = r.response.estado; desenharAula(c, a); return; }\n      return carregarAgora().then(function(Agora){\n        var cli = Agora.createClient({ mode: 'live', codec: 'vp8' });\n        S.agora = cli;\n        cli.setClientRole('audience', { level: 1 });\n        palco.innerHTML = '<span class=\"faixa\"><i class=\"dce-vivo-ponto\"></i>' + esc(t('aoVivoAgora')) + '</span><div id=\"dce-remoto\"></div><div class=\"msg\" id=\"dce-aguarda\"><div>' + IC.vivo + '<b>' + esc(t('aoVivoLigado')) + '</b>' + esc(t('aguardarProf')) + '</div></div>';\n        cli.on('user-published', function(user, tipo){\n          cli.subscribe(user, tipo).then(function(){\n            if (tipo === 'video') { var ag = raiz.querySelector('#dce-aguarda'); if (ag) ag.remove(); user.videoTrack.play(raiz.querySelector('#dce-remoto')); }\n            if (tipo === 'audio') user.audioTrack.play();\n          });\n        });\n        return cli.join(r.response.app_id, r.response.canal, r.response.token || null, r.response.uid);\n      }).then(function(){ abrirChat(a); });\n    }).catch(function(e){ b.disabled = false; aviso((e && e.message) || t('erro')); });\n  }\n  function abrirChat(a){\n    var box = raiz.querySelector('#dce-chat'); if (!box) return;\n    box.hidden = false;\n    var lista = raiz.querySelector('#dce-chat-l'), desde = 0;\n    function puxar(texto){\n      return post('/ead-chat', { aula_id: a.id, desde: desde, texto: texto || '' }).then(function(r){\n        if (r.status !== 'success') return;\n        r.response.mensagens.forEach(function(m){ if (m.quando <= desde) return; lista.insertAdjacentHTML('beforeend', '<div class=\"' + (m.dono ? 'dono' : '') + '\"><b>' + esc(m.nome) + '</b> ' + esc(m.texto) + '</div>'); desde = Math.max(desde, m.quando); });\n        lista.scrollTop = lista.scrollHeight;\n      }).catch(function(){});\n    }\n    puxar();\n    S.chatPoll = setInterval(puxar, 3500);\n    raiz.querySelector('#dce-chat-f').addEventListener('submit', function(e){ e.preventDefault(); var i = this.querySelector('input'), v = i.value.trim(); if (!v) return; i.value = ''; puxar(v); });\n  }\n\n  // ---- janelas: entrar, comprar, avisos ----\n  function janela(html){\n    var m = document.createElement('div');\n    m.className = 'dce-m'; m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');\n    m.innerHTML = '<div class=\"dce-m-f\"></div><div class=\"dce-m-c dce\">' + '<button type=\"button\" class=\"dce-m-x\" aria-label=\"' + esc(t('fechar')) + '\">' + IC.x + '</button>' + html + '</div>';\n    document.body.appendChild(m);\n    function fechar(){ m.remove(); document.removeEventListener('keydown', tecla); if (m.__fim) m.__fim(); }\n    function tecla(e){ if (e.key === 'Escape') fechar(); }\n    m.querySelector('.dce-m-x').addEventListener('click', fechar);\n    m.querySelector('.dce-m-f').addEventListener('click', fechar);\n    document.addEventListener('keydown', tecla);\n    m.fechar = fechar;\n    var foco = m.querySelector('input,button.dce-btn'); if (foco) setTimeout(function(){ foco.focus(); }, 50);\n    return m;\n  }\n  function aviso(texto, ok, link){\n    var m = janela((ok ? '<div class=\"dce-ok\">' + IC.certo + '</div>' : '') + '<p style=\"text-align:center;font-size:16px;color:inherit\">' + esc(texto) + '</p>' + (link ? '<a class=\"dce-btn lg\" href=\"' + esc(link) + '\" target=\"_blank\" rel=\"noopener\" style=\"margin-bottom:8px\">' + IC.baixar + esc(t('baixarCert')) + '</a>' : '') + '<button type=\"button\" class=\"dce-btn ' + (link ? 'sec ' : '') + 'lg\" data-ok>' + esc(t('fechar')) + '</button>');\n    m.querySelector('[data-ok]').addEventListener('click', m.fechar);\n  }\n  function entrar(depois){\n    var email = '';\n    var m = janela('<h3>' + esc(t('entrarTit')) + '</h3><p>' + esc(t('entrarSub')) + '</p><form id=\"dce-f1\"><div class=\"campos\"><input type=\"email\" required autocomplete=\"email\" placeholder=\"' + esc(t('email')) + '\" aria-label=\"' + esc(t('email')) + '\" id=\"dce-em\"><input type=\"text\" autocomplete=\"name\" maxlength=\"80\" placeholder=\"' + esc(t('nome')) + '\" aria-label=\"' + esc(t('nome')) + '\" id=\"dce-nm\"></div><div class=\"dce-erro\" id=\"dce-er\"></div><button type=\"submit\" class=\"dce-btn lg\">' + esc(t('receberCodigo')) + '</button></form>');\n    var er = m.querySelector('#dce-er');\n    m.querySelector('#dce-f1').addEventListener('submit', function(e){\n      e.preventDefault();\n      email = m.querySelector('#dce-em').value.trim(); var nome = m.querySelector('#dce-nm').value.trim(), b = this.querySelector('button');\n      er.textContent = ''; b.disabled = true;\n      post('/ead-entrar', { email: email, nome: nome }).then(function(r){\n        b.disabled = false;\n        if (r.status !== 'success') { er.textContent = r.message || t('erro'); return; }\n        passo2(nome);\n      }).catch(function(){ b.disabled = false; er.textContent = t('erro'); });\n    });\n    function passo2(nome){\n      var c = m.querySelector('.dce-m-c');\n      c.innerHTML = '<button type=\"button\" class=\"dce-m-x\" aria-label=\"' + esc(t('fechar')) + '\">' + IC.x + '</button><h3>' + esc(t('codigoTit')) + '</h3><p>' + esc(t('codigoSub', { e: email })) + '</p><form id=\"dce-f2\"><div class=\"campos\"><input class=\"codigo\" inputmode=\"numeric\" autocomplete=\"one-time-code\" maxlength=\"7\" placeholder=\"000000\" aria-label=\"' + esc(t('codigoTit')) + '\" id=\"dce-cd\"></div><div class=\"dce-erro\" id=\"dce-er2\"></div><button type=\"submit\" class=\"dce-btn lg\">' + esc(t('entrarBtn')) + '</button></form><button type=\"button\" class=\"lig\" id=\"dce-outro\">' + esc(t('outroEmail')) + '</button>';\n      c.querySelector('.dce-m-x').addEventListener('click', m.fechar);\n      c.querySelector('#dce-outro').addEventListener('click', function(){ m.fechar(); entrar(depois); });\n      var cd = c.querySelector('#dce-cd'); cd.focus();\n      cd.addEventListener('input', function(){ if (cd.value.replace(/\\D/g, '').length === 6) c.querySelector('#dce-f2 button').click(); });\n      c.querySelector('#dce-f2').addEventListener('submit', function(e){\n        e.preventDefault();\n        var b = this.querySelector('button'), er2 = c.querySelector('#dce-er2'); er2.textContent = ''; b.disabled = true;\n        post('/ead-codigo', { email: email, codigo: cd.value, nome: nome }).then(function(r){\n          b.disabled = false;\n          if (r.status !== 'success') { er2.textContent = r.message || t('erro'); if (r.codigo === 'expirou') { m.fechar(); entrar(depois); } return; }\n          guardarSessao({ aluno: r.response.aluno, token: r.response.token });\n          m.fechar();\n          if (depois) depois();\n        }).catch(function(){ b.disabled = false; er2.textContent = t('erro'); });\n      });\n    }\n  }\n  function comprar(c){\n    var metodo = '';\n    var online = !S.curso || S.curso.pagamentos !== false;\n    var m = janela('<h3>' + esc(t('pagarTit')) + '</h3><p><b style=\"color:inherit\">' + esc(c.titulo) + '</b> · ' + esc(mzn(c.preco)) + '</p>'\n      + (online ? '<p style=\"margin:0 0 4px;font-weight:700;color:inherit\">' + esc(t('comoPagar')) + '</p><div class=\"dce-metodos\"><button type=\"button\" data-m=\"mpesa\">M-Pesa</button><button type=\"button\" data-m=\"emola\">e-Mola</button><button type=\"button\" data-m=\"cartao\">' + esc(t('cartao')) + '</button></div>' : '')\n      + '<div class=\"campos\"><input type=\"tel\" inputmode=\"tel\" autocomplete=\"tel\" placeholder=\"' + esc(t('telefone')) + '\" aria-label=\"' + esc(t('telefone')) + '\" id=\"dce-tel\"></div><div class=\"dce-erro\" id=\"dce-perr\"></div><button type=\"button\" class=\"dce-btn lg\" id=\"dce-pagar\">' + esc(t('pagar', { v: mzn(c.preco) })) + '</button>');\n    var tel = m.querySelector('#dce-tel'), er = m.querySelector('#dce-perr');\n    Array.prototype.forEach.call(m.querySelectorAll('[data-m]'), function(b){ b.addEventListener('click', function(){ metodo = b.getAttribute('data-m'); Array.prototype.forEach.call(m.querySelectorAll('[data-m]'), function(x){ x.classList.toggle('on', x === b); }); }); });\n    tel.addEventListener('input', function(){ var op = operadora(tel.value); if (op && metodo !== 'cartao') { var b = m.querySelector('[data-m=\"' + op + '\"]'); if (b) b.click(); } });\n    m.querySelector('#dce-pagar').addEventListener('click', function(){\n      var b = this; er.textContent = '';\n      if (online && !metodo) { er.textContent = t('escolheMetodo'); return; }\n      if (metodo !== 'cartao' && soDigitos(tel.value).length < 9) { er.textContent = t('telefone'); return; }\n      if (online && metodo !== 'cartao' && operadora(tel.value) !== metodo) { er.textContent = t('numeroErrado'); return; }\n      b.disabled = true;\n      post('/ead-inscrever', { curso_id: c.id, telefone: tel.value, metodo: metodo }).then(function(r){\n        if (r.status !== 'success') throw new Error(r.message);\n        if (r.response.acesso) { m.fechar(); aviso(t('bemVindo'), true); curso(c.id); return; }\n        if (r.response.manual) {\n          var wa = r.response.whatsapp ? 'https://wa.me/' + r.response.whatsapp + '?text=' + encodeURIComponent((c.titulo || '') + ' - ' + (S.sessao ? S.sessao.aluno.email : '')) : '';\n          m.querySelector('.dce-m-c').innerHTML = '<div class=\"dce-ok\">' + IC.certo + '</div><h3 style=\"text-align:center\">' + esc(t('manualTit')) + '</h3><p style=\"text-align:center\">' + esc(t('manualSub')) + '</p>' + (wa ? '<a class=\"dce-btn lg\" href=\"' + esc(wa) + '\" target=\"_blank\" rel=\"noopener\" style=\"margin-bottom:8px\">' + esc(t('whatsapp')) + '</a>' : '') + '<button type=\"button\" class=\"dce-btn sec lg\" data-ok>' + esc(t('fechar')) + '</button>';\n          m.querySelector('[data-ok]').addEventListener('click', m.fechar);\n          return;\n        }\n        return post('/loja-pagar', { encomenda_id: r.response.encomenda_id, metodo: metodo, telefone: tel.value }).then(function(rp){\n          if (rp.status !== 'success') throw new Error(rp.message);\n          checkout(m, c, rp.response);\n        });\n      }).catch(function(e){ b.disabled = false; er.textContent = e.message || t('erro'); });\n    });\n  }\n  function checkout(m, c, resp){\n    var url = resp.checkout_url || '', alt = Number(resp.altura) || 450, corte = Math.max(0, Number(resp.corte) || 0), dentro = url && resp.embutivel !== false;\n    var cx = m.querySelector('.dce-m-c');\n    cx.style.width = 'min(520px,100%)';\n    cx.innerHTML = '<h3>' + esc(t('pagarTit')) + '</h3>'\n      + (dentro ? '<div class=\"dce-checkout\" style=\"height:' + alt + 'px\"><iframe scrolling=\"no\" sandbox=\"allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox\" allow=\"payment\" style=\"top:' + (-corte) + 'px;height:' + (alt + corte) + 'px\" src=\"' + esc(url) + '\" title=\"' + esc(t('pagarTit')) + '\"></iframe></div><a class=\"lig\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(t('abrirSeparador')) + '</a>' : (url ? '<a class=\"dce-btn lg\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(t('pagar', { v: mzn(c.preco) })) + '</a>' : ''))\n      + '<div class=\"dce-espera\"><i></i><span id=\"dce-esp\">' + esc(t('esperaPag')) + '</span></div><div style=\"display:grid;grid-template-columns:1fr 1fr;gap:8px\"><button type=\"button\" class=\"dce-btn\" id=\"dce-ja\">' + esc(t('jaPaguei')) + '</button><button type=\"button\" class=\"dce-btn sec\" id=\"dce-canc\">' + esc(t('cancelar')) + '</button></div>';\n    var parar = false;\n    m.__fim = function(){ parar = true; clearTimeout(S.poll); };\n    function ver(manual){\n      clearTimeout(S.poll); if (parar) return;\n      post('/ead-estado', { curso_id: c.id }).then(function(r){\n        if (parar) return;\n        if (r.status === 'success' && r.response.acesso) { parar = true; m.fechar(); aviso(t('bemVindo'), true); curso(c.id); return; }\n        if (manual) cx.querySelector('#dce-esp').textContent = t('aindaNao');\n        S.poll = setTimeout(function(){ ver(false); }, 4000);\n      }).catch(function(){ S.poll = setTimeout(function(){ ver(false); }, 6000); });\n    }\n    cx.querySelector('#dce-ja').addEventListener('click', function(){ ver(true); });\n    cx.querySelector('#dce-canc').addEventListener('click', m.fechar);\n    window.addEventListener('message', function(e){ if (e.data && e.data.daniel === 'pagamento') ver(false); });\n    ver(false);\n  }\n\n  // ---- rotas ----\n  function rota(){\n    var h = (location.hash || '').replace(/^#/, '');\n    if (h.indexOf('ead') !== 0) { if (!raiz.__iniciado) { raiz.__iniciado = true; catalogo(false); } return; }\n    raiz.__iniciado = true;\n    var p = h.replace(/^ead\\/?/, '').replace(/\\?.*$/, '').split('/');\n    if (p[0] === 'curso' && p[1]) return curso(p[1]);\n    if (p[0] === 'aula' && p[1] && p[2]) return aula(p[1], p[2]);\n    if (p[0] === 'meus') return S.sessao ? catalogo(true) : entrar(function(){ catalogo(true); });\n    catalogo(false);\n  }\n  function arrancar(){\n    raiz = document.getElementById('daniel-ia-cursos');\n    if (!raiz) {\n      raiz = document.createElement('section');\n      raiz.id = 'daniel-ia-cursos';\n      var rod = document.querySelector('footer');\n      if (rod && rod.parentNode) rod.parentNode.insertBefore(raiz, rod); else document.body.appendChild(raiz);\n    }\n    var st = document.createElement('style'); st.setAttribute('data-daniel-ia', 'cursos'); st.textContent = CSS; document.head.appendChild(st);\n    raiz.classList.add('dce');\n    raiz.innerHTML = '<div class=\"dce-vazio\">…</div>';\n    window.addEventListener('hashchange', rota);\n    rota();\n  }\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();\n})();\n";
 
@@ -20241,6 +20523,452 @@ app.get('/ead.js', (req, res) => {
 });
 globalThis.__limparKycCache = () => cacheKycLoja.clear();
 globalThis.__danielEad = { agoraToken, certificadoPdf, eadLimparConfig, eadPermitidoPlano, codigos: eadCodigos };
+
+// ======================================================
+// Director de arte (1.80.0)
+// ------------------------------------------------------
+// Antes de escrever o código, a IA faz o que um estúdio faz: um guião de
+// design para ESTE negócio (conceito, paleta, letras, hero, secção a
+// secção, onde entra cada fotografia, movimento e pormenores de
+// assinatura). O construtor recebe o guião e segue-o. Com um site-modelo
+// da biblioteca de inspiração, o guião é a adaptação desse modelo ao
+// negócio; sem modelo, parte da direcção de arte da versão.
+// DESIGN_GUIAO=nao desliga este passo.
+// ======================================================
+const SISTEMA_GUIAO = 'És director de arte sénior de um estúdio de web design premiado. Escreves o guião de design que um programador vai seguir à letra para construir o site. '
+  + 'O teu padrão é o dos melhores sites do mundo: composição com intenção, tipografia com carácter, fotografias grandes, espaço, ritmo e pormenores de acabamento. '
+  + 'Nunca aceitas um site que pareça um modelo genérico ou "feito por IA" (hero centrado banal, três cartões iguais, secções todas com o mesmo desenho, muito texto e poucas imagens). '
+  + 'Respondes só com o guião, em português, em texto simples com os títulos pedidos. Sem código.';
+async function guiaoDeDesign({ nome, tipo, prompt, lingua, insp, imgs, fotos, marca, logoUrl, direcao, paginas, guia, videoHero }) {
+  if (!DESIGN_GUIAO || !OPENAI_API_KEY) return { texto: '', tokens: 0 };
+  const forte = !!(insp && inspiracaoForte());
+  const pa = (logoUrl && marca) ? paletaDaMarca(marca) : null;
+  const linhasFotos = (fotos || []).map((f, i) => `${i + 1}) [${f.uso}] ${f.descricao || ''} (${f.orientacao || 'paisagem'})`).join('\n');
+  const pedido = [
+    `NEGÓCIO: ${nome}`,
+    `TIPO DE PROJECTO: ${tipo}`,
+    `IDIOMA DO SITE: ${IDIOMAS_SITE[lingua].nome}`,
+    `O QUE A PESSOA PEDIU: ${textoCurto(prompt, 2500)}`,
+    'O QUE ESTE TIPO DE PROJECTO TEM DE TER (funcional, não mexas): ' + textoCurto(guia, 1400),
+    tipo === 'Checkout' ? 'É UMA PÁGINA DE VENDA de uma só oferta (não é loja). A secção da oferta (id="comprar") leva uma caixa automática com as opções, os preços e o botão de compra: no guião diz só onde fica, o título, a frase e o fundo dessa secção - não desenhes cartões de preço. Os preços nunca se escrevem em texto (o sistema escreve-os). Todos os botões são de compra e repetem-se a cada duas ou três secções; no telemóvel há uma barra fixa em baixo com o preço e o botão.' : '',
+    videoHero ? 'O HERO TEM UM VÍDEO do produto (duas colunas no computador: texto à esquerda, vídeo grande à direita). Desenha o hero à volta disso.' : '',
+    pa ? 'CORES DO LOGÓTIPO (obrigatórias): ' + JSON.stringify(pa).slice(0, 400) : (logoUrl ? 'Há um logótipo: as cores do site saem dele.' : 'Não há logótipo: o nome aparece como wordmark tipográfico.'),
+    linhasFotos ? 'FOTOGRAFIAS DISPONÍVEIS (reais, já preparadas - diz onde entra cada uma, grandes):\n' + linhasFotos : 'NÃO HÁ FOTOGRAFIAS: os lugares de imagem levam composições ricas em CSS/SVG (formas, degradês, padrões, ilustrações), com o mesmo peso visual de uma foto.',
+    Array.isArray(paginas) && paginas.length > 1 ? 'O site tem várias páginas; este guião é o da página inicial (as outras herdam o estilo): ' + paginas.map(p => p.nav).join(', ') + '.' : '',
+    forte
+      ? 'SITE-MODELO: as imagens são o print de um site excelente (de cima para baixo). O guião é a ADAPTAÇÃO desse design a este negócio: a mesma estrutura, a mesma composição do hero, a mesma grelha, as mesmas letras e os mesmos componentes - com o nome, os textos, as fotos e as cores deste negócio. Para cada secção do modelo diz em que se transforma aqui. Não inventes outra estrutura.\nADN DO MODELO:\n' + textoAdn(insp.adn)
+      : (insp ? 'INSPIRAÇÃO: as imagens são um site de que a equipa gosta. Usa-o para subir o nível (não copies a estrutura).\n' + textoAdn(insp.adn) : ''),
+    !forte && direcao && direcao.prompt ? 'DIRECÇÃO DE ARTE DESTA VERSÃO: ' + textoCurto(direcao.prompt, 600) + (direcao.estrutura ? ' Estrutura: ' + direcao.estrutura + '. Hero: ' + direcao.hero + '.' : '') : '',
+    '',
+    'ESCREVE O GUIÃO COM ESTES TÍTULOS (no máximo 650 palavras no total):',
+    'CONCEITO: uma frase com a ideia visual do site.',
+    'PALETA: os valores exactos para --dia-fundo, --dia-superficie, --dia-primaria, --dia-primaria-texto, --dia-texto, --dia-texto-suave, --dia-borda e uma cor de destaque; e onde se usa cada uma.',
+    'LETRAS: duas famílias do Google Fonts (títulos e texto), pesos, tamanho dos títulos em clamp(), caixa e espaçamento.',
+    'GRELHA: largura máxima, colunas, margens, espaço vertical entre secções, --dia-raio.',
+    'CABEÇALHO: composição.',
+    'HERO: composição exacta (o que está onde, proporções, tamanho do título, botões, que fotografia, elementos flutuantes, fundo) e o texto do título.',
+    'SECÇÕES: de cima para baixo, numeradas. Para cada uma: para que serve, a disposição exacta, o conteúdo-chave, que fotografia leva e um pormenor de acabamento. Nunca duas secções seguidas com o mesmo desenho.',
+    'MOVIMENTO: entradas ao fazer scroll, hover, faixas em movimento ou outros efeitos (discretos e fluidos).',
+    'ASSINATURA: 3 pormenores que fazem este site parecer feito por um estúdio caro.',
+    'TELEMÓVEL: o que muda a 360 px no hero e nas secções mais complexas.'
+  ].filter(x => x !== '').join('\n');
+  const conteudo = [{ type: 'text', text: pedido }].concat((imgs || []).map(u => ({ type: 'image_url', image_url: { url: u, detail: 'high' } })));
+  const pedir = async (comImagens) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 110000);
+    try {
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST', signal: ctrl.signal,
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: OPENAI_MODEL, reasoning_effort: OPENAI_REASONING_CRIAR, max_completion_tokens: 7000,
+          messages: [{ role: 'system', content: SISTEMA_GUIAO }, { role: 'user', content: comImagens && imgs && imgs.length ? conteudo : pedido }] })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error((json.error && json.error.message) || ('HTTP ' + res.status));
+      return { texto: String((json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '').trim().slice(0, 9000), tokens: (json.usage && json.usage.total_tokens) || 0 };
+    } finally { clearTimeout(t); }
+  };
+  try {
+    let r = await pedir(true);
+    if (r.texto.length < 200) throw new Error('guião vazio');
+    return r;
+  } catch (e) {
+    console.error('[guião de design] falhou, sigo sem ele:', e.message || e);
+    return { texto: '', tokens: 0 };
+  }
+}
+globalThis.__danielDesign = { guiao: guiaoDeDesign };
+
+const VENDA_JS = "/*\n  Daniel IA - página de venda (1.81.0)\n  ------------------------------------\n  Servido em /venda.js. Numa página de venda (curso, bilhete, ebook, serviço):\n   - enche <div id=\"daniel-ia-oferta\"> com a caixa da oferta (até 3 opções,\n     preço, o que inclui, botão de compra);\n   - qualquer elemento com data-dia-comprar abre o checkout;\n   - [data-dia-preco] e [data-dia-preco-antes] recebem o preço;\n   - o checkout: dados do cliente, M-Pesa / e-Mola / cartão, e no fim o\n     acesso (mensagem, link ou ficheiro) com o código da compra.\n  Usa as fichas --dia-* do próprio site.\n*/\n(function(){\n  'use strict';\n  if (window.__danielVenda) return;\n  window.__danielVenda = true;\n  var eu = document.currentScript || document.querySelector('script[src*=\"venda.js\"]');\n  if (!eu) return;\n  var SITE = eu.getAttribute('data-site') || '';\n  var API = ''; try { API = new URL(eu.src, location.href).origin; } catch (e) { return; }\n  var PREVIA = /[?&]dia_previa=1/.test(location.search) || /\\/v\\d+\\.html$/.test(location.pathname) || !SITE || SITE === 'previa';\n  if (!SITE) SITE = 'previa'; // nas pré-visualizações das versões mostra a oferta a sério, mas sem deixar comprar\n  var LANG = (document.documentElement.lang || 'pt').slice(0, 2).toLowerCase();\n  var TX = {\n    pt: { comprar: 'Comprar agora', comprarPor: 'Comprar por {v}', inscrever: 'Garantir o meu lugar', gratis: 'Grátis', obter: 'Quero o meu acesso', escolher: 'Escolher', popular: 'Mais escolhido', poupas: 'Poupas {p}%', restam: 'Restam {n}', esgotado: 'Esgotado', fechada: 'As vendas já fecharam.', brevemente: 'Brevemente', brevementeSub: 'O preço está quase a sair. Volta daqui a pouco.', seguro: 'Pagamento seguro', metodos: 'M-Pesa · e-Mola · Visa · Mastercard', acessoJa: 'Acesso logo a seguir ao pagamento', ate: 'Vendas abertas até {d}',\n      tit: 'Finalizar a compra', quantidade: 'Quantidade', nome: 'O teu nome', telefone: 'Telefone (84, 85, 86 ou 87)', email: 'Email (para receberes o acesso)', comoPagar: 'Como queres pagar?', cartao: 'Cartão', pagar: 'Pagar {v}', confirmar: 'Confirmar', total: 'Total', erroNome: 'Escreve o teu nome.', erroTel: 'Escreve o teu número de telefone.', erroEmail: 'O email não parece certo.', escolheMetodo: 'Escolhe como queres pagar.', numeroErrado: 'Este número não é dessa operadora. 84 e 85 são M-Pesa; 86 e 87 são e-Mola.', erro: 'Não foi possível. Tenta outra vez.',\n      pagarTit: 'Pagamento', esperaPag: 'À espera do pagamento. Confirma no teu telemóvel.', jaPaguei: 'Já paguei', aindaNao: 'Ainda não recebemos o pagamento. Assim que entrar, esta janela avança sozinha.', cancelar: 'Cancelar', abrirSeparador: 'Abrir o pagamento noutro separador',\n      pagoTit: 'Pagamento recebido. Obrigado!', pagoSub: 'Guarda o código da tua compra.', gratisTit: 'Está feito!', codigo: 'Código da compra', acesso: 'O teu acesso', abrir: 'Abrir o acesso', descarregar: 'Descarregar', emailEnviado: 'Também enviámos isto para {e}.', semEntrega: 'O vendedor vai entrar em contacto contigo com os detalhes.', fechar: 'Fechar',\n      manualTit: 'Pedido registado', manualSub: 'Guardámos o teu pedido. O vendedor vai combinar o pagamento contigo e, assim que confirmar, recebes o acesso.', whatsapp: 'Falar no WhatsApp', minhas: 'Já compraste? Ver o meu acesso', previaAviso: 'Pré-visualização: a compra fica activa quando o site for publicado.', sair: 'Fechar' },\n    en: { comprar: 'Buy now', comprarPor: 'Buy for {v}', inscrever: 'Save my spot', gratis: 'Free', obter: 'Get my access', escolher: 'Choose', popular: 'Most popular', poupas: 'Save {p}%', restam: '{n} left', esgotado: 'Sold out', fechada: 'Sales are closed.', brevemente: 'Coming soon', brevementeSub: 'The price is about to be announced. Check back shortly.', seguro: 'Secure payment', metodos: 'M-Pesa · e-Mola · Visa · Mastercard', acessoJa: 'Access right after payment', ate: 'Sales open until {d}',\n      tit: 'Checkout', quantidade: 'Quantity', nome: 'Your name', telefone: 'Phone (84, 85, 86 or 87)', email: 'Email (to receive your access)', comoPagar: 'How do you want to pay?', cartao: 'Card', pagar: 'Pay {v}', confirmar: 'Confirm', total: 'Total', erroNome: 'Enter your name.', erroTel: 'Enter your phone number.', erroEmail: 'That email does not look right.', escolheMetodo: 'Choose how to pay.', numeroErrado: 'This number is not from that operator. 84 and 85 are M-Pesa; 86 and 87 are e-Mola.', erro: 'Something went wrong. Try again.',\n      pagarTit: 'Payment', esperaPag: 'Waiting for payment. Confirm on your phone.', jaPaguei: 'I have paid', aindaNao: 'We have not received the payment yet. This window moves on by itself as soon as it arrives.', cancelar: 'Cancel', abrirSeparador: 'Open the payment in another tab',\n      pagoTit: 'Payment received. Thank you!', pagoSub: 'Keep your purchase code.', gratisTit: 'All done!', codigo: 'Purchase code', acesso: 'Your access', abrir: 'Open access', descarregar: 'Download', emailEnviado: 'We also sent this to {e}.', semEntrega: 'The seller will contact you with the details.', fechar: 'Close',\n      manualTit: 'Order received', manualSub: 'We saved your order. The seller will arrange payment with you and, once confirmed, you get your access.', whatsapp: 'Chat on WhatsApp', minhas: 'Already bought? See my access', previaAviso: 'Preview: buying becomes active when the site is published.', sair: 'Close' }\n  };\n  var L = TX[LANG] || (LANG === 'fr' || LANG === 'es' ? TX.en : TX.pt);\n  function t(k, v){ var s = L[k] || TX.pt[k] || k; if (v) Object.keys(v).forEach(function(n){ s = s.replace('{' + n + '}', v[n]); }); return s; }\n  function esc(x){ return String(x == null ? '' : x).replace(/[&<>\"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }\n  function milhar(v){ return String(Math.round(Number(v) || 0)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' '); } // 1 500, 12 000 (sempre com espaço)\n  function mzn(v){ return milhar(v) + ' MZN'; }\n  function soDigitos(v){ return String(v || '').replace(/\\D/g, ''); }\n  function operadora(v){ var d = soDigitos(v); if (d.indexOf('258') === 0 && d.length > 9) d = d.slice(3); var p = d.slice(0, 2); return (p === '84' || p === '85') ? 'mpesa' : ((p === '86' || p === '87') ? 'emola' : ''); }\n  function post(rota, corpo){ corpo = corpo || {}; corpo.site_id = SITE; return fetch(API + rota, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).then(function(r){ return r.json(); }); }\n  var CH = 'dia_venda_' + SITE;\n  function compras(){ try { var l = JSON.parse(localStorage.getItem(CH) || '[]'); return Array.isArray(l) ? l : []; } catch (e) { return []; } }\n  function lembrar(c){ try { var l = compras().filter(function(x){ return x.codigo !== c.codigo; }); l.unshift(c); localStorage.setItem(CH, JSON.stringify(l.slice(0, 8))); } catch (e) {} }\n  var IC = {\n    certo: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>',\n    seta: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>',\n    cadeado: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"4\" y=\"11\" width=\"16\" height=\"10\" rx=\"2\"/><path d=\"M8 11V7a4 4 0 0 1 8 0v4\"/></svg>',\n    raio: '<svg viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M13 2L4 14h6l-1 8 9-12h-6z\"/></svg>',\n    x: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>',\n    baixar: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3v12M7 10l5 5 5-5M5 21h14\"/></svg>',\n    menos: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.6\" stroke-linecap=\"round\"><path d=\"M6 12h12\"/></svg>',\n    mais: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.6\" stroke-linecap=\"round\"><path d=\"M12 6v12M6 12h12\"/></svg>'\n  };\n  var CSS = ''\n    + '.dvd,.dvd-m{--v-p:var(--dia-primaria,#1F6F5C);--v-pt:var(--dia-primaria-texto,#fff);--v-f:var(--dia-superficie,#fff);--v-fd:var(--dia-fundo,#F6F4EE);--v-t:var(--dia-texto,#17201C);--v-ts:var(--dia-texto-suave,#5C6A63);--v-b:var(--dia-borda,#E2DFD4);--v-r:var(--dia-raio,16px);font-family:var(--dia-fonte-texto,inherit);color:var(--v-t);box-sizing:border-box}'\n    + '.dvd *,.dvd-m *{box-sizing:border-box}'\n    + '.dvd-g{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));align-items:stretch;max-width:1080px;margin:0 auto}'\n    + '.dvd-g.um{max-width:520px}'\n    + '.dvd-op{position:relative;display:flex;flex-direction:column;gap:14px;padding:clamp(22px,3vw,32px);border-radius:calc(var(--v-r) + 6px);background:var(--v-f);border:1.5px solid var(--v-b);box-shadow:0 24px 60px -40px rgba(0,0,0,.35);transition:transform .25s ease,box-shadow .25s ease}'\n    + '.dvd-op:hover{transform:translateY(-3px);box-shadow:0 30px 70px -40px rgba(0,0,0,.45)}'\n    + '.dvd-op.dest{border-color:var(--v-p);box-shadow:0 0 0 3px color-mix(in srgb,var(--v-p) 18%,transparent),0 30px 70px -40px rgba(0,0,0,.45)}'\n    + '.dvd-selo{position:absolute;top:-13px;left:50%;transform:translateX(-50%);white-space:nowrap;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:var(--v-p);color:var(--v-pt);font-weight:800;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase}'\n    + '.dvd-selo svg{width:12px;height:12px}'\n    + '.dvd-op h3{margin:0;font-family:var(--dia-fonte-titulos,inherit);font-size:clamp(20px,2.4vw,24px);line-height:1.2;overflow-wrap:anywhere}'\n    + '.dvd-op .d{margin:-6px 0 0;color:var(--v-ts);font-size:14.5px;line-height:1.5}'\n    + '.dvd-pr{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}'\n    + '.dvd-pr b{font-family:var(--dia-fonte-titulos,inherit);font-size:clamp(34px,5vw,46px);line-height:1;letter-spacing:-.02em}'\n    + '.dvd-pr b small{font-size:.38em;font-weight:700;letter-spacing:.04em;margin-left:5px;color:var(--v-ts)}'\n    + '.dvd-pr s{color:var(--v-ts);font-size:16px}'\n    + '.dvd-pr em{font-style:normal;font-weight:800;font-size:12px;padding:4px 8px;border-radius:99px;background:color-mix(in srgb,var(--v-p) 14%,transparent);color:var(--v-p)}'\n    + '.dvd-inc{list-style:none;margin:0;padding:0;display:grid;gap:9px;font-size:14.5px;line-height:1.45}'\n    + '.dvd-inc li{display:flex;gap:10px;align-items:flex-start}'\n    + '.dvd-inc svg{flex:0 0 18px;width:18px;height:18px;margin-top:1px;padding:3px;border-radius:50%;background:color-mix(in srgb,var(--v-p) 14%,transparent);color:var(--v-p)}'\n    + '.dvd-btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:54px;padding:0 24px;border-radius:calc(var(--v-r) * .8);border:0;background:var(--v-p);color:var(--v-pt);font:inherit;font-weight:800;font-size:16px;cursor:pointer;text-decoration:none;transition:transform .15s ease,filter .15s ease;width:100%;margin-top:auto}'\n    + '.dvd-btn:hover{filter:brightness(1.07);transform:translateY(-1px)}.dvd-btn:active{transform:translateY(0)}'\n    + '.dvd-btn:focus-visible{outline:3px solid color-mix(in srgb,var(--v-p) 45%,transparent);outline-offset:3px}'\n    + '.dvd-btn:disabled{opacity:.55;cursor:default;transform:none;filter:none}'\n    + '.dvd-btn svg{width:18px;height:18px}'\n    + '.dvd-btn.sec{background:transparent;color:var(--v-t);border:1.5px solid var(--v-b)}'\n    + '.dvd-nota{display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap;font-size:12.5px;color:var(--v-ts);text-align:center}'\n    + '.dvd-nota svg{width:14px;height:14px}'\n    + '.dvd-rest{font-weight:800;font-size:12.5px;color:#B45309}'\n    + '.dvd-pe{max-width:1080px;margin:16px auto 0;text-align:center;font-size:13px;color:var(--v-ts)}'\n    + '.dvd-pe button{background:none;border:0;padding:6px;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer}'\n    + '.dvd-vazio{max-width:520px;margin:0 auto;padding:30px 22px;text-align:center;border-radius:calc(var(--v-r) + 6px);border:1.5px dashed var(--v-b);background:var(--v-f)}'\n    + '.dvd-vazio b{display:block;font-family:var(--dia-fonte-titulos,inherit);font-size:22px;margin-bottom:6px}'\n    + '.dvd-vazio span{color:var(--v-ts);font-size:14.5px}'\n    + '.dvd-m{position:fixed;inset:0;z-index:2147482000;display:grid;place-items:center;padding:14px}'\n    + '.dvd-m-f{position:absolute;inset:0;background:rgba(10,8,16,.62);backdrop-filter:blur(5px)}'\n    + '.dvd-m-c{position:relative;width:min(460px,100%);max-height:calc(100vh - 28px);max-height:calc(100dvh - 28px);overflow:auto;padding:26px;border-radius:calc(var(--v-r) + 6px);background:var(--v-f);color:var(--v-t);box-shadow:0 40px 90px -30px rgba(0,0,0,.65);animation:dvdE .3s ease-out}'\n    + '@keyframes dvdE{from{opacity:0;transform:translateY(16px)}}'\n    + '.dvd-m-c h3{margin:0 40px 4px 0;font-family:var(--dia-fonte-titulos,inherit);font-size:22px;line-height:1.25}'\n    + '.dvd-m-c p{margin:0 0 14px;color:var(--v-ts);font-size:14.5px;line-height:1.55}'\n    + '.dvd-m-x{position:absolute;top:14px;right:14px;width:38px;height:38px;border-radius:50%;border:0;background:var(--v-fd);color:inherit;cursor:pointer;display:grid;place-items:center}.dvd-m-x svg{width:16px;height:16px}'\n    + '.dvd-res{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-radius:calc(var(--v-r) * .7);background:var(--v-fd);margin-bottom:14px;font-size:14.5px}'\n    + '.dvd-res b{font-size:16px}'\n    + '.dvd-cp{display:grid;gap:10px;margin-bottom:10px}'\n    + '.dvd-cp input{width:100%;min-height:50px;padding:0 14px;border-radius:calc(var(--v-r) * .65);border:1.5px solid var(--v-b);background:var(--v-f);color:var(--v-t);font-weight:500;font-size:16px;font-family:inherit;outline:none}'\n    + '.dvd-cp input:focus{border-color:var(--v-p);box-shadow:0 0 0 3px color-mix(in srgb,var(--v-p) 16%,transparent)}'\n    + '.dvd-qt{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;font-weight:700;font-size:14.5px}'\n    + '.dvd-qt div{display:flex;align-items:center;gap:6px}'\n    + '.dvd-qt button{width:40px;height:40px;border-radius:12px;border:1.5px solid var(--v-b);background:var(--v-f);color:inherit;cursor:pointer;display:grid;place-items:center}.dvd-qt button svg{width:15px;height:15px}'\n    + '.dvd-qt output{min-width:34px;text-align:center;font-size:17px;font-weight:800}'\n    + '.dvd-mt{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:6px 0 10px}'\n    + '.dvd-mt button{min-height:48px;border-radius:12px;border:1.5px solid var(--v-b);background:var(--v-f);color:inherit;font-weight:700;font-size:14px;font-family:inherit;cursor:pointer}'\n    + '.dvd-mt button.on{border-color:var(--v-p);background:color-mix(in srgb,var(--v-p) 10%,var(--v-f))}'\n    + '.dvd-rot{margin:0 0 2px;font-weight:700;font-size:13.5px;color:var(--v-t)}'\n    + '.dvd-er{color:#C0392B;font-size:13.5px;min-height:18px;margin:2px 0 8px}'\n    + '.dvd-ck{position:relative;height:450px;overflow:hidden;border-radius:12px;border:1px solid var(--v-b);margin:6px 0 10px}.dvd-ck iframe{position:absolute;left:0;width:100%;border:0}'\n    + '.dvd-esp{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--v-ts);margin:8px 0 12px}.dvd-esp i{flex:0 0 16px;width:16px;height:16px;border-radius:50%;border:2.5px solid var(--v-b);border-top-color:var(--v-p);animation:dvdG .8s linear infinite}'\n    + '@keyframes dvdG{to{transform:rotate(360deg)}}'\n    + '.dvd-lig{display:inline-block;background:none;border:0;padding:6px 0;color:var(--v-ts);font-weight:600;font-size:13.5px;font-family:inherit;cursor:pointer;text-decoration:underline}'\n    + '.dvd-ok{width:62px;height:62px;border-radius:50%;display:grid;place-items:center;background:var(--v-p);color:var(--v-pt);margin:0 auto 14px}.dvd-ok svg{width:30px;height:30px}'\n    + '.dvd-cod{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-radius:12px;border:1.5px dashed var(--v-b);margin-bottom:12px;font-size:13.5px;color:var(--v-ts)}'\n    + '.dvd-cod b{font:800 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;color:var(--v-t)}'\n    + '.dvd-ac{padding:16px;border-radius:14px;background:color-mix(in srgb,var(--v-p) 9%,var(--v-f));border:1px solid color-mix(in srgb,var(--v-p) 30%,transparent);margin-bottom:12px}'\n    + '.dvd-ac small{display:block;font-weight:800;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--v-p);margin-bottom:6px}'\n    + '.dvd-ac p{color:var(--v-t);white-space:pre-line;margin:0 0 10px;overflow-wrap:anywhere}'\n    + '.dvd-ac .dvd-btn{margin-top:8px}'\n    + '@media (max-width:520px){.dvd-m{padding:0;place-items:end center}.dvd-m-c{width:100%;border-radius:22px 22px 0 0;padding:22px 18px calc(22px + env(safe-area-inset-bottom));max-height:94vh;max-height:94dvh}.dvd-mt{gap:6px}}'\n    + '@media (prefers-reduced-motion:reduce){.dvd-op,.dvd-btn{transition:none}.dvd-m-c{animation:none}.dvd-esp i{animation:none}}';\n\n  var S = { info: null, raiz: null };\n  function menor(){ var o = (S.info.opcoes || []).filter(function(x){ return !x.esgotado; }); if (!o.length) o = S.info.opcoes || []; return o.slice().sort(function(a, b){ return a.preco - b.preco; })[0] || null; }\n  function textoBotao(o){\n    if (!o.preco) return t('obter');\n    return S.info.tipo === 'bilhete' ? t('inscrever') : t('comprar');\n  }\n  function cartao(o, n){\n    var poupa = o.preco_antes > o.preco ? Math.round((1 - o.preco / o.preco_antes) * 100) : 0;\n    var fechado = S.info.fechada || o.esgotado;\n    return '<div class=\"dvd-op' + (o.destaque && n > 1 ? ' dest' : '') + '\">'\n      + (o.destaque && n > 1 ? '<span class=\"dvd-selo\">' + IC.raio + esc(t('popular')) + '</span>' : '')\n      + '<h3>' + esc(o.nome) + '</h3>' + (o.descricao ? '<p class=\"d\">' + esc(o.descricao) + '</p>' : '')\n      + '<div class=\"dvd-pr\"><b>' + (o.preco ? esc(milhar(o.preco)) + '<small>MZN</small>' : esc(t('gratis'))) + '</b>' + (poupa ? '<s>' + esc(mzn(o.preco_antes)) + '</s><em>' + esc(t('poupas', { p: poupa })) + '</em>' : '') + '</div>'\n      + (o.inclui && o.inclui.length ? '<ul class=\"dvd-inc\">' + o.inclui.map(function(x){ return '<li>' + IC.certo + '<span>' + esc(x) + '</span></li>'; }).join('') + '</ul>' : '')\n      + (o.restam !== null && o.restam !== undefined && !o.esgotado && o.restam <= 20 ? '<span class=\"dvd-rest\">' + esc(t('restam', { n: o.restam })) + '</span>' : '')\n      + '<button type=\"button\" class=\"dvd-btn' + (n > 1 && !o.destaque ? ' sec' : '') + '\" data-dvd-op=\"' + esc(o.id) + '\"' + (fechado ? ' disabled' : '') + '>' + esc(o.esgotado ? t('esgotado') : (S.info.fechada ? t('fechada') : textoBotao(o))) + (fechado ? '' : IC.seta) + '</button>'\n      + '</div>';\n  }\n  function desenhar(){\n    var i = S.info, r = S.raiz;\n    Array.prototype.forEach.call(document.querySelectorAll('[data-dia-preco]'), function(el){ var m = menor(); if (m && i.definido) el.textContent = m.preco ? mzn(m.preco) : t('gratis'); });\n    Array.prototype.forEach.call(document.querySelectorAll('[data-dia-preco-antes]'), function(el){ var m = menor(); if (m && m.preco_antes && i.definido) el.textContent = mzn(m.preco_antes); else el.style.display = 'none'; });\n    if (!r) return;\n    r.classList.add('dvd');\n    if (!i.definido) { r.innerHTML = '<div class=\"dvd-vazio\"><b>' + esc(t('brevemente')) + '</b><span>' + esc(t('brevementeSub')) + '</span></div>'; return; }\n    var n = i.opcoes.length;\n    var fim = i.fim && !i.fechada ? new Date(i.fim) : null;\n    r.innerHTML = '<div class=\"dvd-g' + (n === 1 ? ' um' : '') + '\">' + i.opcoes.map(function(o){ return cartao(o, n); }).join('') + '</div>'\n      + '<div class=\"dvd-pe\"><div class=\"dvd-nota\">' + IC.cadeado + '<span>' + esc(t('seguro')) + ' · ' + esc(t('metodos')) + '</span></div>'\n      + (fim && !isNaN(fim) ? '<div style=\"margin-top:6px\">' + esc(t('ate', { d: fim.toLocaleDateString(LANG === 'pt' ? 'pt-PT' : 'en-GB', { day: 'numeric', month: 'long' }) })) + '</div>' : '')\n      + (compras().length ? '<button type=\"button\" data-dvd-minhas>' + esc(t('minhas')) + '</button>' : '') + '</div>';\n    Array.prototype.forEach.call(r.querySelectorAll('[data-dvd-op]'), function(b){ b.addEventListener('click', function(){ abrir(b.getAttribute('data-dvd-op')); }); });\n    var mb = r.querySelector('[data-dvd-minhas]'); if (mb) mb.addEventListener('click', verMinhas);\n  }\n\n  // ---- janela ----\n  function janela(html){\n    var m = document.createElement('div');\n    m.className = 'dvd-m'; m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');\n    m.innerHTML = '<div class=\"dvd-m-f\"></div><div class=\"dvd-m-c\"><button type=\"button\" class=\"dvd-m-x\" aria-label=\"' + esc(t('fechar')) + '\">' + IC.x + '</button><div data-corpo>' + html + '</div></div>';\n    document.body.appendChild(m);\n    var antes = document.documentElement.style.overflow; document.documentElement.style.overflow = 'hidden';\n    function fechar(){ m.remove(); document.documentElement.style.overflow = antes; document.removeEventListener('keydown', tecla); if (m.__fim) m.__fim(); }\n    function tecla(e){ if (e.key === 'Escape') fechar(); }\n    m.querySelector('.dvd-m-x').addEventListener('click', fechar);\n    m.querySelector('.dvd-m-f').addEventListener('click', fechar);\n    document.addEventListener('keydown', tecla);\n    m.fechar = fechar; m.corpo = m.querySelector('[data-corpo]');\n    return m;\n  }\n  function entregaHtml(e, email){\n    e = e || {};\n    var tem = e.mensagem || e.link || e.ficheiro;\n    return (tem ? '<div class=\"dvd-ac\"><small>' + esc(t('acesso')) + '</small>' + (e.mensagem ? '<p>' + esc(e.mensagem) + '</p>' : '')\n      + (e.link ? '<a class=\"dvd-btn\" href=\"' + esc(e.link) + '\" target=\"_blank\" rel=\"noopener\">' + esc(e.link_texto || t('abrir')) + IC.seta + '</a>' : '')\n      + (e.ficheiro ? '<a class=\"dvd-btn sec\" href=\"' + esc(e.ficheiro.url) + '\" target=\"_blank\" rel=\"noopener\" download>' + IC.baixar + esc(t('descarregar')) + ': ' + esc(e.ficheiro.nome) + '</a>' : '') + '</div>'\n      : '<p style=\"text-align:center\">' + esc(t('semEntrega')) + '</p>')\n      + (email && tem ? '<p style=\"text-align:center;font-size:13px;margin:0 0 12px\">' + esc(t('emailEnviado', { e: email })) + '</p>' : '');\n  }\n  function mostrarPago(m, r, email, gratis){\n    m.__fim = null;\n    m.corpo.innerHTML = '<div class=\"dvd-ok\">' + IC.certo + '</div><h3 style=\"text-align:center;margin:0 0 4px\">' + esc(gratis ? t('gratisTit') : t('pagoTit')) + '</h3><p style=\"text-align:center\">' + esc(t('pagoSub')) + '</p>'\n      + '<div class=\"dvd-cod\"><span>' + esc(t('codigo')) + '</span><b>' + esc(r.codigo) + '</b></div>' + entregaHtml(r.entrega, email)\n      + '<button type=\"button\" class=\"dvd-btn sec\" data-ok>' + esc(t('fechar')) + '</button>';\n    m.corpo.querySelector('[data-ok]').addEventListener('click', m.fechar);\n    desenhar();\n    post('/venda-info', {}).then(function(x){ if (x.status === 'success') { S.info = x.response; desenhar(); } }).catch(function(){}); // lugares que restam\n  }\n  function abrir(opId){\n    var i = S.info; if (!i) return;\n    if (PREVIA) { var a = janela('<p style=\"text-align:center;font-size:16px;color:inherit;margin:14px 0 18px\">' + esc(t('previaAviso')) + '</p><button type=\"button\" class=\"dvd-btn\" data-ok>' + esc(t('fechar')) + '</button>'); a.corpo.querySelector('[data-ok]').addEventListener('click', a.fechar); return; }\n    if (!i.definido || i.fechada) { if (S.raiz) S.raiz.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }\n    var o = i.opcoes.filter(function(x){ return x.id === opId; })[0];\n    if (!o) {\n      var livres = i.opcoes.filter(function(x){ return !x.esgotado; });\n      if (livres.length === 1) o = livres[0];\n      else { if (S.raiz) S.raiz.scrollIntoView({ behavior: 'smooth', block: 'center' }); else if (!/index\\.html$|\\/$/.test(location.pathname)) location.href = 'index.html#comprar'; return; }\n    }\n    if (o.esgotado) return;\n    var qtd = 1, metodo = '', online = i.pagamentos !== false && o.preco > 0;\n    var maxQ = Math.min(10, o.restam === null || o.restam === undefined ? 10 : o.restam);\n    var m = janela('<h3>' + esc(t('tit')) + '</h3><p>' + esc(i.nome || '') + '</p>'\n      + '<div class=\"dvd-res\"><span>' + esc(o.nome) + '</span><b data-total></b></div>'\n      + (i.quantidade && maxQ > 1 ? '<div class=\"dvd-qt\"><span>' + esc(t('quantidade')) + '</span><div><button type=\"button\" data-q=\"-1\" aria-label=\"-\">' + IC.menos + '</button><output data-qv>1</output><button type=\"button\" data-q=\"1\" aria-label=\"+\">' + IC.mais + '</button></div></div>' : '')\n      + '<div class=\"dvd-cp\"><input type=\"text\" autocomplete=\"name\" maxlength=\"80\" placeholder=\"' + esc(t('nome')) + '\" aria-label=\"' + esc(t('nome')) + '\" data-nome>'\n      + '<input type=\"tel\" inputmode=\"tel\" autocomplete=\"tel\" maxlength=\"20\" placeholder=\"' + esc(t('telefone')) + '\" aria-label=\"' + esc(t('telefone')) + '\" data-tel>'\n      + '<input type=\"email\" autocomplete=\"email\" maxlength=\"150\" placeholder=\"' + esc(t('email')) + '\" aria-label=\"' + esc(t('email')) + '\" data-email></div>'\n      + (online ? '<p class=\"dvd-rot\">' + esc(t('comoPagar')) + '</p><div class=\"dvd-mt\"><button type=\"button\" data-m=\"mpesa\">M-Pesa</button><button type=\"button\" data-m=\"emola\">e-Mola</button><button type=\"button\" data-m=\"cartao\">' + esc(t('cartao')) + '</button></div>' : '')\n      + '<div class=\"dvd-er\" data-er></div><button type=\"button\" class=\"dvd-btn\" data-pagar></button>'\n      + '<div class=\"dvd-nota\" style=\"margin-top:12px\">' + IC.cadeado + '<span>' + esc(t('seguro')) + (o.preco ? ' · ' + esc(t('acessoJa')) : '') + '</span></div>');\n    var c = m.corpo, er = c.querySelector('[data-er]'), bp = c.querySelector('[data-pagar]'), tel = c.querySelector('[data-tel]');\n    function total(){ var v = o.preco * qtd; c.querySelector('[data-total]').textContent = v ? mzn(v) : t('gratis'); bp.innerHTML = esc(v ? (online ? t('pagar', { v: mzn(v) }) : t('confirmar')) : t('obter')) + IC.seta; }\n    total();\n    Array.prototype.forEach.call(c.querySelectorAll('[data-q]'), function(b){ b.addEventListener('click', function(){ qtd = Math.max(1, Math.min(maxQ, qtd + Number(b.getAttribute('data-q')))); c.querySelector('[data-qv]').textContent = qtd; total(); }); });\n    Array.prototype.forEach.call(c.querySelectorAll('[data-m]'), function(b){ b.addEventListener('click', function(){ metodo = b.getAttribute('data-m'); Array.prototype.forEach.call(c.querySelectorAll('[data-m]'), function(x){ x.classList.toggle('on', x === b); }); er.textContent = ''; }); });\n    tel.addEventListener('input', function(){ var op = operadora(tel.value); if (op && metodo !== 'cartao') { var b = c.querySelector('[data-m=\"' + op + '\"]'); if (b) b.click(); } });\n    setTimeout(function(){ try { c.querySelector('[data-nome]').focus(); } catch (e) {} }, 60);\n    bp.addEventListener('click', function(){\n      var nome = c.querySelector('[data-nome]').value.trim(), email = c.querySelector('[data-email]').value.trim();\n      er.textContent = '';\n      if (nome.length < 2) { er.textContent = t('erroNome'); return; }\n      if (soDigitos(tel.value).length < 9) { er.textContent = t('erroTel'); return; }\n      if (email && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email)) { er.textContent = t('erroEmail'); return; }\n      if (online && !metodo) { er.textContent = t('escolheMetodo'); return; }\n      if (online && metodo !== 'cartao' && operadora(tel.value) !== metodo) { er.textContent = t('numeroErrado'); return; }\n      bp.disabled = true;\n      post('/venda-comprar', { opcao_id: o.id, quantidade: qtd, nome: nome, telefone: tel.value, email: email, metodo: metodo }).then(function(r){\n        if (r.status !== 'success') throw new Error(r.message);\n        var x = r.response;\n        lembrar({ codigo: x.codigo, chave: x.chave });\n        if (x.pago) return mostrarPago(m, x, email, true);\n        if (x.manual) {\n          var wa = x.whatsapp ? 'https://wa.me/' + soDigitos(x.whatsapp) + '?text=' + encodeURIComponent((i.nome || '') + ' - ' + o.nome + ' (' + x.codigo + ')') : '';\n          c.innerHTML = '<div class=\"dvd-ok\">' + IC.certo + '</div><h3 style=\"text-align:center;margin:0 0 4px\">' + esc(t('manualTit')) + '</h3><p style=\"text-align:center\">' + esc(t('manualSub')) + '</p><div class=\"dvd-cod\"><span>' + esc(t('codigo')) + '</span><b>' + esc(x.codigo) + '</b></div>'\n            + (wa ? '<a class=\"dvd-btn\" href=\"' + esc(wa) + '\" target=\"_blank\" rel=\"noopener\" style=\"margin-bottom:8px\">' + esc(t('whatsapp')) + '</a>' : '') + '<button type=\"button\" class=\"dvd-btn sec\" data-ok>' + esc(t('fechar')) + '</button>';\n          c.querySelector('[data-ok]').addEventListener('click', m.fechar);\n          return;\n        }\n        return post('/loja-pagar', { encomenda_id: x.encomenda_id, metodo: metodo, telefone: tel.value }).then(function(rp){\n          if (rp.status !== 'success') throw new Error(rp.message);\n          checkout(m, x, rp.response, email);\n        });\n      }).catch(function(e){ bp.disabled = false; er.textContent = (e && e.message) || t('erro'); });\n    });\n  }\n  function checkout(m, compra, resp, email){\n    var url = resp.checkout_url || '', alt = Number(resp.altura) || 450, corte = Math.max(0, Number(resp.corte) || 0), dentro = url && resp.embutivel !== false;\n    var c = m.corpo;\n    c.innerHTML = '<h3>' + esc(t('pagarTit')) + '</h3>'\n      + (dentro ? '<div class=\"dvd-ck\" style=\"height:' + alt + 'px\"><iframe scrolling=\"no\" sandbox=\"allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox\" allow=\"payment\" style=\"top:' + (-corte) + 'px;height:' + (alt + corte) + 'px\" src=\"' + esc(url) + '\" title=\"' + esc(t('pagarTit')) + '\"></iframe></div><a class=\"dvd-lig\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(t('abrirSeparador')) + '</a>' : (url ? '<a class=\"dvd-btn\" href=\"' + esc(url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(t('pagar', { v: mzn(compra.valor) })) + '</a>' : ''))\n      + '<div class=\"dvd-esp\"><i></i><span data-esp>' + esc(t('esperaPag')) + '</span></div><div style=\"display:grid;grid-template-columns:1fr 1fr;gap:8px\"><button type=\"button\" class=\"dvd-btn\" data-ja style=\"min-height:48px;font-size:14.5px\">' + esc(t('jaPaguei')) + '</button><button type=\"button\" class=\"dvd-btn sec\" data-canc style=\"min-height:48px;font-size:14.5px\">' + esc(t('cancelar')) + '</button></div>';\n    var parar = false, tm = null;\n    m.__fim = function(){ parar = true; clearTimeout(tm); };\n    function ver(manual){\n      clearTimeout(tm); if (parar) return;\n      post('/venda-estado', { codigo: compra.codigo, chave: compra.chave }).then(function(r){\n        if (parar) return;\n        if (r.status === 'success' && r.response.pago) { parar = true; return mostrarPago(m, r.response, email, false); }\n        if (manual) c.querySelector('[data-esp]').textContent = t('aindaNao');\n        tm = setTimeout(function(){ ver(false); }, 4000);\n      }).catch(function(){ tm = setTimeout(function(){ ver(false); }, 6000); });\n    }\n    c.querySelector('[data-ja]').addEventListener('click', function(){ ver(true); });\n    c.querySelector('[data-canc]').addEventListener('click', m.fechar);\n    window.addEventListener('message', function(e){ if (e.data && e.data.daniel === 'pagamento') ver(false); });\n    ver(false);\n  }\n  function verMinhas(){\n    var l = compras(); if (!l.length) return;\n    var m = janela('<div class=\"dvd-esp\" style=\"justify-content:center;margin:26px 0\"><i></i></div>');\n    Promise.all(l.map(function(x){ return post('/venda-estado', { codigo: x.codigo, chave: x.chave }).then(function(r){ return r.status === 'success' ? r.response : null; }).catch(function(){ return null; }); })).then(function(rs){\n      var pagas = rs.filter(function(r){ return r && r.pago; });\n      if (!pagas.length) { m.corpo.innerHTML = '<p style=\"text-align:center;font-size:15.5px;color:inherit;margin:16px 0\">' + esc(t('aindaNao')) + '</p><button type=\"button\" class=\"dvd-btn sec\" data-ok>' + esc(t('fechar')) + '</button>'; }\n      else m.corpo.innerHTML = '<h3>' + esc(t('acesso')) + '</h3>' + pagas.map(function(r){ return '<div class=\"dvd-cod\" style=\"margin-top:12px\"><span>' + esc(r.nome_opcao) + (r.quantidade > 1 ? ' × ' + r.quantidade : '') + '</span><b>' + esc(r.codigo) + '</b></div>' + entregaHtml(r.entrega, ''); }).join('') + '<button type=\"button\" class=\"dvd-btn sec\" data-ok>' + esc(t('fechar')) + '</button>';\n      m.corpo.querySelector('[data-ok]').addEventListener('click', m.fechar);\n    });\n  }\n  function ligarBotoes(){\n    document.addEventListener('click', function(e){\n      var b = e.target && e.target.closest ? e.target.closest('[data-dia-comprar]') : null;\n      if (!b || !S.info) return;\n      e.preventDefault();\n      var idx = parseInt(b.getAttribute('data-dia-comprar'), 10);\n      var o = idx >= 1 && S.info.opcoes[idx - 1] ? S.info.opcoes[idx - 1] : null;\n      abrir(o ? o.id : '');\n    });\n  }\n  function arrancar(){\n    S.raiz = document.getElementById('daniel-ia-oferta');\n    var st = document.createElement('style'); st.setAttribute('data-daniel-ia', 'venda'); st.textContent = CSS; document.head.appendChild(st);\n    if (S.raiz) { S.raiz.classList.add('dvd'); S.raiz.innerHTML = '<div class=\"dvd-vazio\"><span>…</span></div>'; }\n    ligarBotoes();\n    post('/venda-info', {}).then(function(r){\n      if (r.status !== 'success') throw new Error(r.message);\n      S.info = r.response; desenhar();\n    }).catch(function(){ if (S.raiz) S.raiz.innerHTML = ''; });\n  }\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arrancar); else arrancar();\n})();\n";
+// ======================================================
+// Página de venda a sério (1.81.0)
+// ------------------------------------------------------
+// A "Página de venda" (tipo Checkout) deixa de ser uma loja pequena. Passa a
+// ser uma página que vende UMA oferta - um curso, um bilhete, um ebook, uma
+// mentoria, um serviço - com até 3 opções de compra (ex: Normal / VIP), e um
+// checkout próprio: o cliente escolhe, paga (M-Pesa, e-Mola ou cartão, como
+// nas lojas) e recebe logo o acesso (mensagem, link ou ficheiro que o dono
+// escreveu uma vez), no ecrã e por email, com o código da compra.
+//
+// A loja (E-commerce) continua a ser loja: catálogo, carrinho, categorias.
+//
+// Guardado no Storage:
+//   venda/<site>/config.json   a oferta, as opções, a entrega
+//   venda/<site>/vendas.json   as compras (código, opção, cliente, estado)
+//   venda/indice.json          que sites são páginas de venda no formato novo
+// As páginas de venda antigas (com a div da loja) continuam como estão.
+// ======================================================
+const VENDA_MAX_OPCOES = 3, VENDA_MAX_QTD = 10, VENDA_MAX_VENDAS = 5000;
+let vendaIndice = null, vendaIndiceP = null;
+function vendaCarregarIndice() {
+  if (vendaIndice) return Promise.resolve(vendaIndice);
+  if (!vendaIndiceP) vendaIndiceP = lerJsonStorage('venda/indice.json').catch(() => null).then(j => { vendaIndice = (j && typeof j === 'object' && j.sites) ? j : { sites: {} }; return vendaIndice; });
+  return vendaIndiceP;
+}
+async function vendaEhNova(siteId) { const i = await vendaCarregarIndice(); return !!i.sites[siteId]; }
+function vendaNum(v, max) { const n = Math.round(Number(String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.')) || 0); return Math.max(0, Math.min(max || 10000000, n)); }
+function vendaUrl(v) { const u = String(v || '').trim().slice(0, 500); if (!u) return ''; const c = /^https?:\/\//i.test(u) ? u : 'https://' + u; try { const x = new URL(c); return /^https?:$/.test(x.protocol) && x.hostname.indexOf('.') > 0 ? x.href : ''; } catch (e) { return ''; } }
+function vendaLimparConfig(c, ant) {
+  c = (c && typeof c === 'object') ? c : {};
+  const antOp = {}; ((ant && ant.opcoes) || []).forEach(o => { antOp[o.id] = o; });
+  let opcoes = (Array.isArray(c.opcoes) ? c.opcoes : []).slice(0, VENDA_MAX_OPCOES).map(o => {
+    o = (o && typeof o === 'object') ? o : {};
+    const id = /^[a-f0-9]{12}$/.test(String(o.id || '')) && antOp[o.id] ? o.id : eadId();
+    const preco = vendaNum(o.preco), antes = vendaNum(o.preco_antes);
+    return { id, nome: eadTexto(o.nome, 60) || 'Oferta', preco, preco_antes: antes > preco ? antes : 0, descricao: eadTexto(o.descricao, 160),
+      inclui: (Array.isArray(o.inclui) ? o.inclui : []).map(x => eadTexto(x, 110)).filter(Boolean).slice(0, 10), destaque: o.destaque === true, limite: vendaNum(o.limite, 1000000) };
+  });
+  if (!opcoes.length) opcoes = [{ id: eadId(), nome: 'Oferta', preco: 0, preco_antes: 0, descricao: '', inclui: [], destaque: false, limite: 0 }];
+  if (opcoes.filter(o => o.destaque).length > 1) { let ja = false; opcoes.forEach(o => { if (o.destaque && ja) o.destaque = false; else if (o.destaque) ja = true; }); }
+  const e = (c.entrega && typeof c.entrega === 'object') ? c.entrega : {};
+  const f = (e.ficheiro && typeof e.ficheiro === 'object' && /^https:\/\//.test(String(e.ficheiro.url || '')) && String(e.ficheiro.url).indexOf('/venda/') > 0) ? { nome: eadTexto(e.ficheiro.nome, 120) || 'Ficheiro', url: String(e.ficheiro.url).slice(0, 500), tamanho: vendaNum(e.ficheiro.tamanho, 1e9) } : null;
+  const fim = c.fim && !isNaN(Date.parse(c.fim)) ? new Date(c.fim).toISOString() : '';
+  return {
+    nome: eadTexto(c.nome, 90), frase: eadTexto(c.frase, 200),
+    tipo: ['curso', 'bilhete', 'ebook', 'servico', 'outro'].includes(c.tipo) ? c.tipo : 'outro',
+    opcoes, quantidade: c.quantidade === true, fim,
+    entrega: { mensagem: eadTextoLongo(e.mensagem, 1500), link: vendaUrl(e.link), link_texto: eadTexto(e.link_texto, 40), ficheiro: f },
+    email: eadEmail(c.email), definido: c.definido !== false
+  };
+}
+const VENDA_DEMO = vendaLimparConfig({ nome: 'A tua oferta', frase: 'O preço e as opções aparecem aqui.', opcoes: [{ nome: 'Acesso completo', preco: 1500, preco_antes: 2500, inclui: ['Tudo o que está nesta página', 'Acesso imediato depois do pagamento', 'Apoio por WhatsApp'], destaque: true }] });
+const vendaCacheCfg = new Map();
+async function vendaLer(siteId) {
+  if (!siteId || siteId === 'previa') return null;
+  const c = vendaCacheCfg.get(siteId);
+  if (c && Date.now() - c.t < 20000) return c.cfg;
+  const cfg = await lerJsonStorage('venda/' + siteId + '/config.json').catch(() => null);
+  vendaCacheCfg.set(siteId, { cfg: cfg || null, t: Date.now() });
+  if (vendaCacheCfg.size > 400) vendaCacheCfg.delete(vendaCacheCfg.keys().next().value);
+  return cfg || null;
+}
+async function vendaGravar(siteId, cfg) {
+  await gravarJsonStorage('venda/' + siteId + '/config.json', cfg);
+  vendaCacheCfg.set(siteId, { cfg, t: Date.now() });
+  const i = await vendaCarregarIndice();
+  if (!i.sites[siteId]) { i.sites[siteId] = 1; await gravarJsonStorage('venda/indice.json', i).catch(() => {}); }
+}
+// A primeira oferta de um site: (1) a que a IA escreveu com a página; (2) os produtos que
+// a página antiga já tinha (ao mudar de layout); (3) uma oferta por definir.
+async function vendaCriarSeFalta(siteId, dados, nomeSite) {
+  if (!siteId || siteId === 'previa') return null;
+  const ja = await vendaLer(siteId);
+  if (ja) return ja;
+  let base = null;
+  try {
+    const prods = await bubbleList('produto', [{ key: 'Site', constraint_type: 'equals', value: siteId }, { key: 'Is Active', constraint_type: 'equals', value: true }]);
+    if (prods && prods.length) base = { nome: nomeSite || '', opcoes: prods.slice(0, VENDA_MAX_OPCOES).map((p, i) => ({ nome: p['Nome'], preco: Number(p['Preco MZN']) || 0, descricao: textoCurto(p['Descricao'] || '', 160), destaque: i === 0 })) };
+  } catch (e) {}
+  if (!base && dados && Array.isArray(dados.opcoes) && dados.opcoes.length) base = dados;
+  const temPreco = !!(base && base.opcoes.some(o => vendaNum(o.preco) > 0));
+  const cfg = vendaLimparConfig(Object.assign({ nome: nomeSite || '' }, base || {}, { definido: temPreco }), null);
+  if (!cfg.nome) cfg.nome = eadTexto(nomeSite, 90);
+  await vendaGravar(siteId, cfg);
+  return cfg;
+}
+// ---- o HTML: a div da oferta, os dados que a IA escreveu e o /venda.js ----
+function vendaTemOferta(html) { return /id=["']daniel-ia-oferta["']/.test(html) || /\/venda\.js/.test(html); }
+function vendaDadosDoHtml(html) {
+  const m = /<script[^>]*id=["']daniel-ia-oferta-dados["'][^>]*>([\s\S]*?)<\/script>/i.exec(html || '');
+  if (!m) return { html, dados: null };
+  let dados = null;
+  try { dados = JSON.parse(m[1].trim()); } catch (e) { dados = null; }
+  return { html: html.replace(m[0], ''), dados: (dados && typeof dados === 'object') ? dados : null };
+}
+function injectarVendaSeNecessario(html, siteId) {
+  if (!/id=["']daniel-ia-oferta["']/.test(html) && !paginasMulti(html)) {
+    const div = '<section id="comprar" style="padding:56px 16px"><div style="max-width:1100px;margin:0 auto"><div id="daniel-ia-oferta" data-dia-depois-quiz></div></div></section>\n';
+    html = /<footer\b/i.test(html) ? html.replace(/<footer\b/i, div + '<footer') : html.replace(/<\/body>/i, div + '</body>');
+  }
+  // a caixa da oferta esconde-se enquanto houver um quiz por fazer
+  html = html.replace(/<div([^>]*)id=(["'])daniel-ia-oferta\2([^>]*)>/i, (m, a1, q, a2) => /data-dia-depois-quiz/.test(m) ? m : `<div${a1}id=${q}daniel-ia-oferta${q} data-dia-depois-quiz${a2}>`);
+  if (!/\/venda\.js/.test(html)) {
+    const sc = `\n<script>window.DANIEL_IA_SITE_ID = ${JSON.stringify(siteId || '')};</script>\n<script src="${SELF_URL}/venda.js" data-site="${escaparHtml(siteId || '')}" defer></script>\n`;
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, sc + '</body>') : html + sc;
+  }
+  return html;
+}
+// ---- vendas ----
+async function vendaLerVendas(siteId) { const j = await lerJsonStorage('venda/' + siteId + '/vendas.json').catch(() => null); return Array.isArray(j) ? j : []; }
+function vendaMudarVendas(siteId, fn) {
+  return eadFila('venda:' + siteId, async () => {
+    const l = await vendaLerVendas(siteId);
+    const r = await fn(l);
+    await gravarJsonStorage('venda/' + siteId + '/vendas.json', l.slice(0, VENDA_MAX_VENDAS));
+    return r;
+  });
+}
+function vendaCodigo() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; const b = crypto.randomBytes(7); for (let i = 0; i < 7; i++) s += A[b[i] % A.length]; return s; }
+function vendaVendidos(vendas, opcaoId) { return vendas.filter(v => v.opcao === opcaoId && (v.estado === 'pago' || (v.estado === 'por pagar' && Date.now() - Date.parse(v.criado) < 20 * 60 * 1000))).reduce((s, v) => s + (v.quantidade || 1), 0); }
+function vendaFechada(cfg) { return !!(cfg.fim && Date.parse(cfg.fim) < Date.now()); }
+function vendaPublica(cfg, vendas, site) {
+  return {
+    nome: cfg.nome, frase: cfg.frase, tipo: cfg.tipo, quantidade: cfg.quantidade, fim: cfg.fim, fechada: vendaFechada(cfg), definido: cfg.definido !== false,
+    opcoes: cfg.opcoes.map(o => { const rest = o.limite ? Math.max(0, o.limite - vendaVendidos(vendas, o.id)) : null; return { id: o.id, nome: o.nome, preco: o.preco, preco_antes: o.preco_antes, descricao: o.descricao, inclui: o.inclui, destaque: o.destaque, restam: rest, esgotado: rest === 0 }; })
+  };
+}
+function vendaEntrega(cfg) { const e = cfg.entrega || {}; return { mensagem: e.mensagem || '', link: e.link || '', link_texto: e.link_texto || '', ficheiro: e.ficheiro ? { nome: e.ficheiro.nome, url: e.ficheiro.url, tamanho: e.ficheiro.tamanho } : null }; }
+function vendaLinkPainel(siteId) { try { return new URL(APP_URL).origin + '/venda/?site=' + encodeURIComponent(siteId); } catch (e) { return APP_URL; } }
+function vendaNomeNegocio(site, cfg) { return (site && site['Nome']) || (cfg && cfg.nome) || 'Página de venda'; }
+function templateEmailVenda({ negocio, titulo, nome, texto, linhas, entrega, botao }) {
+  const tabela = (linhas || []).filter(l => l && l[1] !== '' && l[1] != null).map(l =>
+    `<tr><td style="padding:9px 0;color:#6F5E81;font-size:13px;border-bottom:1px solid #F1ECF6;width:38%;">${escaparHtml(l[0])}</td><td style="padding:9px 0;color:#1A0A27;font-size:14px;font-weight:700;border-bottom:1px solid #F1ECF6;">${escaparHtml(String(l[1]))}</td></tr>`).join('');
+  const b = x => x ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:16px 0 4px 0;"><a href="${escaparHtml(x.url)}" style="display:inline-block;background:#89C804;color:#1A0A27;font-weight:800;text-decoration:none;font-size:14.5px;padding:13px 28px;border-radius:12px;">${escaparHtml(x.texto)}</a></td></tr></table>` : '';
+  const e = entrega || {};
+  const caixa = (e.mensagem || e.link || e.ficheiro) ? `<div style="margin:18px 0 4px 0;padding:16px 18px;border-radius:14px;background:#F6FBEA;border:1px solid #D6EBA6;">
+<p style="margin:0 0 8px 0;color:#3F5B00;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;">O teu acesso</p>
+${e.mensagem ? `<p style="margin:0;color:#1A0A27;font-size:15px;line-height:1.65;">${escaparHtml(e.mensagem).replace(/\n/g, '<br>')}</p>` : ''}
+${e.link ? b({ url: e.link, texto: e.link_texto || 'Abrir o acesso' }) : ''}
+${e.ficheiro ? `<p style="margin:12px 0 0 0;font-size:14px;"><a href="${escaparHtml(e.ficheiro.url)}" style="color:#5A0F80;font-weight:800;">Descarregar: ${escaparHtml(e.ficheiro.nome)}</a></p>` : ''}</div>` : '';
+  return `<!DOCTYPE html><html lang="pt"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${escaparHtml(titulo)}</title></head>
+<body style="margin:0;padding:0;background:#F4F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F0F8;padding:30px 14px;"><tr><td align="center">
+<table role="presentation" width="100%" style="max-width:520px;background:#FFFFFF;border-radius:18px;overflow:hidden;border:1px solid #EAE2F2;">
+<tr><td style="background:#2E0644;background-image:linear-gradient(135deg,#5A0F80 0%,#2E0644 100%);padding:26px 30px;border-bottom:4px solid #89C804;">
+<p style="margin:0;color:#C8F84A;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;">${escaparHtml(negocio || '')}</p>
+<p style="margin:8px 0 0 0;color:#FFFFFF;font-size:21px;line-height:1.3;font-weight:800;">${escaparHtml(titulo)}</p></td></tr>
+<tr><td style="padding:28px 30px 24px 30px;">
+${nome ? `<p style="margin:0 0 12px 0;color:#1A0A27;font-size:17px;font-weight:800;">Olá, ${escaparHtml(primeiroNome(nome))}!</p>` : ''}
+${texto ? `<p style="margin:0 0 16px 0;color:#4A3B5C;font-size:15px;line-height:1.6;">${escaparHtml(texto)}</p>` : ''}
+${tabela ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 6px 0;">${tabela}</table>` : ''}
+${caixa}${b(botao)}
+</td></tr>
+<tr><td style="padding:14px 30px;background:#FAF8FC;border-top:1px solid #EAE2F2;text-align:center;"><p style="margin:0;color:#B3A7C2;font-size:11.5px;">Compra feita com Daniel IA · daniel-ia.pro</p></td></tr>
+</table></td></tr></table></body></html>`;
+}
+function vendaMzn(v) { return String(Math.round(Number(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' MZN'; }
+async function vendaAvisarPago(site, cfg, v, reenvio) {
+  const negocio = vendaNomeNegocio(site, cfg);
+  const linhas = [['Compra', (v.quantidade > 1 ? v.quantidade + ' × ' : '') + v.nome_opcao], ['Valor', v.valor ? vendaMzn(v.valor) : 'Grátis'], ['Código da compra', v.codigo]];
+  if (v.email) await enviarEmail(v.email, (cfg.nome || negocio) + ': a tua compra está confirmada (' + v.codigo + ')', templateEmailVenda({ negocio, titulo: 'Pagamento recebido. Obrigado!', nome: v.nome, texto: 'A tua compra está confirmada. Guarda este email: tem o teu código e o teu acesso.', linhas, entrega: vendaEntrega(cfg) })).catch(() => {});
+  if (reenvio) return;
+  const dono = cfg.email || await emailDonoLoja(site, configLoja(site)).catch(() => '');
+  if (dono) await enviarEmail(dono, 'Nova venda: ' + v.nome_opcao + ' (' + (v.valor ? vendaMzn(v.valor) : 'grátis') + ')', templateEmailVenda({ negocio, titulo: 'Vendeste!', nome: '', texto: v.nome + ' acabou de comprar na tua página de venda.', linhas: linhas.concat([['Cliente', v.nome], ['Telefone', v.telefone], ['Email', v.email || '(não deu)']]), botao: { texto: 'Ver as vendas', url: vendaLinkPainel(site._id) + '#vendas' } })).catch(() => {});
+}
+async function vendaAvisarPedidoManual(site, cfg, v) {
+  const dono = cfg.email || await emailDonoLoja(site, configLoja(site)).catch(() => '');
+  if (dono) await enviarEmail(dono, 'Pedido de compra: ' + v.nome_opcao, templateEmailVenda({ negocio: vendaNomeNegocio(site, cfg), titulo: 'Alguém quer comprar', nome: '', texto: 'Os pagamentos online ainda não estão activos na tua conta (falta o KYC). Combina o pagamento com o cliente e, depois de receberes, carrega em "Confirmar pagamento": o cliente recebe o acesso sozinho.', linhas: [['Compra', (v.quantidade > 1 ? v.quantidade + ' × ' : '') + v.nome_opcao], ['Valor', vendaMzn(v.valor)], ['Cliente', v.nome], ['Telefone', v.telefone], ['Email', v.email || '(não deu)'], ['Código', v.codigo]], botao: { texto: 'Confirmar pagamento', url: vendaLinkPainel(site._id) + '#vendas' } })).catch(() => {});
+}
+async function vendaMarcarPago(siteId, vendaId, dados) {
+  return vendaMudarVendas(siteId, async l => {
+    const v = l.find(x => x.id === vendaId);
+    if (!v) return null;
+    if (v.estado === 'pago') return Object.assign({ jaEstava: true }, v);
+    Object.assign(v, { estado: 'pago', pago_em: new Date().toISOString() }, dados || {});
+    return Object.assign({}, v);
+  });
+}
+async function vendaPagamentoConfirmado(encomenda) {
+  const [, siteId, vendaId] = String(encomenda['Notas'] || '').split(':');
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  if (!site) return;
+  const v = await vendaMarcarPago(siteId, vendaId, { origem: 'pagamento', metodo: encomenda['Metodo'] || '' });
+  if (!v || v.jaEstava) return;
+  const cfg = (await vendaLer(siteId)) || VENDA_DEMO;
+  await vendaAvisarPago(site, cfg, v);
+}
+
+// ---- rotas públicas (o site do cliente) ----
+async function vendaSitePublico(siteId) {
+  if (!siteId || siteId === 'previa') return null;
+  const site = await bubbleGet('site', siteId).catch(() => null);
+  return site && site['Tipo'] === 'Checkout' ? site : null;
+}
+app.post('/venda-info', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.site_id || b.site_id === 'previa') return res.json({ status: 'success', response: Object.assign(vendaPublica(VENDA_DEMO, [], null), { previa: true, pagamentos: true, whatsapp: '' }) });
+    const site = await vendaSitePublico(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Página não encontrada.' });
+    const cfg = await vendaLer(site._id); // nunca se cria aqui: uma página de venda antiga (loja) não passa a nova por alguém chamar esta rota
+    if (!cfg) return res.json({ status: 'error', message: 'Página não encontrada.' });
+    const vendas = cfg.opcoes.some(o => o.limite) ? await vendaLerVendas(site._id) : [];
+    return res.json({ status: 'success', response: Object.assign(vendaPublica(cfg, vendas, site), { pagamentos: await eadPagamentoOnline(site), whatsapp: configLoja(site).whatsapp || '' }) });
+  } catch (e) { console.error('[venda] info:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível carregar a oferta.' }); }
+});
+const vendaTentativas = new Map(); // ip -> [t]
+app.post('/venda-comprar', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const site = await vendaSitePublico(b.site_id);
+    if (!site) return res.json({ status: 'error', message: 'Página não encontrada.' });
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+    const agora = Date.now(), tt = (vendaTentativas.get(ip) || []).filter(t => agora - t < 600000);
+    if (tt.length >= 20) return res.json({ status: 'error', message: 'Muitas tentativas seguidas. Espera uns minutos e tenta outra vez.' });
+    tt.push(agora); vendaTentativas.set(ip, tt); if (vendaTentativas.size > 5000) vendaTentativas.clear();
+    const cfg = await vendaLer(site._id);
+    if (!cfg || cfg.definido === false) return res.json({ status: 'error', message: 'Esta oferta ainda não está aberta. Volta daqui a pouco.' });
+    if (vendaFechada(cfg)) return res.json({ status: 'error', codigo: 'fechada', message: 'As vendas já fecharam.' });
+    const op = cfg.opcoes.find(o => o.id === b.opcao_id) || (cfg.opcoes.length === 1 && !b.opcao_id ? cfg.opcoes[0] : null);
+    if (!op) return res.json({ status: 'error', message: 'Escolhe uma opção.' });
+    const qtd = cfg.quantidade ? Math.max(1, Math.min(VENDA_MAX_QTD, parseInt(b.quantidade, 10) || 1)) : 1;
+    const nome = eadTexto(b.nome, 80), tel = soDigitos(b.telefone).slice(0, 15), email = eadEmail(b.email);
+    if (nome.length < 2) return res.json({ status: 'error', message: 'Escreve o teu nome.' });
+    if (tel.length < 9) return res.json({ status: 'error', message: 'Escreve o teu número de telefone.' });
+    if (b.email && !email) return res.json({ status: 'error', message: 'O email não parece certo.' });
+    const valor = op.preco * qtd;
+    const online = valor > 0 && await eadPagamentoOnline(site);
+    const chave = crypto.randomBytes(18).toString('hex');
+    const venda = { id: eadId(), codigo: vendaCodigo(), chave: eadHash(chave), opcao: op.id, nome_opcao: op.nome, quantidade: qtd, valor, nome, telefone: tel, email, estado: valor === 0 ? 'pago' : (online ? 'por pagar' : 'pendente'), criado: new Date().toISOString(), origem: valor === 0 ? 'gratis' : '' };
+    if (valor === 0) venda.pago_em = venda.criado;
+    const cheio = await vendaMudarVendas(site._id, async l => {
+      if (op.limite && vendaVendidos(l, op.id) + qtd > op.limite) return true;
+      l.unshift(venda); return false;
+    });
+    if (cheio) return res.json({ status: 'error', codigo: 'esgotado', message: 'Já não há lugares suficientes nesta opção.' });
+    if (valor === 0) {
+      vendaAvisarPago(site, cfg, venda).catch(() => {});
+      return res.json({ status: 'success', response: { pago: true, codigo: venda.codigo, chave, entrega: vendaEntrega(cfg) } });
+    }
+    if (!online) {
+      vendaAvisarPedidoManual(site, cfg, venda).catch(() => {});
+      return res.json({ status: 'success', response: { manual: true, codigo: venda.codigo, chave, valor, whatsapp: configLoja(site).whatsapp || '' } });
+    }
+    const encomendaId = await bubbleCreate('encomenda', {
+      'Site': site._id, 'Produtos Json': JSON.stringify([{ nome: (cfg.nome ? cfg.nome + ': ' : '') + op.nome, preco_unitario: op.preco, quantidade: qtd }]),
+      'Cliente Nome': nome, 'Cliente Telefone': tel, 'Cliente Email': email,
+      'Valor Total': valor, 'Metodo': '', 'ID Pagamento': '', 'Estado': 'Pendente', 'Transaction ID': '', 'Webhook Processado': false,
+      'Notas': 'venda:' + site._id + ':' + venda.id
+    });
+    await vendaMudarVendas(site._id, async l => { const v = l.find(x => x.id === venda.id); if (v) v.encomenda = encomendaId; });
+    return res.json({ status: 'success', response: { encomenda_id: encomendaId, codigo: venda.codigo, chave, valor } });
+  } catch (e) { console.error('[venda] comprar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível registar a compra. Tenta outra vez.' }); }
+});
+app.post('/venda-estado', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const site = await vendaSitePublico(b.site_id);
+    if (!site || !/^[A-Z0-9]{7}$/.test(String(b.codigo || '')) || !/^[a-f0-9]{36}$/.test(String(b.chave || ''))) return res.json({ status: 'error', message: 'Compra não encontrada.' });
+    const v = (await vendaLerVendas(site._id)).find(x => x.codigo === b.codigo && x.chave === eadHash(b.chave));
+    if (!v) return res.json({ status: 'error', message: 'Compra não encontrada.' });
+    const pago = v.estado === 'pago';
+    const cfg = pago ? ((await vendaLer(site._id)) || VENDA_DEMO) : null;
+    return res.json({ status: 'success', response: { pago, estado: v.estado, codigo: v.codigo, nome_opcao: v.nome_opcao, quantidade: v.quantidade, valor: v.valor, entrega: pago ? vendaEntrega(cfg) : null } });
+  } catch (e) { return res.json({ status: 'error', message: 'Sem ligação.' }); }
+});
+app.get('/venda.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=300');
+  res.send(VENDA_JS);
+});
+
+// ---- rotas do dono ----
+async function vendaResumoDono(site, cfg) {
+  const l = await vendaLerVendas(site._id);
+  const pagas = l.filter(v => v.estado === 'pago');
+  return {
+    config: cfg, site: { id: site._id, nome: site['Nome'] || '', url: eadUrlSite(site) },
+    pagamentos: await eadPagamentoOnline(site),
+    resumo: { vendas: pagas.reduce((s, v) => s + (v.quantidade || 1), 0), compras: pagas.length, receita: pagas.reduce((s, v) => s + (v.valor || 0), 0), pendentes: l.filter(v => v.estado === 'pendente').length,
+      por_opcao: cfg.opcoes.map(o => ({ id: o.id, nome: o.nome, vendidos: pagas.filter(v => v.opcao === o.id).reduce((s, v) => s + (v.quantidade || 1), 0), limite: o.limite })) }
+  };
+}
+async function vendaSiteDoDono(req, res) {
+  const site = await eadSiteDoDono(req, res); if (!site) return null;
+  if (site['Tipo'] !== 'Checkout') { res.json({ status: 'error', message: 'Este site não é uma página de venda.' }); return null; }
+  return site;
+}
+app.post('/venda-dono-ler', async (req, res) => {
+  try {
+    const site = await vendaSiteDoDono(req, res); if (!site) return;
+    if (!(await vendaEhNova(site._id)) && !(await vendaLer(site._id))) return res.json({ status: 'error', codigo: 'antiga', message: 'Esta página de venda foi feita no formato antigo (loja). Gere-a em "Gerir loja".' });
+    const cfg = (await vendaLer(site._id)) || await vendaCriarSeFalta(site._id, null, site['Nome']);
+    return res.json({ status: 'success', response: await vendaResumoDono(site, cfg) });
+  } catch (e) { console.error('[venda] dono ler:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível abrir a oferta.' }); }
+});
+app.post('/venda-dono-guardar', async (req, res) => {
+  try {
+    const site = await vendaSiteDoDono(req, res); if (!site) return;
+    const ant = await vendaLer(site._id);
+    const cfg = vendaLimparConfig(Object.assign({}, req.body.config || {}, { definido: true }), ant);
+    if (!cfg.nome) cfg.nome = eadTexto(site['Nome'], 90);
+    await vendaGravar(site._id, cfg);
+    return res.json({ status: 'success', response: await vendaResumoDono(site, cfg) });
+  } catch (e) { console.error('[venda] dono guardar:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível guardar.' }); }
+});
+app.post('/venda-dono-ficheiro', async (req, res) => {
+  try {
+    const site = await vendaSiteDoDono(req, res); if (!site) return;
+    const m = /^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(req.body.ficheiro || ''));
+    if (!m || !EAD_TIPOS_MAT[m[1].toLowerCase()]) return res.json({ status: 'error', message: 'Tipo de ficheiro não aceite (PDF, Word, PowerPoint, Excel, ZIP, imagens, MP3 ou TXT).' });
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 10 * 1024 * 1024) return res.json({ status: 'error', message: 'O ficheiro é grande demais (máximo 10 MB). Para ficheiros maiores, põe-no no Google Drive e usa o link.' });
+    const nome = eadTexto(req.body.nome, 120).replace(/[^\w.\- ]+/g, '').replace(/\s+/g, '-').slice(0, 60) || 'ficheiro';
+    const ext = EAD_TIPOS_MAT[m[1].toLowerCase()];
+    const url = await uploadParaBunnyBase('venda/' + site._id + '/entrega/' + crypto.randomBytes(9).toString('hex') + '-' + nome.replace(/\.[a-z0-9]+$/i, '') + '.' + ext, buf, m[1].toLowerCase());
+    return res.json({ status: 'success', response: { url, tamanho: buf.length, nome: eadTexto(req.body.nome, 120) || nome } });
+  } catch (e) { console.error('[venda] ficheiro:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível carregar o ficheiro.' }); }
+});
+function vendaParaDono(v) { return { id: v.id, codigo: v.codigo, opcao: v.opcao, nome_opcao: v.nome_opcao, quantidade: v.quantidade, valor: v.valor, nome: v.nome, telefone: v.telefone, email: v.email, estado: v.estado, criado: v.criado, pago_em: v.pago_em || '', origem: v.origem || '', usado: v.usado || '' }; }
+app.post('/venda-dono-vendas', async (req, res) => {
+  try {
+    const site = await vendaSiteDoDono(req, res); if (!site) return;
+    const q = eadTexto(req.body.q, 60).toLowerCase();
+    let l = (await vendaLerVendas(site._id)).filter(v => v.estado === 'pago' || v.estado === 'pendente' || (req.body.todas === true && v.estado === 'por pagar'));
+    if (q) l = l.filter(v => (v.codigo + ' ' + v.nome + ' ' + v.telefone + ' ' + v.email).toLowerCase().indexOf(q) >= 0);
+    return res.json({ status: 'success', response: { total: l.length, vendas: l.slice(0, 300).map(vendaParaDono) } });
+  } catch (e) { return res.json({ status: 'error', message: 'Não foi possível ler as vendas.' }); }
+});
+app.post('/venda-dono-venda', async (req, res) => {
+  try {
+    const site = await vendaSiteDoDono(req, res); if (!site) return;
+    const cfg = (await vendaLer(site._id)) || VENDA_DEMO;
+    const id = String(req.body.venda_id || ''), accao = String(req.body.accao || '');
+    if (accao === 'confirmar') {
+      const v = await vendaMarcarPago(site._id, id, { origem: 'manual' });
+      if (!v) return res.json({ status: 'error', message: 'Compra não encontrada.' });
+      if (!v.jaEstava) vendaAvisarPago(site, cfg, v).catch(() => {});
+      return res.json({ status: 'success', response: { venda: vendaParaDono(v) } });
+    }
+    if (accao === 'usado') {
+      const v = await vendaMudarVendas(site._id, async l => { const x = l.find(y => y.id === id); if (!x || x.estado !== 'pago') return null; x.usado = x.usado ? '' : new Date().toISOString(); return Object.assign({}, x); });
+      if (!v) return res.json({ status: 'error', message: 'Compra não encontrada.' });
+      return res.json({ status: 'success', response: { venda: vendaParaDono(v) } });
+    }
+    if (accao === 'reenviar') {
+      const v = (await vendaLerVendas(site._id)).find(x => x.id === id && x.estado === 'pago');
+      if (!v) return res.json({ status: 'error', message: 'Compra não encontrada.' });
+      if (!v.email) return res.json({ status: 'error', message: 'Este cliente não deixou email. Manda-lhe o acesso pelo WhatsApp.' });
+      await vendaAvisarPago(site, cfg, v, true);
+      return res.json({ status: 'success', response: { venda: vendaParaDono(v), reenviado: true } });
+    }
+    if (accao === 'apagar') {
+      const ok = await vendaMudarVendas(site._id, async l => { const i = l.findIndex(y => y.id === id && y.estado !== 'pago'); if (i < 0) return false; l.splice(i, 1); return true; });
+      return res.json(ok ? { status: 'success', response: { apagado: true } } : { status: 'error', message: 'Só dá para apagar pedidos que ainda não foram pagos.' });
+    }
+    return res.json({ status: 'error', message: 'Acção desconhecida.' });
+  } catch (e) { console.error('[venda] dono venda:', e.message || e); return res.json({ status: 'error', message: 'Não foi possível.' }); }
+});
+['/venda-dono-ler', '/venda-dono-guardar', '/venda-dono-ficheiro', '/venda-dono-vendas', '/venda-dono-venda'].forEach(r => ROTAS_PRIVADAS.add(r));
+globalThis.__danielVenda = { limpar: vendaLimparConfig, criarSeFalta: vendaCriarSeFalta, ler: vendaLer, ehNova: vendaEhNova, dadosDoHtml: vendaDadosDoHtml };
+
+function vendaEhNovaSync(siteId) { return !!(siteId && vendaIndice && vendaIndice.sites[siteId]); }
+function vendaDadosDoTemplate(conteudo, nome) {
+  const vd = (conteudo && conteudo.venda) || {};
+  const numero = t => vendaNum(String(t || '').replace(/[^\d]/g, ''));
+  return { nome: textoCurto(vd.produto || nome || '', 90), opcoes: [{ nome: textoCurto(vd.produto || nome || 'Oferta', 60), preco: numero(vd.preco), preco_antes: numero(vd.preco_antigo), inclui: Array.isArray(vd.inclui) ? vd.inclui.slice(0, 8) : [], destaque: true }] };
+}
+vendaCarregarIndice().catch(() => {});
 
 app.listen(PORT, () => {
   console.log(`daniel-ia-proxy v${VERSION} a correr na porta ${PORT}`);
