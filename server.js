@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 const PORT = process.env.PORT || 8080;
-const VERSION = '1.84.1'; // 13/11/2026 - esqueci a password: email da Daniel IA pelo Resend (o Bubble só gera o código); contador nas páginas de venda; imagens dentro dos cartões; inspiração: 1 modelo + aprende com todos
+const VERSION = '1.84.2'; // 13/11/2026 - esqueci a password: código da Daniel IA, email pelo Resend, password nova na página do GitHub; contador nas páginas de venda; imagens dentro dos cartões; inspiração: 1 modelo + aprende com todos
 
 // Quantas imagens a pessoa pode anexar a um único pedido de criação ou
 // edição (para além do logótipo, que é um campo à parte). É um limite de
@@ -164,7 +164,7 @@ const ROTAS_PRIVADAS = new Set([
 // Sem sessão (ainda não há conta entrada), mas só a partir das nossas
 // páginas - ou sem Origin nenhuma (chamadas servidor-a-servidor do Bubble).
 const ROTAS_SO_ORIGEM = new Set([
-  '/signup-code', '/verify-code', '/entrar', '/conta-wf', '/sessao-criar', '/plan-warnings-teste-7hq2fx',
+  '/signup-code', '/verify-code', '/entrar', '/conta-wf', '/senha-nova', '/sessao-criar', '/plan-warnings-teste-7hq2fx',
   '/admin-kyc-lista', '/admin-kyc-imagem', '/admin-kyc-decidir'
 ]);
 const ROTAS_ADMIN = new Set(['/sessao-criar', '/plan-warnings-teste-7hq2fx', '/admin-kyc-lista', '/admin-kyc-imagem', '/admin-kyc-decidir']);
@@ -9590,55 +9590,92 @@ app.post('/conta-wf', async (req, res) => {
   return res.json({ status: 'error', message: msg ? String(msg).slice(0, 200) : 'Não foi possível concluir. Verifica os dados e tenta novamente.' });
 });
 
-// ---- 1.84.1: "Esqueci a password" com o email da Daniel IA (Resend) ----
-// O workflow forgot-password do Bubble está em "Generate reset token only" e devolve o
-// código (Return data from API, chave "token"). O container chama-o com o token de admin,
-// monta o link para a página de password nova do Bubble (RESET_PAGINA) e manda o email.
-// A resposta à página é sempre a mesma (não revela se o email tem conta) e nunca leva o código.
-const RESET_PAGINA = clean(process.env.RESET_PAGINA) || 'https://daniel-ia.pro/reset_pw';
+// ---- 1.84.2: "Esqueci a password" sem páginas do Bubble ----
+// 1) /conta-wf forgot-password: o container procura a conta, gera um código seu (64 hex,
+//    1 hora, uma só vez; no Storage só fica o hash) e manda o email pelo Resend com o link
+//    para a página do GitHub (RESET_PAGINA).
+// 2) /senha-nova: confirma o código e muda a password no Bubble em 3 chamadas:
+//    temp-password (admin) -> login com a temporária (token da pessoa) -> change-password
+//    (como a pessoa). No fim, as sessões antigas deixam de valer.
+// A resposta do pedido é sempre a mesma: não revela se o email tem conta.
+const RESET_PAGINA = clean(process.env.RESET_PAGINA) || 'https://app.daniel-ia.pro/reset/';
+const RESET_VALIDADE_MIN = Math.max(15, Math.min(24 * 60, Number(clean(process.env.RESET_VALIDADE_MIN)) || 60));
 const MSG_RECUPERAR = 'Se existir uma conta com este email, enviámos um link para mudares a password. Vê também a pasta de Spam.';
-function tokenDaRespostaBubble(j) {
-  const v = j && typeof j === 'object' ? (j.response && typeof j.response === 'object' ? j.response : j) : null;
-  if (!v) return '';
-  const bom = x => typeof x === 'string' && x.length >= 8 && x.length <= 500 && !/\s/.test(x);
-  for (const k of ['token', 'reset_token', 'reset_pw', 'codigo']) if (bom(v[k])) return v[k];
-  for (const k of Object.keys(v)) if (/token|reset/i.test(k) && bom(v[k])) return v[k];
-  return '';
-}
+function senhaCaminho(codigo) { return 'senha/' + crypto.createHash('sha256').update(String(codigo)).digest('hex') + '.json'; }
 function templateEmailPassword(link) {
   return templateEmailKyc('Password nova', 'Olá.', [
     'Recebemos um pedido para mudar a password da tua conta na Daniel IA. Carrega no botão para escolheres uma password nova.',
-    'O link só funciona uma vez e é válido por pouco tempo.'
+    'O link só funciona uma vez e é válido durante ' + (RESET_VALIDADE_MIN >= 120 ? Math.round(RESET_VALIDADE_MIN / 60) + ' horas' : RESET_VALIDADE_MIN + ' minutos') + '.'
   ], { texto: 'Escolher a password nova', url: link }).replace('</td>\n</tr>\n<tr>\n<td style="padding:18px 32px;background:#FAF8FC;',
     '<p style="margin:22px 0 0 0;color:#9A8CAB;font-size:12.5px;line-height:1.6;">Se o botão não abrir, copia este endereço para o browser:<br><span style="color:#430960;word-break:break-all;">' + escaparHtml(link) + '</span></p>\n'
     + '<p style="margin:14px 0 0 0;color:#9A8CAB;font-size:12.5px;line-height:1.6;">Se não foste tu que pediste, ignora este email. A tua password continua igual e ninguém a consegue mudar sem este link.</p>\n'
     + '</td>\n</tr>\n<tr>\n<td style="padding:18px 32px;background:#FAF8FC;');
 }
+function emailDoUser(u) { return String((u && ((u.authentication && u.authentication.email && u.authentication.email.email) || u.email)) || '').trim().toLowerCase(); }
 async function recuperarPasswordResend(res, email) {
   try {
-    const r = await fetch(BUBBLE_WF_BASE + '/forgot-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + BUBBLE_TOKEN },
-      body: JSON.stringify({ email })
-    });
-    const texto = await r.text();
-    let j = null; try { j = JSON.parse(texto); } catch (e) {}
-    const token = tokenDaRespostaBubble(j);
-    if (!token) {
-      // conta que não existe, ou o workflow ainda não devolve o código: a pessoa vê a mesma mensagem
-      if (j && j.status === 'success') console.warn('[password] o Bubble não devolveu o código (conta inexistente, ou falta o "Return data from API" com a chave token). Chaves:', Object.keys((j && j.response) || {}).join(',') || '-');
-      else console.warn('[password] o Bubble recusou o forgot-password (HTTP ' + r.status + '):', String(texto).slice(0, 300));
+    const lista = await bubbleList('user', [{ key: 'email', constraint_type: 'equals', value: email }]).catch(() => []);
+    const u = (lista || []).find(x => emailDoUser(x) === email) || (lista || [])[0];
+    if (!u || !u._id) {
+      console.warn('[password] pedido para um email sem conta');
       return res.json({ status: 'success', response: { enviado: true, mensagem: MSG_RECUPERAR } });
     }
-    const link = RESET_PAGINA + (RESET_PAGINA.indexOf('?') >= 0 ? '&' : '?') + 'reset_pw=' + encodeURIComponent(token);
-    await enviarEmail(email, 'Muda a tua password da Daniel IA', templateEmailPassword(link));
-    console.log('[password] link de recuperação enviado pelo Resend');
+    const codigo = crypto.randomBytes(32).toString('hex');
+    await gravarJsonStorage(senhaCaminho(codigo), { owner: u._id, email: emailDoUser(u) || email, criado: new Date().toISOString(), expira: new Date(Date.now() + RESET_VALIDADE_MIN * MIN).toISOString(), usado: '' });
+    const link = RESET_PAGINA + (RESET_PAGINA.indexOf('?') >= 0 ? '&' : '?') + 'codigo=' + codigo;
+    await enviarEmail(emailDoUser(u) || email, 'Muda a tua password da Daniel IA', templateEmailPassword(link));
+    console.log('[password] link de recuperação enviado pelo Resend:', u._id);
     return res.json({ status: 'success', response: { enviado: true, mensagem: MSG_RECUPERAR } });
   } catch (e) {
     console.error('[password] não consegui enviar o email de recuperação:', e.message || e);
     return res.json({ status: 'error', codigo: 'email', message: 'Não foi possível enviar o email agora. Tenta outra vez daqui a pouco.' });
   }
 }
+async function bubbleWf(nome, corpo, bearer) {
+  const r = await fetch(BUBBLE_WF_BASE + '/' + nome, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bearer }, body: JSON.stringify(corpo) });
+  const texto = await r.text();
+  let j = null; try { j = JSON.parse(texto); } catch (e) {}
+  if (!r.ok || !j || j.status !== 'success') { const e = new Error(nome + ' HTTP ' + r.status + ': ' + String(texto).slice(0, 240)); e.passo = nome; throw e; }
+  return j.response || {};
+}
+function textoDe(o, chaves) {
+  for (const k of chaves) if (o && typeof o[k] === 'string' && o[k]) return o[k];
+  for (const k of Object.keys(o || {})) if (typeof o[k] === 'string' && o[k].length >= 6 && chaves.some(c => k.toLowerCase().indexOf(c) >= 0)) return o[k];
+  return '';
+}
+app.post('/senha-nova', async (req, res) => {
+  const codigo = String((req.body || {}).codigo || '');
+  const pass = (req.body || {}).pass;
+  if (!/^[a-f0-9]{64}$/.test(codigo)) return res.json({ status: 'error', codigo: 'invalido', message: 'Este link já não serve. Pede um novo em "Esqueci a password".' });
+  if (typeof pass !== 'string' || pass.length < 8 || pass.length > 200) return res.json({ status: 'error', message: 'A password tem de ter pelo menos 8 caracteres.' });
+  const ip = ipDe(req);
+  if (!contar('senha-nova:ip:' + ip, 12, 60 * MIN)) return res.status(429).json({ status: 'error', codigo: 'limite', message: MSG_LIMITE });
+  const caminho = senhaCaminho(codigo);
+  const reg = await lerJsonStorage(caminho).catch(() => null);
+  if (!reg || reg.usado || !reg.owner || Date.parse(reg.expira) < Date.now()) {
+    return res.json({ status: 'error', codigo: 'invalido', message: 'Este link já não serve. Pede um novo em "Esqueci a password".' });
+  }
+  try {
+    // 1) password temporária (só o container, com o token de admin)
+    const t = await bubbleWf('temp-password', { email: reg.email }, BUBBLE_TOKEN);
+    const temp = textoDe(t, ['temp', 'password', 'senha']);
+    if (!temp) throw Object.assign(new Error('temp-password não devolveu a password temporária. Chaves: ' + Object.keys(t).join(',')), { passo: 'temp-password' });
+    // 2) entra como a pessoa
+    const l = await bubbleWf('login', { email: reg.email, pass: temp }, BUBBLE_TOKEN);
+    const tokenPessoa = textoDe(l, ['token']);
+    if (!tokenPessoa) throw Object.assign(new Error('login não devolveu o token. Chaves: ' + Object.keys(l).join(',')), { passo: 'login' });
+    // 3) muda para a password nova, como a pessoa
+    await bubbleWf('change-password', { old: temp, newpass: pass }, tokenPessoa);
+    await gravarJsonStorage(caminho, Object.assign({}, reg, { usado: new Date().toISOString() }));
+    await bubblePatch('user', reg.owner, { 'Token Sessao': '', 'Token Sessao Expira': new Date(0).toISOString() }).catch(() => {});
+    esquecerSessoes(reg.owner);
+    console.log('[password] password mudada:', reg.owner);
+    return res.json({ status: 'success', response: { mudada: true } });
+  } catch (e) {
+    console.error('[password] não consegui mudar a password (passo ' + (e.passo || '?') + '):', e.message || e);
+    return res.json({ status: 'error', codigo: 'indisponivel', message: 'Não foi possível mudar a password agora. Tenta outra vez daqui a pouco - o teu link continua a servir.' });
+  }
+});
 
 // ---- Sair: o token deixa de valer em todo o lado ----
 app.post('/sair', async (req, res) => {
